@@ -575,10 +575,13 @@ def summarize_one_cell(
       for norm in normalize:
         norm_label = _norm_label(norm)
         t0 = perf_counter()
+        # Written onto the fitted model rather than passed per call: the
+        # projection count is a control, and the sweep reads one fit under
+        # several of them rather than refitting per value.
+        model.sinkhorn_iters = norm
         pdf_hat = model.pdf(
           torch.column_stack([metric_grid.u_flat, metric_grid.v_flat]),
           x=metric_grid.x_flat,
-          sinkhorn_iters=norm,
         ).cpu()
         pdf_time += perf_counter() - t0
         pdf_by_norm[norm_label] = pdf_hat
@@ -649,10 +652,11 @@ def summarize_one_cell(
         for norm in normalize:
           norm_label = _norm_label(norm)
           t0 = perf_counter()
+          # As above: the projection count is a control, swept over one fit.
+          model.sinkhorn_iters = norm
           pdf_hat = model.pdf(
             torch.column_stack([surface_grid.u_flat, surface_grid.v_flat]),
             x=surface_grid.x_flat,
-            sinkhorn_iters=norm,
           ).cpu()
           surface_time += perf_counter() - t0
           quantity_rows += _quantity_rows(

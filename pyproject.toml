@@ -103,26 +103,27 @@ conflicts = [
 # there is no v1.0.0 tag), so the 1.0 extension-point API this package builds
 # on is only reachable from git.
 #
-# Pinned *ahead* of `main` to vinecopulib/pyvinecopulib#334, which splits the
-# extension surface into `pyvinecopulib.core.extend` and publishes the input
-# pipeline's steps there. What each buys here: `to_numpy` replaced a copy of it
-# in `core/_placement.py`; `prepare_covariates` owns the covariate layout check
-# in `core/bicop.py` and `core/margin.py`, and routes through `_prep`, which is
-# what lets this package declare a placement instead of holding a tensor for
-# the inference to find; `covariate_row` shapes the single covariate row a grid
-# query shares; `TensorPlacementMixin` (which stays in `pyvinecopulib.torch`)
-# *is* the `_prep` hook, so `core/_placement.py` carries only the declaration;
-# and `_invalidate_batched` replaced a bare attribute write in
-# `core/vinecop.py`. `place`, `reference_array` and `trim` are unused here --
-# `core/_trim.py`'s `check_uv` stays instead of `trim`, and AGENTS.md says why.
+# Pinned *ahead* of `main` to vinecopulib/pyvinecopulib#339, which moves
+# `var_types` onto `BicopBase`. What that buys here: `pdf`, `cdf`, `hfunc1/2`
+# and `hinv1/2` become dispatchers on the base, so `core/bicop.py` writes the
+# continuous leaves `_pdf_raw` / `_cdf_raw` / `_hfunc1_raw` / `_hfunc2_raw` /
+# `_hinv1_raw` / `_hinv2_raw` and overrides no public member; `with_var_types`
+# is the door a discrete declaration arrives through, which the same file
+# refuses; and `_prep_args` is the documented override point for a subclass
+# whose domain step differs from the library's, which is what keeps
+# `core/_trim.py`'s `check_uv` and its `eps` clamp rather than upstream's
+# silent one at the working precision.
+#
+# The stack below it is #336 (submodule bumps, `logpdf`, the exact atom
+# probability) and #337 (the lockfile). Both are open, so this pin carries all
+# three.
 #
 # Pinned at the head of that branch rather than at a commit inside it, so the
-# pin tracks what will merge, and is a revision its 28-job matrix completed
-# on. Two steps out of here, in order: move to the
-# merge commit once #334 lands, then drop the override entirely once a
+# pin tracks what will merge. Two steps out of here, in order: move to the
+# merge commit once the stack lands, then drop the override entirely once a
 # published 1.0.0 carries these -- at which point `.github/workflows/ci.yml`
 # stops needing a C++ toolchain too.
-pyvinecopulib = { git = "https://github.com/vinecopulib/pyvinecopulib.git", rev = "abf2bbdfcfd634e27ab1d588b9c4dcd5d8b6c51f" }
+pyvinecopulib = { git = "https://github.com/vinecopulib/pyvinecopulib.git", rev = "3fe559af6b23b5d2bbd14693ea684ec6bbd1ffa5" }
 # Temporary: install Synthefy Nori from the fork branch that uncaps torch
 # (PR https://github.com/Synthefy/synthefy-nori/pull/79). Drop once on PyPI.
 synthefy-nori = { git = "https://github.com/tvatter/synthefy-nori.git", branch = "allow-newer-torch-cuda" }

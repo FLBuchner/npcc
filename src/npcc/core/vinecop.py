@@ -16,7 +16,7 @@ from pyvinecopulib.core import (
 )
 
 from npcc.core._placement import TensorPlacement, resolve_device
-from npcc.core.bicop import RosenblattBicop
+from npcc.core.bicop import RosenblattBicop, _reject_discrete
 
 
 class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
@@ -61,6 +61,11 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
     var_types: list[str] | None = None,
     device: str | torch.device | None = None,
   ) -> None:
+    # At construction rather than per edge: every pair in this vine is a
+    # `RosenblattBicop`, which models no atoms, so the vine can say so once
+    # instead of letting each edge discover it partway through a fit.
+    _reject_discrete(var_types)
+
     self.pair_copulas: list[list[RosenblattBicop]] = []
 
     self._bind_vine(

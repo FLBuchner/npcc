@@ -5,7 +5,8 @@ onto the dtype and device the object's own tensors live on; *layout*, the
 shapes it admits; and *domain*, clamping copula arguments into the open unit
 square. The first two are overridable hooks per level, ``_prep`` and
 ``_layout``; the domain step is the module-level ``trim`` that ``_prep_args``
-applies after them.
+applies after them, which :class:`~npcc.core.bicop.RosenblattBicop` overrides
+to reject rather than clamp and to use its own ``eps``.
 
 The ``_prep`` hook itself is upstream's
 :class:`~pyvinecopulib.torch.TensorPlacementMixin`, which resolves a placement

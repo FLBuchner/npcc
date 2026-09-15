@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import torch
-from pyvinecopulib.core import ControlsLike, VinedistBase
+from pyvinecopulib.core import ControlsLike, VinecopLike, VinedistBase
 
 from npcc.core._placement import TensorPlacement, resolve_device
 
@@ -31,7 +31,14 @@ class RosenblattVinedist(TensorPlacement, VinedistBase[torch.Tensor]):
   supports_weighted_copula: bool = False
   supports_fit_covariates: bool = True
 
-  def __init__(self, vinecop: object, margins: object) -> None:
+  def __init__(
+    self,
+    vinecop: VinecopLike[torch.Tensor],
+    # Upstream's own type, and not narrowed to a sequence: a single margin
+    # standing for every variable is a documented call, and a foreign
+    # distribution object is coerced with `as_margin` rather than refused.
+    margins: object,
+  ) -> None:
     super().__init__(vinecop, margins)
     # The copula names the placement, since it was constructed with it and
     # holds the pair copulas that evaluate on it. Recording it here is what

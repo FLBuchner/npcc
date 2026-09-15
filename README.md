@@ -140,17 +140,20 @@ argument order those settled on: **the observations, then `controls`, then
 keyword-only whatever the object cannot infer**.
 
 Configuration travels as a `FitControlsRosenblattBicop` — including the
-backend name, the device and the `batch_size` default, which is device-aware
-(400 on CPU, 2000 on CUDA) and overridable per call.
+backend name, the device, the Sinkhorn iteration count, the `cdf` integration
+grid, and the `batch_size` default, which is device-aware (400 on CPU, 2000 on
+CUDA).  There are no per-call tuning keywords: `BicopBase` supplies `pdf`,
+`cdf`, `hfunc1/2` and `hinv1/2` itself and forwards nothing but `x` to the
+leaves this class writes, so every knob is a setting.
 
 | Method | What it returns |
 | --- | --- |
 | `fit(u, controls=None, *, var_types=None, x=None)` | Fits both Rosenblatt directions on `u` of shape `(n, 2)`.  `x=None` → unconditional fit.  Returns `self`. |
 | `from_data(u, controls=None, *, var_types=None, x=None)` | Constructs and fits in one call (inherited). |
-| `pdf(u, *, x=None, batch_size=None, sinkhorn_iters=None)` | Pointwise $\hat c(u_i, v_i \mid x_i)$. |
-| `log_pdf(uv, *, x=None, batch_size=None, sinkhorn_iters=None)` | $\log$ of `pdf`, floored at the smallest positive float. |
-| `pdf_grid(u_grid, v_grid, *, x_row=None, batch_size=None, sinkhorn_iters=None)` | Cartesian-grid density `out[i, j] = c(u_grid[i], v_grid[j] | x_row)`.  Available for every backend. |
-| `cdf(u, *, x=None, n_int=12, batch_size=None)` | Pointwise joint CDF, trapezoidal in $s$ and $t$. |
+| `pdf(u, *, x=None)` | Pointwise $\hat c(u_i, v_i \mid x_i)$ (inherited; this class supplies `_pdf_raw`). |
+| `log_pdf(uv, *, x=None)` | $\log$ of `pdf`, floored at the smallest positive float. |
+| `pdf_grid(u_grid, v_grid, *, x_row=None)` | Cartesian-grid density `out[i, j] = c(u_grid[i], v_grid[j] | x_row)`.  Available for every backend. |
+| `cdf(u, *, x=None)` | Pointwise joint CDF, trapezoidal in $s$ and $t$ over `cdf_n_int` steps (inherited; this class supplies `_cdf_raw`). |
 | `cdf_grid(u_grid, v_grid, *, x_row=None, n_int=64)` | Cartesian-grid joint CDF.  Available for every backend. |
 | `hfunc1(u, *, x=None)` | $h_1 = \partial C / \partial u = F_{V \mid U, X}(v \mid u, x)$ (conditions on the first argument; matches `pyvinecopulib`). |
 | `hfunc2(u, *, x=None)` | $h_2 = \partial C / \partial v = F_{U \mid V, X}(u \mid v, x)$. |
