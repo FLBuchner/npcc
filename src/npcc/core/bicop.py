@@ -347,8 +347,10 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
 
     Overrides the inherited hook, which every evaluation member reaches
     through ``BicopBase._atoms``, so this is the single site the domain step
-    runs at. It departs from the inherited one in both halves, and the clamp
-    is the half that forces the override: upstream clamps at the working
+    runs at. Only the *domain* step departs: placement and layout stay
+    upstream's ``_prep`` and ``_layout``, so this estimator refuses a shape
+    with the library's own message. The clamp is the half that forces the
+    override: upstream clamps at the working
     precision, about ``1e-10`` in ``float64``, where this estimator clamps at
     the caller's :attr:`eps`. The inner backends are fitted on ``logit(u)``,
     where those two are some ten units of feature space apart, so inheriting
@@ -370,10 +372,7 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     torch.Tensor, shape (n, 2)
         Placed, checked and clamped strictly inside the unit square.
     """
-    ua = self._prep(u)
-
-    if ua.ndim != 2 or ua.shape[1] != 2:
-      raise ValueError(f"u must have shape (n, 2); got {tuple(ua.shape)}")
+    ua = self._layout(self._prep(u))
 
     return torch.column_stack(check_uv(ua[:, 0], ua[:, 1], self.eps))
 
