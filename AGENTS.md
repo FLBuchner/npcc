@@ -154,7 +154,19 @@ Inherited from pyvinecopulib, and not to be diverged from:
   governs `supports_controls` / `supports_weights` / `supports_covariates`:
   a declared `False` means refuse, not ignore.
 - **Capability flags are declared, not inferred**, and exist where a consumer
-  reads them.
+  reads them. Two default the *wrong* way for this package, so leaving either
+  at its inherited value fails silently rather than loudly: `RosenblattBicop.supports_covariates` must be `True`, because
+  `pair_eval` reads it *before* calling a leaf and a conditional pair is
+  otherwise refused outright; and `RosenblattVinecop.supports_weights` must be
+  `False`, because `VinecopBase` defaults it to `True` and weights ride in the
+  controls, so the default accepts a weighted call and returns the unweighted
+  fit. A leaf's signature is not what marks a pair conditional — the flag is.
+- **Observation weights ride in the `ControlsLike`**, not in a `fit` argument.
+  No `fit` / `select` / `from_data` in the stack takes `weights=`; each part
+  refuses what it cannot honor through `supports_weights`. `var_type` and
+  `support` travel beside `controls` on a margin's `fit` as *declarations*
+  rather than configuration, and `ConditionalMargin` refuses both unless they
+  say continuous and unbounded.
 - **A per-call evaluation knob travels on the controls too**, because the base
   leaves no other route: `BicopBase`'s `pdf` / `cdf` / `hfunc*` / `hinv*` are
   dispatchers forwarding nothing but `x`, so a subclass keyword would have to

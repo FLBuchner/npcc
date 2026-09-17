@@ -62,6 +62,16 @@ def fitted_vine(
   return fit_vine(u)
 
 
+def test_the_vine_declares_that_it_honors_no_weights() -> None:
+  """`VinecopBase` defaults `supports_weights` to True, and this vine is not.
+
+  Weights ride in the controls now rather than in a `fit` argument, and
+  `reject_weights` reads this flag to decide. Left at the default, a weighted
+  controls object would be accepted and the unweighted fit returned.
+  """
+  assert RosenblattVinecop.supports_weights is False
+
+
 def test_rosenblatt_vinecop_subclass_vinecop_base() -> None:
   assert issubclass(RosenblattVinecop, VinecopBase)
 

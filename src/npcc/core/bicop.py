@@ -266,6 +266,11 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     lets the inherited plotting implementation hand it a NumPy grid.
   """
 
+  # `BicopBase` defaults this to `False`, and `pair_eval` reads it *before*
+  # the call -- so leaving the default makes every conditional evaluation
+  # raise rather than reaching the leaves, which all declare `x`.
+  supports_covariates: bool = True
+
   def __init__(self, controls: ControlsLike | None = None) -> None:
     self._apply_controls(_bicop_controls(controls))
 

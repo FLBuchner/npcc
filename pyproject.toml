@@ -104,7 +104,8 @@ conflicts = [
 # on is only reachable from git.
 #
 # Pinned *ahead* of `main` to vinecopulib/pyvinecopulib#339, which moves
-# `var_types` onto `BicopBase`. What that buys here: `pdf`, `cdf`, `hfunc1/2`
+# `var_types` onto `BicopBase` and observation weights into the controls.
+# What that buys here: `pdf`, `cdf`, `hfunc1/2`
 # and `hinv1/2` become dispatchers on the base, so `core/bicop.py` writes the
 # continuous leaves `_pdf_raw` / `_cdf_raw` / `_hfunc1_raw` / `_hfunc2_raw` /
 # `_hinv1_raw` / `_hinv2_raw` and overrides no public member; `with_var_types`
@@ -123,7 +124,7 @@ conflicts = [
 # merge commit once the stack lands, then drop the override entirely once a
 # published 1.0.0 carries these -- at which point `.github/workflows/ci.yml`
 # stops needing a C++ toolchain too.
-pyvinecopulib = { git = "https://github.com/vinecopulib/pyvinecopulib.git", rev = "3fe559af6b23b5d2bbd14693ea684ec6bbd1ffa5" }
+pyvinecopulib = { git = "https://github.com/vinecopulib/pyvinecopulib.git", rev = "93d056368980dc686d14ab9d16b960742a3f9547" }
 # Temporary: install Synthefy Nori from the fork branch that uncaps torch
 # (PR https://github.com/Synthefy/synthefy-nori/pull/79). Drop once on PyPI.
 synthefy-nori = { git = "https://github.com/tvatter/synthefy-nori.git", branch = "allow-newer-torch-cuda" }

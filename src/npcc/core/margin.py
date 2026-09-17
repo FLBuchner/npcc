@@ -273,16 +273,24 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
     /,
     controls: object | None = None,
     *,
+    var_type: str | None = None,
+    support: tuple[float | None, float | None] | None = None,
     x: torch.Tensor | None = None,
-    weights: torch.Tensor | None = None,
   ) -> Self:
     """Fit the backend to responses and optional conditioning features.
 
-    Neither ``controls`` nor ``weights`` is accepted -- this margin is
-    configured entirely at construction, which is what
-    :attr:`supports_controls` ``False`` and :attr:`supports_weights` ``False``
-    declare. Both are refused rather than dropped, so a caller who passes one
-    is told instead of being handed a fit that quietly ignored it.
+    ``controls`` is not accepted -- this margin is configured entirely at
+    construction, which is what :attr:`supports_controls` ``False`` declares.
+    ``var_type`` and ``support`` are *declarations* a caller makes about the
+    variable rather than configuration, and this margin honors only the
+    continuous unbounded case its inherited :attr:`var_type` and
+    :attr:`support` already report. Each is refused rather than dropped, so a
+    caller who declares an atom or a bound is told instead of being handed a
+    fit that quietly ignored it.
+
+    Observation weights no longer reach a margin through this signature; they
+    ride in ``controls``, and upstream refuses them against
+    :attr:`supports_weights` before the call.
     """
     if controls is not None:
       raise ValueError(
@@ -291,10 +299,22 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
         "backend settings to the constructor instead."
       )
 
-    if weights is not None:
+    if var_type is not None and var_type != "c":
       raise ValueError(
-        f"{type(self).__name__} declares `supports_weights = False`, so it "
-        "cannot apply observation weights; drop `weights`."
+        f"{type(self).__name__} must model continuous variables; got "
+        f"var_type={var_type!r}. Its backends estimate a conditional density, "
+        "not an atom's probability; use a Kde1d margin for a discrete or "
+        "zero-inflated variable."
+      )
+
+    if support is not None and any(
+      b is not None and math.isfinite(b) for b in support
+    ):
+      raise ValueError(
+        f"{type(self).__name__} must model unbounded variables; got "
+        f"support={support!r}. Its backends are fitted on a transform of the "
+        "whole real line and impose no bound; use a Kde1d margin for a "
+        "bounded variable."
       )
 
     y_t = self._prep(y).reshape(-1)

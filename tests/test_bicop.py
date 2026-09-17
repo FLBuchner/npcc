@@ -617,6 +617,16 @@ class TestTheBicopBaseContract:
     for name in ("pdf", "cdf", "hfunc1", "hfunc2", "hinv1", "hinv2"):
       assert getattr(RosenblattBicop, name) is getattr(BicopBase, name), name
 
+  def test_the_pair_declares_that_it_reads_covariates(self) -> None:
+    """`pair_eval` reads `supports_covariates` before it calls the leaf.
+
+    `BicopBase` defaults the flag to `False`, and this pair is conditional by
+    construction. Without the declaration every covariate evaluation raises a
+    `TypeError` naming the class instead of reaching leaves that all declare
+    `x` -- the leaf signature was never what marked a pair conditional.
+    """
+    assert RosenblattBicop.supports_covariates is True
+
   @pytest.mark.parametrize("var_types", [["d", "c"], ["c", "d"], ["d", "d"]])
   def test_fit_refuses_a_discrete_declaration(
     self,

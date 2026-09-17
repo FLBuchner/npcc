@@ -51,6 +51,11 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
   """
 
   supports_covariates: bool = True
+  # `VinecopBase` defaults this to `True`, and weights now ride in the controls
+  # rather than in a `fit` argument -- so leaving the default would have this
+  # vine accept a weighted-looking call and return the unweighted fit. Its
+  # pairs are `RosenblattBicop`, whose inner backends take no weights.
+  supports_weights: bool = False
   bicop_class: ClassVar[type[RosenblattBicop]] = RosenblattBicop
 
   def __init__(

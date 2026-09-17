@@ -28,7 +28,6 @@ class RosenblattVinedist(TensorPlacement, VinedistBase[torch.Tensor]):
   the required parts first and then call :meth:`fit`.
   """
 
-  supports_weighted_copula: bool = False
   supports_fit_covariates: bool = True
 
   def __init__(
@@ -53,9 +52,8 @@ class RosenblattVinedist(TensorPlacement, VinedistBase[torch.Tensor]):
     # Anything `torch.as_tensor` accepts, which is this hook's whole job: a
     # caller may reasonably hand a NumPy array to a torch distribution.
     y: object,
-    weights: torch.Tensor | None,
     controls: ControlsLike | None,
-  ) -> tuple[torch.Tensor, torch.Tensor | None]:
+  ) -> torch.Tensor:
     """Put the fit inputs on the placement the controls name.
 
     The **controls** decide the placement and the data follow, not the other
@@ -74,26 +72,17 @@ class RosenblattVinedist(TensorPlacement, VinedistBase[torch.Tensor]):
     ----------
     y : object
         The caller's observations, in any form ``torch.as_tensor`` accepts.
-    weights : torch.Tensor, or None
-        Observation weights. Refused one level up, since
-        :attr:`supports_weighted_copula` is ``False``; placed here anyway so
-        the hook stays correct if that changes.
     controls : ControlsLike, or None
         Fit configuration. Its ``device``, when it has one, is the placement.
+        Observation weights ride here too, and are refused against each part's
+        ``supports_weights`` one level up rather than placed here.
 
     Returns
     -------
-    tuple of (torch.Tensor, torch.Tensor or None)
-        The observations and weights, on one device in one dtype.
+    torch.Tensor
+        The observations, on the placement the controls name.
     """
     del cls
 
     device = resolve_device(getattr(controls, "device", None))
-    placed = torch.as_tensor(y).to(device=device, dtype=torch.float64)
-
-    if weights is None:
-      return placed, None
-
-    return placed, torch.as_tensor(weights).to(
-      device=device, dtype=torch.float64
-    )
+    return torch.as_tensor(y).to(device=device, dtype=torch.float64)
