@@ -19,13 +19,17 @@ conventions** wherever the two could differ — argument order, the fitting
 idiom, module naming, the typing policy. Where this repository
 departs, the departure is named below with its reason.
 
-pyvinecopulib 1.0.0 is not on PyPI yet, so `[tool.uv.sources]` pins a git
-revision — currently *ahead* of upstream `main`, at the pull request that
-publishes the input pipeline's steps and names
-`VinecopBase._invalidate_batched`. That is two steps, in order: the pin moves
-to the merge commit once that lands, and the override goes away only once a
-published 1.0.0 carries them. The `>=1.0.0` floor in `[project]` is already
-the right specifier. The comment beside the pin says which symbols and why.
+pyvinecopulib resolves from PyPI at `>=1.0.0`. It was pinned to a git
+revision through the 1.0 pre-release, which is why `.github/workflows/ci.yml`
+once installed Eigen and Boost; both the pin and that step are gone, and a
+`uv sync` now fetches a wheel rather than building a C++ extension.
+
+Re-pinning to git is a real option when a fix this package needs is not in a
+release, but it is a cost — a source build in every CI leg and on every fresh
+clone — so it wants a reason stated beside the pin. As of 1.0.0 there is none:
+the open `1.0.1` work is a `TorchTllBicop` tie-breaking fix, and this package
+touches neither that class nor the torch vine lane, importing only
+`TensorPlacementMixin` from `pyvinecopulib.torch`.
 
 ## Commands
 

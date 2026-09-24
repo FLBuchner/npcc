@@ -446,8 +446,7 @@ uv sync --extra cpu --extra ngboost --extra gbm --extra tabicl
 
 The declared dependencies are `pyvinecopulib>=1.0.0`, `tabpfn>=8.0` and
 `torch>=2.5`; the flavor extras only pin which PyTorch build is installed.
-pyvinecopulib 1.0.0 is not on PyPI yet, so `[tool.uv.sources]` pins a git
-revision — see the comment there for when that override goes away.
+All three resolve from PyPI, so nothing here builds a C++ extension.
 
 ### Authenticate TabPFN (one-time)
 

@@ -2980,7 +2980,7 @@ requires-dist = [
     { name = "pyarrow", marker = "extra == 'experiments'", specifier = ">=15.0,<24.0" },
     { name = "pytabkit", marker = "extra == 'backends'", specifier = ">=1.5" },
     { name = "pytabkit", marker = "extra == 'pytabkit'", specifier = ">=1.5" },
-    { name = "pyvinecopulib", git = "https://github.com/vinecopulib/pyvinecopulib.git?rev=93d056368980dc686d14ab9d16b960742a3f9547" },
+    { name = "pyvinecopulib", specifier = ">=1.0.0" },
     { name = "scikit-learn", marker = "extra == 'backends'", specifier = ">=1.3" },
     { name = "scikit-learn", marker = "extra == 'gbm'", specifier = ">=1.3" },
     { name = "synthefy-nori", marker = "extra == 'backends'", git = "https://github.com/tvatter/synthefy-nori.git?branch=allow-newer-torch-cuda" },
@@ -4604,13 +4604,26 @@ wheels = [
 [[package]]
 name = "pyvinecopulib"
 version = "1.0.0"
-source = { git = "https://github.com/vinecopulib/pyvinecopulib.git?rev=93d056368980dc686d14ab9d16b960742a3f9547#93d056368980dc686d14ab9d16b960742a3f9547" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "array-api-compat" },
     { name = "matplotlib" },
     { name = "networkx" },
     { name = "numpy" },
     { name = "pydot" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/a5/158f1978c84b552420a6e4c1710027bbab2b879c90d0bc66a377c2d3ff8f/pyvinecopulib-1.0.0.tar.gz", hash = "sha256:c3bb46512f7280e6ba56451a1e974e774a01571738566cd72cdb8874b525c348", size = 7421490, upload-time = "2026-09-18T13:23:38.716Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/cb/50aea42795ae51d5e0d20eba56fc7ed62abf3b238e204a3d2eca75821389/pyvinecopulib-1.0.0-cp311-cp311-macosx_10_13_x86_64.whl", hash = "sha256:d04e5cf367dd5189c1698051101a8606cd1bc266a3ae57c1a6cff6aa327b9f54", size = 2533755, upload-time = "2026-09-18T13:23:22.215Z" },
+    { url = "https://files.pythonhosted.org/packages/87/15/1802550f2ff383cb430fa9091651cddcec7d2ffa00ebeef073390a73c508/pyvinecopulib-1.0.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:84844216dceb47bd9f7e3675401c81c52fbb316daeeadebf77b7c1b8d83f65c1", size = 2270076, upload-time = "2026-09-18T13:23:23.824Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/47/cf1477d2e25254d5b23f25308b67bb4389601a40b0ca7fb350c79dc4345d/pyvinecopulib-1.0.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9cb100ea1002799b0a34387a6990171ff4f30de9b407ffcedca0e8e8b1ea804b", size = 2787015, upload-time = "2026-09-18T13:23:25.205Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/c1/1aede5a26aa7eb70649133af5512d11f856c93b65edfebf2cd4cf66b9542/pyvinecopulib-1.0.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:7500a03ea0298acdc55971491d15f24a2b527e03aad63fe4d547e53e16d0ccfe", size = 3275645, upload-time = "2026-09-18T13:23:26.624Z" },
+    { url = "https://files.pythonhosted.org/packages/24/07/268378b691d5bb5dd7bdbf5958eb00bce4268d75d57ca406a1d26f6a0df1/pyvinecopulib-1.0.0-cp311-cp311-win_amd64.whl", hash = "sha256:fa2c67e148ab54a2a0751006004090abfb4e7a83adb482807fa346da4ee6c660", size = 2494522, upload-time = "2026-09-18T13:23:28.247Z" },
+    { url = "https://files.pythonhosted.org/packages/04/99/21fa8446f129590c4b9f6ad9f2dd586ed3b1f1823b4a848062519c974092/pyvinecopulib-1.0.0-cp312-abi3-macosx_10_13_x86_64.whl", hash = "sha256:4777f7b5b85199bade01c57e4443ad779e418f5f84302585f4d85c9b4b77a693", size = 2531887, upload-time = "2026-09-18T13:23:29.774Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/6a/3f4a69b541949e3b698b18683dc874e47dc153d1db931d2a097e5185e893/pyvinecopulib-1.0.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:228f8347e36be905afbedebca27b27993a1b1e3f08f1cec17d3a060f133cd4cc", size = 2267000, upload-time = "2026-09-18T13:23:31.388Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/36/039b1605adf6d2e5bd8a9728b42357ad8e6bdbe842c3ca9fdf159acf3899/pyvinecopulib-1.0.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c03cff5753c1248a24406d4ad87c739682d2b82c765db16d7110efb983abe1a9", size = 2779175, upload-time = "2026-09-18T13:23:33.099Z" },
+    { url = "https://files.pythonhosted.org/packages/04/6a/6783cbdbd76f08e607ebd3bbfa9bcd39264e371e406dc17bebaa29b34a37/pyvinecopulib-1.0.0-cp312-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:f1129b2ab5eec92aef4b4d4e57039158201383d76d0779e751bb9fc5b7d7da12", size = 3271875, upload-time = "2026-09-18T13:23:34.794Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/e6/0885c800e4f2494044ad8f3305b5f8efb11126848009fb4dde288c05f432/pyvinecopulib-1.0.0-cp312-abi3-win_amd64.whl", hash = "sha256:d599eb410db77660d04b3b3f8db4e7d982acd0e0f366ba3b47dae98506b95eb5", size = 2494249, upload-time = "2026-09-18T13:23:37.102Z" },
 ]
 
 [[package]]

@@ -19,18 +19,6 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      # `pyvinecopulib` is pinned to a git revision until 1.0.0 publishes, so
-      # `uv sync` builds it here rather than fetching a wheel -- and that build
-      # is a C++ one. Eigen3 is wanted in CONFIG mode and Boost >= 1.75 as
-      # headers; Ubuntu's packages supply both, which is enough for this job.
-      # Upstream builds both from source across an OS matrix, which is for
-      # producing portable wheels and not needed to lint and test this package.
-      # Drop this step when the pin becomes a published version.
-      - name: Install pyvinecopulib's build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libeigen3-dev libboost-dev
       - run: uv sync --extra cpu --extra experiments --extra backends
       - run: make check
 
@@ -47,18 +35,6 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
-      # `pyvinecopulib` is pinned to a git revision until 1.0.0 publishes, so
-      # `uv sync` builds it here rather than fetching a wheel -- and that build
-      # is a C++ one. Eigen3 is wanted in CONFIG mode and Boost >= 1.75 as
-      # headers; Ubuntu's packages supply both, which is enough for this job.
-      # Upstream builds both from source across an OS matrix, which is for
-      # producing portable wheels and not needed to lint and test this package.
-      # Drop this step when the pin becomes a published version.
-      - name: Install pyvinecopulib's build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libeigen3-dev libboost-dev
       - run: uv sync --extra cpu --extra experiments --extra backends
       # The suite is hermetic: TabPFN is faked, and the tests that reach a real
       # model skip when their dependency or credentials are absent.
