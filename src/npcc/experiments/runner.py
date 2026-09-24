@@ -161,6 +161,10 @@ def _grid_signature(grid: GridConfig, run: RunConfig) -> str:
     "n_rep": grid.n_rep,
     "normalize": sorted(_norm_label(x) for x in grid.normalize),
     "projection_grid_size": grid.projection_grid_size,
+    # `batch_size` is absent because it chunks the query set and leaves each
+    # prediction's context alone, so it changes throughput and not results.
+    # Including it would make re-tuning the batch for a different GPU discard
+    # every completed cell, which is the opposite of what `--resume` is for.
     "conditional_uv_grid_n": grid.conditional_uv_grid_n,
     "conditional_x_grid_n": grid.conditional_x_grid_n,
     "surface_tau_levels": sorted(grid.surface_tau_levels),
@@ -466,6 +470,7 @@ def summarize_one_cell(
   base_seed: int,
   device: str | None,
   projection_grid_size: int,
+  batch_size: int | None,
   conditional_uv_grid_n: int,
   conditional_x_grid_n: int,
   surface_tau_levels: list[float],
@@ -528,6 +533,7 @@ def summarize_one_cell(
         transform=cast("Literal['identity', 'logit', 'probit']", est.transform),
         device=device,
         projection_grid_size=projection_grid_size,
+        batch_size=batch_size,
         backend_kwargs=dict(est.backend_kwargs),
       )
     )
@@ -788,6 +794,7 @@ def run_study(
       base_seed=run.base_seed,
       device=run.device,
       projection_grid_size=grid.projection_grid_size,
+      batch_size=grid.batch_size,
       conditional_uv_grid_n=grid.conditional_uv_grid_n,
       conditional_x_grid_n=grid.conditional_x_grid_n,
       surface_tau_levels=grid.surface_tau_levels,

@@ -16,16 +16,39 @@
 # integration over inner conditional-CDF forwards dominated runtime for the
 # foundation models without informing the density/vine question.
 #
-# Measured wall time on an RTX 2080 Ti, workers=1 (no CDF): ~2.06 h per seed
-# (one family x scenario x transform block over n=[200,500,1000], all 10
-# backends, is ~309 s; the full grid is 24 such blocks). n_rep = 5 => ~10.3 h,
-# which fits an overnight window with buffer.
+# WALL TIME IS UNMEASURED FOR THIS GRID. The only measurement taken was on an
+# RTX 2080 Ti, workers=1, over a *smaller* grid than the one below: n_rep = 5,
+# n = [200,500,1000], 10 backends, giving ~2.06 h per seed and ~10.3 h total.
+# The grid below is larger on three axes at once -- n_rep = 10, n gains 2000
+# (the slowest point), and 18 estimators rather than 10 -- so that number is
+# not a budget for it. As configured this is 160 cells and 5760 fits (each
+# cell fits every estimator in both Rosenblatt directions).
+#
+# Time one cell on the target machine before committing to the full run:
+#   npcc-simstudy --config configs/study.toml --out /tmp/probe --workers 1
+# with `families`, `tau_scenarios` and `n` each cut to one entry and
+# `n_rep = 1`. Multiply by 160 and by the n-cost ratio.
 #
 # Backends intentionally EXCLUDED from this run (too slow for the full grid):
 #   - catboost   (~74 s/fit; ~1.5 h of grid) and gbm (101 sklearn models/dir) —
 #     redundant slow GBM-quantile variants; xgb-quantile is the representative.
 #   - tabpfn-finetune / tabicl-finetune — GPU training loops (minutes x 2
 #     directions x 72 fits = many hours); run those in a separate small study.
+
+# CONCURRENCY. `--workers` runs whole data cells in a *thread* pool, so it
+# overlaps well where the work releases the GIL (the TabPFN and other torch
+# backends) and poorly where it does not (the sklearn-style CPU backends:
+# ngboost, xgboost, pytabkit). All workers share one CUDA context and one
+# device, so on a single accelerator raise `--workers` for occupancy rather
+# than expecting linear scaling, and watch memory: each concurrent cell holds
+# its own fitted backends.
+#
+# NOTE ON `normalize`. With more than one entry the pdf is recomputed per
+# entry -- the whole inner-backend forward pass, not just the projection --
+# because the sweep sets `sinkhorn_iters` on the fitted model and calls `pdf`
+# again. With the single "none" below that costs nothing; a two-entry sweep
+# doubles the pdf inference for the run. Worth restructuring first if the
+# projection is ever re-enabled at scale.
 
 [grid]
 # Copula families (one-parameter): clayton, gumbel, frank, gaussian, joe.
@@ -47,6 +70,14 @@ n_rep = 10
 # Grid resolution for the (disabled) Sinkhorn projection; unused with
 # normalize = ["none"].
 projection_grid_size = 30
+
+# Inner-backend inference chunk. Omitted = the device-aware default, 2000 on
+# CUDA and 400 on CPU, which is sized for an 8 GB laptop card. On a large
+# accelerator a bigger chunk cuts the number of forward passes; it is the
+# first knob to tune there. It changes throughput and not results, so it is
+# absent from the `--resume` signature and re-tuning it keeps every cell
+# already computed.
+# batch_size = 8192
 
 # Conditional metric grid: 20x20 uv points and 10 x slices.
 conditional_uv_grid_n = 20

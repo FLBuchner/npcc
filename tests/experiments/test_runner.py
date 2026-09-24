@@ -305,7 +305,7 @@ def test_tau_diagnostics_can_be_disabled() -> None:
   assert runtime_df["tau_time"].eq(0.0).all()
 
 
-def _small_grid(n_rep: int = 2) -> GridConfig:
+def _small_grid(n_rep: int = 2, batch_size: int | None = None) -> GridConfig:
   return GridConfig(
     families=["clayton"],
     tau_scenarios=["linear"],
@@ -319,6 +319,7 @@ def _small_grid(n_rep: int = 2) -> GridConfig:
     conditional_uv_grid_n=3,
     conditional_x_grid_n=2,
     surface_families=[],
+    batch_size=batch_size,
   )
 
 
@@ -385,6 +386,26 @@ def test_resume_grid_signature_mismatch_raises(tmp_path: Path) -> None:
       run_study(_small_grid(n_rep=3), run, resume=True)
   finally:
     mp.undo()
+
+
+def test_resume_survives_a_batch_size_change(tmp_path: Path) -> None:
+  """Retuning the batch must not discard completed cells.
+
+  `batch_size` chunks the query set and leaves each prediction's context
+  alone, so it changes throughput and not results. It is a knob the study
+  expects to have re-tuned for whatever GPU the run lands on -- if it entered
+  the resume signature, doing so on a new machine would silently re-run every
+  cell already paid for.
+  """
+  run = RunConfig(out=tmp_path, workers=1)
+  mp = _fake_mp()
+  try:
+    run_study(_small_grid(n_rep=1), run)
+    metric = run_study(_small_grid(n_rep=1, batch_size=4), run, resume=True)[0]
+  finally:
+    mp.undo()
+
+  assert not metric.empty
 
 
 def test_run_study_forwards_backend_kwargs(tmp_path: Path) -> None:
