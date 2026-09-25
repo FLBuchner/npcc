@@ -578,18 +578,19 @@ def summarize_one_cell(
 
       pdf_time = 0.0
       pdf_by_norm: dict[str, torch.Tensor] = {}
+      # One call for the whole `normalize` axis: the inner-backend passes a
+      # projection needs are the same for every iteration count, so sweeping
+      # `sinkhorn_iters` and calling `pdf` per value would re-pay for them.
+      t0 = perf_counter()
+      densities = model.pdf_by_projection(
+        torch.column_stack([metric_grid.u_flat, metric_grid.v_flat]),
+        x=metric_grid.x_flat,
+        sinkhorn_iters=normalize,
+      )
+      pdf_time += perf_counter() - t0
       for norm in normalize:
         norm_label = _norm_label(norm)
-        t0 = perf_counter()
-        # Written onto the fitted model rather than passed per call: the
-        # projection count is a control, and the sweep reads one fit under
-        # several of them rather than refitting per value.
-        model.sinkhorn_iters = norm
-        pdf_hat = model.pdf(
-          torch.column_stack([metric_grid.u_flat, metric_grid.v_flat]),
-          x=metric_grid.x_flat,
-        ).cpu()
-        pdf_time += perf_counter() - t0
+        pdf_hat = densities[norm].cpu()
         pdf_by_norm[norm_label] = pdf_hat
         metric_rows += _metric_rows_for_quantity(
           cell,
@@ -655,16 +656,16 @@ def summarize_one_cell(
             tau_true=surface_tau_true,
           )
 
+        t0 = perf_counter()
+        surface_densities = model.pdf_by_projection(
+          torch.column_stack([surface_grid.u_flat, surface_grid.v_flat]),
+          x=surface_grid.x_flat,
+          sinkhorn_iters=normalize,
+        )
+        surface_time += perf_counter() - t0
         for norm in normalize:
           norm_label = _norm_label(norm)
-          t0 = perf_counter()
-          # As above: the projection count is a control, swept over one fit.
-          model.sinkhorn_iters = norm
-          pdf_hat = model.pdf(
-            torch.column_stack([surface_grid.u_flat, surface_grid.v_flat]),
-            x=surface_grid.x_flat,
-          ).cpu()
-          surface_time += perf_counter() - t0
+          pdf_hat = surface_densities[norm].cpu()
           quantity_rows += _quantity_rows(
             cell,
             est,

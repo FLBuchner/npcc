@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import fields
-from typing import Self
+from typing import NamedTuple, Self
 
 import torch
 from pyvinecopulib.core import BicopBase, ControlsLike
@@ -68,6 +68,21 @@ from npcc.core.controls import FitControlsRosenblattBicop
 from npcc.core.margin import ConditionalMargin
 from npcc.core.margin_quantile_table import QuantileTableConfig
 from npcc.core.registry import create_backend
+
+
+class _ProjectionGrids(NamedTuple):
+  """What a Sinkhorn projection needs that does not depend on its iterations.
+
+  Held together so the inner-backend grid evaluation behind ``density`` can be
+  paid for once and reused across iteration counts.
+  """
+
+  u_grid: torch.Tensor
+  v_grid: torch.Tensor
+  wu: torch.Tensor
+  wv: torch.Tensor
+  x_inverse: torch.Tensor
+  density: torch.Tensor
 
 
 def _reject_discrete(var_types: Sequence[str] | None) -> None:
@@ -592,6 +607,133 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
         sinkhorn_iters=self.sinkhorn_iters,
       )
 
+  def _projection_grids(
+    self,
+    x: torch.Tensor,
+    *,
+    batch_size: int,
+  ) -> _ProjectionGrids:
+    """Evaluate the density grid the Sinkhorn projection normalizes.
+
+    The expensive half of a projection, and the half that does not depend on
+    the iteration count: one batched inner-backend pass per *unique* covariate
+    row. Separated so a caller evaluating the same points under several
+    iteration counts pays for it once -- see :meth:`pdf_by_projection`.
+    """
+    if self._u_grid_borders_ is None or self._v_grid_borders_ is None:
+      self._get_grid_borders()
+
+    assert self._u_grid_borders_ is not None
+    assert self._v_grid_borders_ is not None
+
+    u_grid = self._u_grid_borders_
+    v_grid = self._v_grid_borders_
+
+    if x.shape[1] == 0:
+      x_unique = x[:1]
+      x_inverse = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
+    else:
+      x_unique, x_inverse = torch.unique(x, dim=0, return_inverse=True)
+
+    return _ProjectionGrids(
+      u_grid=u_grid,
+      v_grid=v_grid,
+      wu=self._trapezoidal_weights(u_grid),
+      wv=self._trapezoidal_weights(v_grid),
+      x_inverse=x_inverse,
+      # All unique-x density grids in a few batched forward passes.
+      density=self._unprojected_pdf_grids_by_x(
+        u_grid, v_grid, x_unique, batch_size=batch_size
+      ),
+    )
+
+  @staticmethod
+  def _scale_by_projection(
+    c_unprojected: torch.Tensor,
+    u: torch.Tensor,
+    v: torch.Tensor,
+    grids: _ProjectionGrids,
+    *,
+    sinkhorn_iters: int,
+  ) -> torch.Tensor:
+    """Scale a density by the projection its grids imply.
+
+    The cheap half: Sinkhorn IPF over an already-evaluated grid, per unique
+    covariate row, with no inner-backend pass at all.
+    """
+    out = torch.empty_like(c_unprojected)
+    for x_idx in range(grids.density.shape[1]):
+      mask = grids.x_inverse == x_idx
+      if not torch.any(mask):
+        continue
+
+      r, s = _sinkhorn_project(
+        grids.density[:, x_idx, :], grids.wu, grids.wv, sinkhorn_iters
+      )
+
+      r_interp = interp(u[mask], grids.u_grid, r)
+      s_interp = interp(v[mask], grids.v_grid, s)
+
+      out[mask] = c_unprojected[mask] * r_interp * s_interp
+
+    return out
+
+  def pdf_by_projection(
+    self,
+    u: torch.Tensor,
+    *,
+    x: torch.Tensor | None = None,
+    sinkhorn_iters: Sequence[int | None],
+  ) -> dict[int | None, torch.Tensor]:
+    """Densities at ``u`` under several Sinkhorn iteration counts.
+
+    Answers the same question as setting :attr:`sinkhorn_iters` and calling
+    :meth:`pdf` once per value, and is the reason to prefer this: the two
+    inner-backend evaluations a projection needs -- the density at ``u``, and
+    the density on the projection grid for each unique covariate row -- do not
+    depend on the iteration count, so this pays for them once. Only the
+    Sinkhorn iteration and its interpolation repeat, and neither reaches a
+    backend. The one-value case is the same work as :meth:`pdf`.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+    sinkhorn_iters : sequence of int or None
+        The iteration counts to evaluate under. ``None`` means no projection.
+
+    Returns
+    -------
+    dict
+        One density of shape ``(n,)`` per distinct entry, keyed by it.
+    """
+    uv_t = self._prep_args(u)
+    u_t, v_t = uv_t[:, 0], uv_t[:, 1]
+    x_t = self._covariates(x, uv_t.shape[0])
+
+    wanted = list(dict.fromkeys(sinkhorn_iters))
+
+    with torch.inference_mode():
+      unprojected = self._unprojected_pdf(
+        u_t, v_t, x_t, batch_size=self.batch_size
+      )
+
+      out: dict[int | None, torch.Tensor] = {}
+      grids: _ProjectionGrids | None = None
+      for iters in wanted:
+        if iters is None:
+          out[None] = unprojected
+          continue
+        if grids is None:
+          grids = self._projection_grids(x_t, batch_size=self.batch_size)
+        out[iters] = self._scale_by_projection(
+          unprojected, u_t, v_t, grids, sinkhorn_iters=iters
+        )
+
+    return out
+
   def _project_points_by_x(
     self,
     c_unprojected: torch.Tensor,
@@ -602,44 +744,13 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     batch_size: int,
     sinkhorn_iters: int,
   ) -> torch.Tensor:
-    if self._u_grid_borders_ is None or self._v_grid_borders_ is None:
-      self._get_grid_borders()
-
-    assert self._u_grid_borders_ is not None
-    assert self._v_grid_borders_ is not None
-
-    u_grid = self._u_grid_borders_
-    v_grid = self._v_grid_borders_
-
-    wu = self._trapezoidal_weights(u_grid)
-    wv = self._trapezoidal_weights(v_grid)
-
-    if x.shape[1] == 0:
-      x_unique = x[:1]
-      x_inverse = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
-    else:
-      x_unique, x_inverse = torch.unique(x, dim=0, return_inverse=True)
-
-    # All unique-x density grids in a few batched forward passes.
-    density_all = self._unprojected_pdf_grids_by_x(
-      u_grid, v_grid, x_unique, batch_size=batch_size
+    return self._scale_by_projection(
+      c_unprojected,
+      u,
+      v,
+      self._projection_grids(x, batch_size=batch_size),
+      sinkhorn_iters=sinkhorn_iters,
     )
-
-    out = torch.empty_like(c_unprojected)
-    for x_idx in range(x_unique.shape[0]):
-      mask = x_inverse == x_idx
-      if not torch.any(mask):
-        continue
-
-      # Sinkhorn IPF stays per-x (cheap, no forward pass).
-      r, s = _sinkhorn_project(density_all[:, x_idx, :], wu, wv, sinkhorn_iters)
-
-      r_interp = interp(u[mask], u_grid, r)
-      s_interp = interp(v[mask], v_grid, s)
-
-      out[mask] = c_unprojected[mask] * r_interp * s_interp
-
-    return out
 
   def _project_grid(
     self,

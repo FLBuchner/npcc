@@ -43,12 +43,13 @@
 # than expecting linear scaling, and watch memory: each concurrent cell holds
 # its own fitted backends.
 #
-# NOTE ON `normalize`. With more than one entry the pdf is recomputed per
-# entry -- the whole inner-backend forward pass, not just the projection --
-# because the sweep sets `sinkhorn_iters` on the fitted model and calls `pdf`
-# again. With the single "none" below that costs nothing; a two-entry sweep
-# doubles the pdf inference for the run. Worth restructuring first if the
-# projection is ever re-enabled at scale.
+# NOTE ON `normalize`. Adding entries is close to free: the study evaluates
+# the whole axis in one `pdf_by_projection` call, and the two inner-backend
+# passes a projection needs -- the density at the points, and the density on
+# the projection grid per unique covariate row -- do not depend on the
+# iteration count, so they are paid for once. Only the Sinkhorn iteration and
+# its interpolation repeat, and neither reaches a backend. A "none" entry adds
+# nothing at all: the projection grid is built lazily.
 
 [grid]
 # Copula families (one-parameter): clayton, gumbel, frank, gaussian, joe.

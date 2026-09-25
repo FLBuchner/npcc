@@ -473,6 +473,86 @@ class TestSinkhornProjection:
     assert torch.all(result >= 0.0)
 
 
+class TestProjectionSweep:
+  """Evaluating one fit under several Sinkhorn counts."""
+
+  def test_matches_setting_the_control_and_calling_pdf(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """The fast path must answer exactly what the slow one did.
+
+    `pdf_by_projection` exists to avoid re-paying for the inner-backend
+    passes, not to approximate them. If it ever diverged from setting
+    `sinkhorn_iters` and calling `pdf`, the study's numbers would change on a
+    performance fix.
+    """
+    model = fit_bicop(patch_uniform)
+    uv = random_uv(8, seed=5)
+
+    fast = model.pdf_by_projection(uv, sinkhorn_iters=[None, 2, 5])
+
+    for iters in (None, 2, 5):
+      model.sinkhorn_iters = iters
+      torch.testing.assert_close(fast[iters], model.pdf(uv))
+
+  def test_pays_for_the_backend_passes_once(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """Sweeping by hand re-ran every inner-backend pass per iteration count.
+
+    Both evaluations a projection needs -- the density at the points and the
+    density on the projection grid per unique covariate row -- are the same
+    whatever the iteration count, so a sweep that called `pdf` per value paid
+    for them again each time. That is the whole cost; the Sinkhorn iteration
+    reaches no backend.
+    """
+    model = fit_bicop(patch_uniform)
+    uv = random_uv(8, seed=5)
+    calls = 0
+    inner = model.v_given_ux_.pdf_grid
+
+    def counted(
+      y_grid: torch.Tensor,
+      /,
+      *,
+      x: torch.Tensor,
+      batch_size: int | None = None,
+    ) -> torch.Tensor:
+      nonlocal calls
+      calls += 1
+      return inner(y_grid, x=x, batch_size=batch_size)
+
+    model.v_given_ux_.pdf_grid = counted  # ty: ignore[invalid-assignment]
+    model.pdf_by_projection(uv, sinkhorn_iters=[2, 5, 9])
+    swept = calls
+
+    calls = 0
+    for iters in (2, 5, 9):
+      model.sinkhorn_iters = iters
+      model.pdf(uv)
+
+    assert swept > 0, "nothing was counted; the probe missed its target"
+    assert swept * 3 == calls, (swept, calls)
+
+  def test_an_unprojected_entry_needs_no_grid_at_all(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """`normalize = ["none"]` is the configured default and must stay free.
+
+    The projection grid is built lazily, so asking only for `None` must not
+    evaluate one -- otherwise the fix for the sweep would have made the
+    common single-entry case slower than it was.
+    """
+    model = fit_bicop(patch_uniform)
+
+    model.pdf_by_projection(random_uv(8, seed=5), sinkhorn_iters=[None])
+
+    assert model._u_grid_borders_ is None
+
+
 class TestPlacement:
   """Inputs are brought onto the estimator's dtype and device.
 
