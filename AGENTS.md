@@ -19,13 +19,17 @@ conventions** wherever the two could differ — argument order, the fitting
 idiom, module naming, the typing policy. Where this repository
 departs, the departure is named below with its reason.
 
-pyvinecopulib 1.0.0 is not on PyPI yet, so `[tool.uv.sources]` pins a git
-revision — currently *ahead* of upstream `main`, at the pull request that
-publishes the input pipeline's steps and names
-`VinecopBase._invalidate_batched`. That is two steps, in order: the pin moves
-to the merge commit once that lands, and the override goes away only once a
-published 1.0.0 carries them. The `>=1.0.0` floor in `[project]` is already
-the right specifier. The comment beside the pin says which symbols and why.
+pyvinecopulib resolves from PyPI at `>=1.0.0`. It was pinned to a git
+revision through the 1.0 pre-release, which is why `.github/workflows/ci.yml`
+once installed Eigen and Boost; both the pin and that step are gone, and a
+`uv sync` now fetches a wheel rather than building a C++ extension.
+
+Re-pinning to git is a real option when a fix this package needs is not in a
+release, but it is a cost — a source build in every CI leg and on every fresh
+clone — so it wants a reason stated beside the pin. As of 1.0.0 there is none:
+the open `1.0.1` work is a `TorchTllBicop` tie-breaking fix, and this package
+touches neither that class nor the torch vine lane, importing only
+`TensorPlacementMixin` from `pyvinecopulib.torch`.
 
 ## Commands
 
@@ -154,7 +158,33 @@ Inherited from pyvinecopulib, and not to be diverged from:
   governs `supports_controls` / `supports_weights` / `supports_covariates`:
   a declared `False` means refuse, not ignore.
 - **Capability flags are declared, not inferred**, and exist where a consumer
-  reads them.
+  reads them. Two default the *wrong* way for this package, so leaving either
+  at its inherited value fails silently rather than loudly: `RosenblattBicop.supports_covariates` must be `True`, because
+  `pair_eval` reads it *before* calling a leaf and a conditional pair is
+  otherwise refused outright; and `RosenblattVinecop.supports_weights` must be
+  `False`, because `VinecopBase` defaults it to `True` and weights ride in the
+  controls, so the default accepts a weighted call and returns the unweighted
+  fit. A leaf's signature is not what marks a pair conditional — the flag is.
+- **Observation weights ride in the `ControlsLike`**, not in a `fit` argument.
+  No `fit` / `select` / `from_data` in the stack takes `weights=`; each part
+  refuses what it cannot honor through `supports_weights`. `var_type` and
+  `support` travel beside `controls` on a margin's `fit` as *declarations*
+  rather than configuration, and `ConditionalMargin` refuses both unless they
+  say continuous and unbounded.
+- **A per-call evaluation knob travels on the controls too**, because the base
+  leaves no other route: `BicopBase`'s `pdf` / `cdf` / `hfunc*` / `hinv*` are
+  dispatchers forwarding nothing but `x`, so a subclass keyword would have to
+  come from a public override — and an override makes the `_*_raw` leaf beneath
+  it unreachable, since every internal caller (`loglik`, the plot, each vine
+  cascade) goes through the public member. `RosenblattBicop` therefore writes
+  the six leaves and overrides no public member; `batch_size`, `sinkhorn_iters`
+  and `cdf_n_int` are settings.
+- **A pair copula carries its own `var_types`.** `RosenblattBicop` models no
+  atoms, so it refuses a discrete declaration at both doors — `fit`, which the
+  vine's engines reach first, and `with_var_types`, which they use to declare
+  an edge once it is fitted. Refusing only in the all-continuous case would
+  break the inverse-Rosenblatt cascade and the density plot, which call
+  `with_var_types()` on every pair.
 
 ## Placement, layout, domain
 
@@ -164,13 +194,16 @@ Three separable steps on every input:
 |---|---|---|
 | placement | the `_prep` hook | onto this estimator's dtype (`float64`) and device |
 | layout | the `_layout` hook | which shapes are admissible |
-| domain | `check_uv`, called from `_prepare_joint_inputs` | copula arguments into the open unit interval |
+| domain | `check_uv`, called from the `_prep_args` override | copula arguments into the open unit interval |
 
-Only the first two are hooks. Upstream's domain step is the module-level
-`trim` that `_prep_args` applies after them; `check_uv` is a free function
-this package calls at one site, and `_prepare_grid_inputs` rejects-then-clamps
-inline rather than calling it, because `check_uv` requires `u` and `v` to have
-equal shapes and a grid pair is a cross product.
+All three are hooks here. Upstream composes the first two and then applies its
+own module-level `trim` inside `_prep_args`; `RosenblattBicop` **overrides**
+`_prep_args` so `check_uv` runs in `trim`'s place. That is the single site
+every evaluation member reaches, since `BicopBase` dispatches `pdf`, `cdf`,
+`hfunc1/2` and `hinv1/2` through `_atoms`, which calls it first.
+`_prepare_grid_inputs` rejects-then-clamps inline rather than calling
+`check_uv`, because `check_uv` requires `u` and `v` to have equal shapes and a
+grid pair is a cross product.
 
 Three rules that are easy to get wrong:
 
@@ -193,20 +226,29 @@ Three rules that are easy to get wrong:
   `torch.asarray`, whose `requires_grad` default changed — silently `False`
   on torch 2.11, `obj.requires_grad` from 2.13.
 
-`check_uv` **departs** from pyvinecopulib's `trim` on purpose: it rejects a
-copula argument at or outside `{0, 1}` before clamping to a caller-chosen
-`eps`, where `trim` clamps silently at working precision. Every score reaching
-an npcc estimator comes from a probability integral transform, so an exact 0
-or 1 is a defect upstream rather than a rounding artifact, and clamping would
-turn it into a plausible number and hide it.
+`check_uv` **departs** from pyvinecopulib's `trim` in both halves, and the
+second half is what makes the `_prep_args` override mandatory rather than
+stylistic.
 
-That rejection is scoped to `RosenblattBicop`'s own entry points. On the
-methods inherited from `VinecopBase`, `_prep_args` runs upstream's `trim`
-before the cascade reaches a pair, so the clamp is silent there and the pair's
-`check_uv` only ever sees legal interior values; a vine distribution reaches
-the same clamp through the vine it holds. Closing that gap would mean
-overriding `_prep_args` at the vine level, which is new behavior and not a
-decision this file has made.
+- It **rejects** a copula argument at or outside `{0, 1}`, where `trim` clamps
+  silently. Every score reaching an npcc estimator comes from a probability
+  integral transform, so an exact 0 or 1 is a defect upstream rather than a
+  rounding artifact, and clamping would turn it into a plausible number and
+  hide it.
+- It **clamps at `eps`**, the caller's, where `trim` clamps at the working
+  precision — about `1e-10` in `float64`. The inner regressors are fitted on
+  `logit(u)`, where those two are some ten units of feature space apart, so
+  inheriting `_prep_args` would quietly move every near-boundary answer. That
+  is the half nothing else would catch, and `tests/test_bicop.py` pins it on
+  the hook rather than through a density, which would only notice it where the
+  density varies.
+
+Neither half reaches a pair sitting inside a vine. `VinecopBase._prep_args`
+runs upstream's `trim` at the vine's own entry points, before the cascade
+builds anything, so the pair only ever sees legal interior values and a
+vine distribution reaches the same clamp through the vine it holds. Closing
+that gap would mean overriding `_prep_args` at the vine level, which is new
+behavior and not a decision this file has made.
 
 **One NumPy boundary.** Everything that hands a tensor to a third-party model
 goes through `pyvinecopulib.core.extend.to_numpy`, which detaches and transfers and

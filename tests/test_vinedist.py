@@ -263,16 +263,26 @@ def test_fit_rejects_covariate_row_mismatch(
     distribution.fit(y, controls, x=x)
 
 
-def test_fit_rejects_weights(
+def test_fit_rejects_weights_carried_in_the_controls(
   register_uniform_backends: None,
 ) -> None:
-  controls = make_controls()
-  distribution = make_distribution(controls)
-  y = make_data()
-  weights = torch.ones(y.shape[0], dtype=torch.float64)
+  """A vine that cannot weight must say so, or it returns the unweighted fit.
 
-  with pytest.raises(ValueError, match="cannot weight the copula half"):
-    distribution.fit(y, controls, weights=weights)
+  Weights stopped being a ``fit`` argument and now ride in the controls, so
+  the refusal moved onto ``RosenblattVinecop.supports_weights``. That flag
+  defaults to ``True`` on ``VinecopBase``; without the override this call
+  fitted and silently discarded the weights.
+  """
+  distribution = make_distribution(make_controls())
+
+  class WeightedControls:
+    weights = torch.ones(30, dtype=torch.float64)
+
+    def to_dict(self) -> dict[str, object]:
+      return {"backend": "uniform-native", "device": "cpu"}
+
+  with pytest.raises(TypeError, match="honors no observation weights"):
+    distribution.fit(make_data(), WeightedControls())
 
 
 def test_conditional_sample_returns_tensor(
