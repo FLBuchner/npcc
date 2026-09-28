@@ -101,6 +101,17 @@ def random_structure_for(base_seed: int, d: int, rep: int) -> pv.RVineStructure:
   return pv.RVineStructure.sample(d, seeds=[_seed(base_seed, "random", d, rep)])
 
 
+def regime_fingerprint() -> dict[str, list[float]]:
+  """Each vine regime's tau on a fixed ``x`` grid, rounded for stable hashing."""
+  x = torch.linspace(0.0, 1.0, 11, dtype=torch.float64)
+  out: dict[str, list[float]] = {}
+  for name in vine_scenarios.REGIMES:
+    tau_of_x = scenarios.TAU_SCENARIOS[name].tau_of_x
+    assert tau_of_x is not None
+    out[name] = [round(float(t), 12) for t in tau_of_x(x)]
+  return out
+
+
 def _cell_key(cell: VineCell) -> str:
   return f"d{cell.d}__n{cell.n}__rep{cell.rep}"
 
@@ -133,10 +144,11 @@ def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
   """Stable hash of everything that changes cell outputs (resume guard)."""
   payload = {
     "study": "vine",
-    # The truth's constants: a resumed cell must have been drawn from the same
-    # data-generating process, not merely the same grid.
-    "vine_tau_hi": vine_scenarios.VINE_TAU_HI,
-    "tau_lo": scenarios.TAU_LO,
+    # The data-generating process, not merely the grid: a resumed cell must
+    # have been drawn from the same truth. The regimes are fingerprinted by
+    # value, so redefining one -- not only moving its bounds -- invalidates.
+    "tau_bounds": [scenarios.TAU_LO, scenarios.TAU_HI],
+    "regimes": regime_fingerprint(),
     "mu_slope": vine_scenarios.MU_SLOPE,
     "dims": sorted(grid.dims),
     "n": sorted(grid.n),

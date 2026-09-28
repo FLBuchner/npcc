@@ -4,8 +4,8 @@ A truth is an R-vine structure drawn uniformly over all structures on ``d``
 variables, with one ``(family, tau regime)`` per edge. Each edge's Kendall's
 tau follows a bivariate-study regime ``tau(x)`` in a scalar covariate ``x``,
 rescaled into a band whose upper end decays with the tree level: tree ``t``
-(1-indexed) lives in ``[TAU_LO, VINE_TAU_HI ** t]``, so deeper trees are
-progressively weaker.
+(1-indexed) lives in ``[TAU_LO, TAU_HI ** t]``, so tree 1 reproduces the
+bivariate regime exactly and deeper trees are progressively weaker.
 
 The copula is simplified in the vine's own conditioning sets -- no pair
 depends on ``u_D`` -- so at any fixed ``x`` it is an ordinary parametric
@@ -39,13 +39,6 @@ from npcc.experiments.scenarios import TAU_HI, TAU_LO, X_MAX, X_MIN
 REGIMES: tuple[str, ...] = tuple(
   name for name, spec in scenarios.TAU_SCENARIOS.items() if spec.conditional
 )
-
-# Upper end of tree 1's tau band. Below the bivariate study's `TAU_HI` on
-# purpose: with tree-1 pairs near 0.9 (a Frank pair reaches pyvinecopulib's
-# parameter cap of 35 there), the h-functions saturate to exactly 0 or 1 in
-# float64 near the corners, and the cascade then samples test points at which
-# the true density underflows -- values that no ratio metric survives.
-VINE_TAU_HI: float = 0.70
 
 # Bound on each margin's location slope in x: at 2, a margin's mean moves by
 # up to one standard deviation either side over the unit interval.
@@ -94,17 +87,18 @@ class VineTruth:
 
 
 def tau_upper(tree: int) -> float:
-  """Upper end of tree ``tree``'s tau band, ``VINE_TAU_HI ** tree`` (1-indexed)."""
+  """Upper end of tree ``tree``'s tau band, ``TAU_HI ** tree`` (1-indexed)."""
   if tree < 1:
     raise ValueError(f"tree must be >= 1 (1-indexed); got {tree}")
-  return float(VINE_TAU_HI**tree)
+  return float(TAU_HI**tree)
 
 
 def edge_tau(regime: str, tree: int, x: torch.Tensor) -> torch.Tensor:
   """Kendall's tau of a tree-``tree`` edge following ``regime`` at ``x``.
 
   The bivariate ``tau(x)`` lives in ``[TAU_LO, TAU_HI]``; it is mapped
-  affinely onto ``[TAU_LO, VINE_TAU_HI ** tree]``, which keeps its shape.
+  affinely onto ``[TAU_LO, TAU_HI ** tree]``, which keeps its shape and is
+  the identity on tree 1.
   """
   spec = scenarios.TAU_SCENARIOS[regime]
   if spec.tau_of_x is None:

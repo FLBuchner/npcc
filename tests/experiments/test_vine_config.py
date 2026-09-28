@@ -38,4 +38,4 @@ def test_bad_grid_is_refused(overrides: dict[str, object], match: str) -> None:
   }
   kwargs.update(overrides)
   with pytest.raises(ValueError, match=match):
-    VineGridConfig(**kwargs)  # ty: ignore[invalid-argument-type] - a test feeds deliberately wrong values
+    VineGridConfig(**kwargs)  # ty: ignore[invalid-argument-type] - mistyped values exercise the guard

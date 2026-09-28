@@ -15,34 +15,29 @@ from npcc.experiments.scenarios import TAU_HI, TAU_LO
 @pytest.mark.parametrize("regime", vine_scenarios.REGIMES)
 @pytest.mark.parametrize("tree", [1, 2, 3, 4])
 def test_edge_tau_stays_in_the_decaying_band(regime: str, tree: int) -> None:
-  """A deep edge must not be as strong as tree 1; the band is VINE_TAU_HI ** t."""
+  """A deep edge must not be as strong as tree 1; the band is TAU_HI ** tree."""
   x = torch.linspace(0.0, 1.0, 201, dtype=torch.float64)
   tau = vine_scenarios.edge_tau(regime, tree, x)
   assert float(tau.min()) >= TAU_LO - 1e-12
-  assert float(tau.max()) <= vine_scenarios.VINE_TAU_HI**tree + 1e-12
+  assert float(tau.max()) <= TAU_HI**tree + 1e-12
 
 
 @pytest.mark.parametrize("regime", vine_scenarios.REGIMES)
-def test_tree_one_keeps_the_bivariate_shape(regime: str) -> None:
-  """Tree 1 must be the bivariate regime, only rescaled into its own band.
-
-  An affine map keeps the regime's shape in x -- where it peaks, where it
-  is flat -- which is what lets a vine edge be read against a bivariate cell.
-  """
+def test_tree_one_is_the_bivariate_regime(regime: str) -> None:
+  """Tree 1 must be exactly the bivariate study's copula, so the two compare."""
   x = torch.linspace(0.0, 1.0, 51, dtype=torch.float64)
   spec = scenarios.TAU_SCENARIOS[regime]
   assert spec.tau_of_x is not None
-  scale = (vine_scenarios.VINE_TAU_HI - TAU_LO) / (TAU_HI - TAU_LO)
   torch.testing.assert_close(
-    vine_scenarios.edge_tau(regime, 1, x),
-    TAU_LO + scale * (spec.tau_of_x(x) - TAU_LO),
+    vine_scenarios.edge_tau(regime, 1, x), spec.tau_of_x(x)
   )
 
 
 def test_the_truth_density_never_underflows_at_its_own_samples() -> None:
   """A test point with f ~ 0 under the truth makes L1 and ISE meaningless.
 
-  Pins the band cap on the dimension-5 truth that exposed the saturation.
+  Pins the shared ``TAU_HI`` cap against the saturation a band near 0.9
+  exposed on dimension-5 truths.
   """
   x_axis = scenarios.conditional_x_axis(5)
   for rep in range(5):

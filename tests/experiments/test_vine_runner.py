@@ -13,7 +13,7 @@ import torch
 from pyvinecopulib.core import NonSimplifiedContext, SimplifiedContext
 
 from npcc.core.vinecop import RosenblattVinecop
-from npcc.experiments import vine_runner
+from npcc.experiments import scenarios, vine_runner
 from npcc.experiments.config import EstimatorSpec, RunConfig
 from npcc.experiments.vine_config import VineGridConfig
 
@@ -145,3 +145,24 @@ def test_tll_baseline_keeps_the_oracle_structure(
   np.testing.assert_array_equal(
     np.asarray(copula.matrix), np.asarray(truth.structure.matrix)
   )
+
+
+def test_the_signature_fingerprints_the_regimes(
+  register_uniform_backends: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Redefining a regime changes every truth, so it must refuse a resume.
+
+  Moving the tau bounds is not the only way to change the truth: a regime
+  can be redefined inside unchanged bounds, as the sine regime once was.
+  """
+  run = RunConfig(out=Path("unused"), device="cpu")
+  grid = _grid(arms=["tll"])
+  before = vine_runner.grid_signature(grid, run)
+  spec = scenarios.TAU_SCENARIOS["sin"]
+  monkeypatch.setitem(
+    scenarios.TAU_SCENARIOS,
+    "sin",
+    scenarios.ScenarioSpec("sin", True, lambda x: torch.full_like(x, 0.3)),
+  )
+  assert spec is not scenarios.TAU_SCENARIOS["sin"]
+  assert vine_runner.grid_signature(grid, run) != before
