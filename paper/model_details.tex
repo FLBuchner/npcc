@@ -478,22 +478,29 @@ uniformly from Clayton, Gumbel, Frank, Gaussian, and Joe, and a Kendall's
 tau regime $\tau_e(\cdot)$, uniformly from the four conditional regimes
 of Section~\ref{sec:scenarios} (linear, constant, sinusoidal,
 quadratic). Dependence is weakened with the tree level: the regime is
-mapped affinely from $[\tau_{\min},\tau_{\max}]$ onto
-$[\tau_{\min},\tau_{\max}^{\,t}]$,
+mapped affinely from its range $[\tau_{\min},\tau_{\max}]$ onto the band
+$[\tau_{\min},\bar\tau^{\,t}]$,
 \begin{equation}
   \tau_{e}^{(t)}(x)
   =
   \tau_{\min}
   +
-  \bigl(\tau_{\max}^{\,t}-\tau_{\min}\bigr)
+  \bigl(\bar\tau^{\,t}-\tau_{\min}\bigr)
   \frac{\tau_e(x)-\tau_{\min}}{\tau_{\max}-\tau_{\min}},
   \label{eq:tau-decay}
 \end{equation}
-with $(\tau_{\min},\tau_{\max}) = (0.05,0.90)$. Tree~1 therefore
-reproduces the bivariate regimes exactly, and the upper ends of the bands
-of trees $1$ to $4$ are $0.90$, $0.81$, $0.73$, and $0.66$. The family's
-parameter at $x$ is the one whose Kendall's tau equals
+with $(\tau_{\min},\tau_{\max}) = (0.05,0.90)$ as in the bivariate study
+and $\bar\tau = 0.70$. The map preserves each regime's shape in $x$, so a
+tree-1 edge is a bivariate regime rescaled into $[0.05,0.70]$, and the upper
+ends of the bands of trees $1$ to $4$ are $0.70$, $0.49$, $0.34$, and
+$0.24$. The family's parameter at $x$ is the one whose Kendall's tau equals
 $\tau_e^{(t)}(x)$.
+The cap $\bar\tau$ sits below $\tau_{\max}$ for numerical reasons: with
+tree-1 pairs near $\tau = 0.9$, the true vine's $h$-functions saturate to
+exactly $0$ or $1$ in double precision near the corners of the unit cube,
+and the sampler then produces test points at which the exact density
+underflows (to about $10^{-56}$ in a pilot run at $d=5$), which no
+density-ratio metric survives.
 
 The pair copulas depend on the covariate $x$ but \emph{not} on the values
 of their conditioning variables $\mathbf u_{D_e}$: on its own structure,
