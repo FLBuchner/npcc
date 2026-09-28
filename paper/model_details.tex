@@ -345,11 +345,30 @@ of a univariate conditional predictive distribution can play the role of
 $\widehat f_{V \given U,X}$. To measure how much that choice matters, we
 ran the bivariate simulation study of the previous section over a reduced
 grid --- the Clayton and Gaussian families, the linear and sinusoidal
-$\tau(x)$ regimes, sample sizes $n \in \{200,500,1000\}$, and five
-repetitions, all with the logit transform. Each fitted density is scored
-against the exact copula on a fixed $20 \times 20$ grid at ten
-conditioning values, by integrated absolute error (IAE) and, for the
-density, Kullback--Leibler (KL) divergence.
+$\tau(x)$ regimes, sample sizes $n \in \{200,500,1000\}$, and twenty
+repetitions, all with the logit transform. Each estimate is scored against
+the exact copula at each of ten conditioning values $x$, on a fixed
+$20 \times 20$ grid over $(u,v) \in (0,1)^2$. For a quantity with estimate
+$\widehat q$ and truth $q$ (the density $c$, or an $h$-function), the
+integrated absolute error at $x$ is
+\[
+  \mathrm{IAE}(x)
+  =
+  \int_{(0,1)^2}
+    \bigl|\widehat q(u,v \given x) - q(u,v \given x)\bigr|
+  \dd u \dd v,
+\]
+and, for the density only, the Kullback--Leibler divergence at $x$ is
+\[
+  \mathrm{KL}(x)
+  =
+  \int_{(0,1)^2}
+    c(u,v \given x)\,\log\frac{c(u,v \given x)}{\widehat c(u,v \given x)}
+  \dd u \dd v.
+\]
+Each is approximated on the grid, computed at every fixed $x$, and then
+summarized over the ten $x$-slices and the repetitions --- nothing is
+integrated over $x$.
 
 We compare three inner models: TabPFN read through its native criterion
 head, and two gradient-boosting baselines --- NGBoost, which fits a
@@ -364,7 +383,9 @@ CPU-bound and neither exploits the accelerator. The gap is starkest in
 KL divergence, where CatBoost's quantile-table density is badly
 miscalibrated. Table~\ref{tab:accuracy-by-n} breaks the density accuracy
 down by sample size: every model improves with $n$, and the ordering is
-stable throughout.
+stable throughout. The same ranking and near-identical magnitudes hold
+within each family and each $\tau(x)$ regime, so the aggregates do not mask
+scenario-specific behavior.
 
 Figure~\ref{fig:accuracy-by-n} shows the same comparison graphically, and
 Figure~\ref{fig:density-recovery} illustrates the mechanism directly,
@@ -386,16 +407,17 @@ boundaries.
     \toprule
     Inner model & pdf IAE & pdf KL & $h_1$ IAE & $h_2$ IAE & Fit (s) \\
     \midrule
-    TabPFN (criterion) & 0.182 & 0.047 & 0.039 & 0.039 & 1.0 \\
-    NGBoost & 0.361 & 0.301 & 0.090 & 0.086 & 15.5 \\
-    CatBoost & 0.883 & 7.079 & 0.121 & 0.122 & 61.1 \\
+    TabPFN (criterion) & 0.180\,(0.001) & 0.047\,(0.001) & 0.038\,(0.000) & 0.038\,(0.000) & 0.9 \\
+    NGBoost & 0.362\,(0.002) & 0.311\,(0.008) & 0.087\,(0.001) & 0.086\,(0.001) & 11.8 \\
+    CatBoost & 0.894\,(0.004) & 7.128\,(0.039) & 0.121\,(0.001) & 0.121\,(0.001) & 57.5 \\
     \bottomrule
   \end{tabular}
   \caption{Accuracy of the NPCC by choice of inner conditional-distribution
   model, averaged over families, $\tau(x)$ regimes, sample sizes, grid points
-  and repetitions ($2\times2\times3\times5$ cells). Lower is better; KL is a
-  density divergence and applies to the pdf only. Fit time is the mean
-  per-direction training time on the study GPU box.}
+  and repetitions ($2\times2\times3\times20$ cells); each entry is the mean
+  with its standard error over the $20$ repetitions in parentheses. Lower is
+  better; KL is a density divergence and applies to the pdf only. Fit time is
+  the mean per-direction training time on the study GPU box.}
   \label{tab:inner-model-accuracy}
 \end{table}
 
@@ -407,14 +429,15 @@ boundaries.
     \cmidrule(lr){2-4}\cmidrule(lr){5-7}
     Inner model & $n{=}200$ & $500$ & $1000$ & $n{=}200$ & $500$ & $1000$ \\
     \midrule
-    TabPFN (criterion) & 0.237 & 0.178 & 0.131 & 0.073 & 0.043 & 0.024 \\
-    NGBoost & 0.495 & 0.331 & 0.257 & 0.578 & 0.202 & 0.122 \\
-    CatBoost & 1.128 & 0.831 & 0.689 & 10.902 & 6.048 & 4.289 \\
+    TabPFN (criterion) & 0.241 & 0.169 & 0.131 & 0.077 & 0.041 & 0.024 \\
+    NGBoost & 0.499 & 0.332 & 0.255 & 0.606 & 0.211 & 0.116 \\
+    CatBoost & 1.139 & 0.845 & 0.698 & 11.046 & 6.048 & 4.291 \\
     \bottomrule
   \end{tabular}
   \caption{Conditional-density accuracy versus training sample size,
   averaged over families, $\tau(x)$ regimes, grid points and repetitions.
-  All inner models improve with $n$; the ordering is stable.}
+  All inner models improve with $n$; the ordering is stable. Standard errors
+  over the $20$ repetitions are at most $0.007$ (IAE) and $0.09$ (KL).}
   \label{tab:accuracy-by-n}
 \end{table}
 
@@ -424,8 +447,9 @@ boundaries.
   \caption{Conditional-density accuracy by inner model and sample size:
   integrated absolute error (left) and Kullback--Leibler divergence
   (right) of the fitted pdf, averaged over families, $\tau(x)$ regimes,
-  grid points and repetitions. Colors follow the Okabe--Ito
-  colorblind-safe palette.}
+  grid points and repetitions; error bars are $\pm 2$ standard errors over
+  the $20$ repetitions. Colors follow the Okabe--Ito colorblind-safe
+  palette.}
   \label{fig:accuracy-by-n}
 \end{figure}
 

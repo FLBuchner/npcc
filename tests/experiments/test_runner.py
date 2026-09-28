@@ -378,12 +378,27 @@ def test_resume_skips_completed_cells(
 
 
 def test_resume_grid_signature_mismatch_raises(tmp_path: Path) -> None:
+  """A change to a signature input (here the base seed, which reseeds every
+  cell) must refuse a --resume rather than mixing incompatible checkpoints."""
+  run = RunConfig(out=tmp_path, workers=1)
+  mp = _fake_mp()
+  try:
+    run_study(_small_grid(), run)
+    with pytest.raises(ValueError, match="signature"):
+      reseeded = RunConfig(out=tmp_path, workers=1, base_seed=run.base_seed + 1)
+      run_study(_small_grid(), reseeded, resume=True)
+  finally:
+    mp.undo()
+
+
+def test_resume_survives_an_n_rep_increase(tmp_path: Path) -> None:
+  """Raising n_rep must not discard completed cells: each cell's seed hashes
+  cell.rep, not n_rep, so the existing reps stay valid and only new reps run."""
   run = RunConfig(out=tmp_path, workers=1)
   mp = _fake_mp()
   try:
     run_study(_small_grid(n_rep=1), run)
-    with pytest.raises(ValueError, match="signature"):
-      run_study(_small_grid(n_rep=3), run, resume=True)
+    run_study(_small_grid(n_rep=2), run, resume=True)
   finally:
     mp.undo()
 

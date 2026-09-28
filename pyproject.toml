@@ -273,7 +273,9 @@ dictionary = ".codespell-prose.txt,-"
 # A banned word is sometimes the right word. To use one, wrap the lines in
 # `# codespell:ignore-begin` / `-end`.
 ignore-multiline-regex = "codespell:ignore-begin *\\n.*?codespell:ignore-end *\\n"
-skip = ".claude/*,*/htmlcov/*,*/results/*,*/catboost_info/*,*/uv.lock,*/.venv/*,*.codespell-prose.txt,*test_prose.py"
+# `*.pdf` skips the committed figure assets: codespell decodes their binary
+# content into spurious "typos".
+skip = ".claude/*,*/htmlcov/*,*/results/*,*/catboost_info/*,*/uv.lock,*/.venv/*,*.codespell-prose.txt,*test_prose.py,*.pdf"
 # Domain vocabulary and author names read as misspellings. `aas` is Kjersti
 # Aas; `nd` and `iff` are mathematical.
 ignore-words-list = "aas,nd,iff,ans,te,strat"
