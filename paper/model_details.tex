@@ -619,6 +619,73 @@ sample size in a repetition therefore faces the same truth and is scored
 on the same test points, so differences across $n$ reflect estimation
 alone.
 
+\subsection{Results}
+\label{sec:vine-results}
+
+Table~\ref{tab:vine-results} reports the three headline metrics for the
+headline configuration: TabPFN (criterion head, v2.5) with the logit
+transform on the pair copulas.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{llrrrrrrrrr}
+    \toprule
+    & & \multicolumn{3}{c}{KL}
+      & \multicolumn{3}{c}{\texttt{KL\_copula}}
+      & \multicolumn{3}{c}{ISE $\times 100$} \\
+    \cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}
+    $d$ & $n$ & oracle & random & kde-tll
+      & oracle & random & kde-tll
+      & oracle & random & kde-tll \\
+    \midrule
+    3 & 500  & 0.219 & 0.220 & 0.719 & 0.179 & 0.184 & 0.447
+             & 1.21 & 1.22 & 3.33 \\
+    3 & 1000 & 0.124 & 0.133 & 0.675 & 0.097 & 0.107 & 0.426
+             & 0.71 & 0.77 & 3.35 \\
+    5 & 500  & 0.585 & 0.677 & 1.482 & 0.516 & 0.615 & 1.181
+             & 1.36 & 1.47 & 2.19 \\
+    5 & 1000 & 0.371 & 0.458 & 1.355 & 0.315 & 0.392 & 1.124
+             & 0.89 & 1.02 & 2.14 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Vine study: joint-density KL divergence, copula-scale KL
+  divergence, and joint-density integrated squared error, each averaged
+  over the five evaluation covariate values and then over five
+  repetitions. Lower is better. The standard deviation over repetitions of
+  the joint KL is at most $0.13$ for the NPCC arms and $0.32$ for
+  \texttt{kde-tll}.}
+  \label{tab:vine-results}
+\end{table}
+
+\paragraph{The covariate.} Both NPCC arms improve on the covariate-blind
+baseline by a wide margin: the joint KL of \texttt{kde-tll} is two to five
+times theirs, and it does not improve with $n$, since more
+data cannot make up for a model that ignores $x$. The gap grows toward
+the ends of the covariate range, where the tau regimes and the marginal
+locations are furthest from their averages: at $d=3$ the baseline's KL is
+about $1.3$ at $x \in \{0.01,0.99\}$ against $0.16$ at $x=0.5$, while
+the oracle's is $0.29$ and $0.08$.
+
+\paragraph{The structure.} At $d=3$ the random structure costs nothing
+measurable: its KL is within a repetition's standard deviation of the
+oracle's, and it is lower in three of five repetitions at $n=500$ and two
+of five at $n=1000$. A three-dimensional vine has only three possible
+structures, and a non-simplified NPCC can absorb a wrong one through its
+conditioning. At $d=5$ the oracle is better in all ten repetitions, by
+about $0.09$ in joint KL at both sample sizes. Doubling $n$ reduces the
+NPCC KL by a third to nearly a half at both dimensions.
+
+\paragraph{Copula and margins.} The copula-scale KL accounts for most of
+the joint KL: for the NPCC arms the difference, a proxy for the margins'
+share, is $0.03$ to $0.07$. For \texttt{kde-tll} it is $0.23$ to $0.30$,
+the price of margins that ignore the location shift in $x$.
+
+\paragraph{Cost.} On the study GPU box, one NPCC vine distribution fits in
+$8$ to $11$~s at $d=3$ and $19$ to $32$~s at $d=5$, and evaluating it at
+the $5000$ test points takes about $27$ and $90$~s. The TLL baseline takes
+a fraction of a second for both. These times were measured while the
+machine also ran another study, so they are indicative only.
+
 \section{Implementation Correspondence}
 
 \begin{table}[h]
