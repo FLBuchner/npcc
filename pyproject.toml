@@ -48,6 +48,7 @@ backends = [
 
 [project.scripts]
 npcc-simstudy = "npcc.experiments.cli:main"
+npcc-vinestudy = "npcc.experiments.vine_cli:main"
 
 [dependency-groups]
 dev = [

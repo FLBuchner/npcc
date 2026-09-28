@@ -1,0 +1,30 @@
+# Vine simulation study: `npcc-vinestudy --config configs/vine_study.toml --out results/vine`.
+#
+# Each (d, rep) draws a uniformly random R-vine truth with one (family, tau
+# regime) per edge. Tree t's tau lives in [0.05, 0.70 ** t], and every
+# edge's tau follows a bivariate-study regime in the covariate x. Margins are
+# N(a_j (x - 1/2), 1) with a random slope a_j per variable. Every arm fits the
+# joint distribution on the data scale:
+#   oracle  true structure, simplified context (pairs see x only)
+#   random  random structure, non-simplified context (pairs see [u_D, x])
+#   tll     pyvinecopulib KDE margins + TLL pairs on the true structure,
+#           ignoring x
+
+[grid]
+dims = [3, 5]
+n = [500, 1000]
+n_rep = 5
+arms = ["oracle", "random", "tll"]
+
+# Evaluation: eval_m test points drawn from the truth at each of eval_x_n
+# covariate values spread over [X_MIN, X_MAX].
+eval_x_n = 5
+eval_m = 1000
+
+projection_grid_size = 30
+
+[[grid.estimators]]
+label = "tabpfn-criterion-v2.5-logit"
+backend = "tabpfn-criterion"
+transform = "logit"
+backend_kwargs = { model_version = "v2.5" }
