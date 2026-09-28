@@ -584,107 +584,153 @@ spaced on $[0.01,0.99]$. At each $x_k$, $m=1000$ test points
 $\mathbf y^\ast_{k1},\ldots,\mathbf y^\ast_{km}$ are drawn from
 $f(\cdot \given x_k)$, together with their true probability integral
 transforms $\mathbf u^\ast_{kl}$. With $f$ the truth and $\widehat f$ an
-estimate, three divergences are estimated by Monte Carlo under the truth:
+estimate, three divergences between the two conditional densities of
+$\mathbf y$ at the same $x_k$ are estimated by Monte Carlo under the
+truth, writing $f = f(\mathbf y \given x_k)$ and
+$\widehat f = \widehat f(\mathbf y \given x_k)$:
 \begin{align}
   \mathrm{KL}(x_k)
-  &= \E_f\bigl[\log f - \log \widehat f\,\bigr]
+  &= \int_{\R^d} f \log\frac{f}{\widehat f}\dd\mathbf y
+  = \E_f\bigl[\log f - \log \widehat f\,\bigr]
   \approx \frac1m \sum_{l=1}^m
     \log\frac{f(\mathbf y^\ast_{kl} \given x_k)}
              {\widehat f(\mathbf y^\ast_{kl} \given x_k)},
   \label{eq:vine-kl}\\
   \mathrm{L1}(x_k)
-  &= \int \bigl|\widehat f - f\bigr|
+  &= \int_{\R^d} \bigl|\widehat f - f\bigr|\dd\mathbf y
   = \E_f\Bigl|\frac{\widehat f}{f} - 1\Bigr|,
   \label{eq:vine-l1}\\
   \mathrm{ISE}(x_k)
-  &= \int \bigl(\widehat f - f\bigr)^2
-  = \E_f\Bigl[\frac{(\widehat f - f)^2}{f}\Bigr].
+  &= \int_{\R^d} \bigl(\widehat f - f\bigr)^2\dd\mathbf y
+  = \E_f\Bigl[\frac{(\widehat f - f)^2}{f}\Bigr],
   \label{eq:vine-ise}
 \end{align}
+where $\E_f$ is the expectation over $\mathbf y \sim f(\cdot \given x_k)$,
+and each expectation is estimated by the same average over the $m$ test
+points. The integrals run over the response $\mathbf y$ alone: the
+covariate is held at $x_k$ throughout, and no divergence is integrated
+over $x$.
+
 To separate copula error from margin error, the same KL and L1 are also
-computed for the fitted vine copula alone, $\widehat c(\cdot \given x_k)$
-against $c(\cdot \given x_k)$ at the true transforms $\mathbf u^\ast_{kl}$
+computed for the fitted vine copula alone, comparing
+$\widehat c(\cdot \given x_k)$ with $c(\cdot \given x_k)$ as densities on
+$(0,1)^d$, estimated at the true transforms $\mathbf u^\ast_{kl}$
 (\texttt{KL\_copula}, \texttt{L1\_copula}). No copula-scale ISE is
 reported: its Monte Carlo estimate divides by $c$, and the corner peaks of
 $c$ make it too heavy-tailed to be informative.
 
-Each metric is computed per $x_k$ and then summarized over repetitions,
-both per $x_k$ and after averaging over $x_k$ within a repetition (mean,
-standard deviation, median, and 5\% and 95\% quantiles).
+Each metric is computed per $x_k$ and per repetition. The per-$x_k$ values
+are reported directly (Figure~\ref{fig:vine-kl-by-x}), and the headline
+summary is their average over $k$ within a repetition, for instance
+$\overline{\mathrm{KL}} = \frac15\sum_{k=1}^5 \mathrm{KL}(x_k)$. That is an
+average of fixed-$x$ divergences, not a divergence between densities
+integrated over $x$. Across the $R = 20$ repetitions, the tables report
+the mean and its standard error, $\mathrm{sd}/\sqrt R$.
 
 \paragraph{Common random numbers.} The true model, the random structure of
 the \texttt{random} arm, and the test points depend only on $(d,
 \text{repetition})$; only the training sample also depends on $n$. Every
 sample size in a repetition therefore faces the same truth and is scored
 on the same test points, so differences across $n$ reflect estimation
-alone.
+alone. The arms also share them, so the difference between two arms is
+reported paired within a repetition, which removes the between-truth
+variation from its standard error.
 
 \subsection{Results}
 \label{sec:vine-results}
 
-Table~\ref{tab:vine-results} reports the three headline metrics for the
-headline configuration: TabPFN (criterion head, v2.5) with the logit
-transform on the pair copulas.
+\providecommand{\se}[1]{{\scriptsize(#1)}}
+
+All results are for the headline configuration, TabPFN (criterion head,
+v2.5) with the logit transform on the pair copulas, over $R=20$
+repetitions. Table~\ref{tab:vine-results} reports the $x$-averaged
+divergences, and Figure~\ref{fig:vine-kl-by-x} shows the joint KL at each
+evaluation covariate value. A split by copula family or tau regime, as in
+the bivariate study, does not exist here: every true vine mixes families
+and regimes across its edges, drawn afresh in each repetition.
+
+\begin{figure}[!ht]
+  \centering
+  \includegraphics[width=\linewidth]{vine_kl_by_x.pdf}
+  \caption{Vine study: joint-density KL divergence at each evaluation
+  covariate value $x_k$, by dimension $d$, sample size $n$, and arm, as the
+  mean over $20$ repetitions with $\pm 2$ standard errors. Log scale.}
+  \label{fig:vine-kl-by-x}
+\end{figure}
 
 \begin{table}[h]
   \centering
-  \begin{tabular}{llrrrrrrrrr}
+  \footnotesize
+  \setlength{\tabcolsep}{2.5pt}
+  \begin{tabular}{llrrrrrrrr}
     \toprule
-    & & \multicolumn{3}{c}{KL}
-      & \multicolumn{3}{c}{\texttt{KL\_copula}}
-      & \multicolumn{3}{c}{ISE $\times 100$} \\
-    \cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}
+    & & \multicolumn{3}{c}{joint KL}
+      & \multicolumn{3}{c}{copula KL}
+      & \multicolumn{2}{c}{random $-$ oracle} \\
+    \cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-10}
     $d$ & $n$ & oracle & random & kde-tll
-      & oracle & random & kde-tll
-      & oracle & random & kde-tll \\
+      & oracle & random & kde-tll & KL & wins \\
     \midrule
-    3 & 500  & 0.219 & 0.220 & 0.719 & 0.179 & 0.184 & 0.447
-             & 1.21 & 1.22 & 3.33 \\
-    3 & 1000 & 0.124 & 0.133 & 0.675 & 0.097 & 0.107 & 0.426
-             & 0.71 & 0.77 & 3.35 \\
-    5 & 500  & 0.585 & 0.677 & 1.482 & 0.516 & 0.615 & 1.181
-             & 1.36 & 1.47 & 2.19 \\
-    5 & 1000 & 0.371 & 0.458 & 1.355 & 0.315 & 0.392 & 1.124
-             & 0.89 & 1.02 & 2.14 \\
+    3 & 500  & 0.195 \se{0.015} & 0.200 \se{0.014} & 0.636 \se{0.029}
+             & 0.157 \se{0.013} & 0.163 \se{0.013} & 0.392 \se{0.023}
+             & 0.005 \se{0.005} & 13/20 \\
+    3 & 1000 & 0.111 \se{0.006} & 0.122 \se{0.007} & 0.596 \se{0.030}
+             & 0.087 \se{0.006} & 0.099 \se{0.007} & 0.371 \se{0.025}
+             & 0.011 \se{0.004} & 13/20 \\
+    5 & 500  & 0.543 \se{0.021} & 0.622 \se{0.023} & 1.397 \se{0.052}
+             & 0.468 \se{0.023} & 0.555 \se{0.022} & 1.062 \se{0.050}
+             & 0.079 \se{0.015} & 19/20 \\
+    5 & 1000 & 0.350 \se{0.013} & 0.435 \se{0.010} & 1.289 \se{0.050}
+             & 0.301 \se{0.016} & 0.382 \se{0.012} & 1.007 \se{0.048}
+             & 0.085 \se{0.009} & 20/20 \\
     \bottomrule
   \end{tabular}
-  \caption{Vine study: joint-density KL divergence, copula-scale KL
-  divergence, and joint-density integrated squared error, each averaged
-  over the five evaluation covariate values and then over five
-  repetitions. Lower is better. The standard deviation over repetitions of
-  the joint KL is at most $0.13$ for the NPCC arms and $0.32$ for
-  \texttt{kde-tll}.}
+  \caption{Vine study: joint-density and copula-scale KL divergence, each
+  the average over the five evaluation covariate values of a fixed-$x$
+  divergence, as mean \se{standard error} over $20$ repetitions. The last
+  two columns compare the two NPCC arms within each repetition, on common
+  truths and test points: the mean paired difference in joint KL, and the
+  number of repetitions in which the oracle's KL is the lower. Lower is
+  better.}
   \label{tab:vine-results}
 \end{table}
 
 \paragraph{The covariate.} Both NPCC arms improve on the covariate-blind
-baseline by a wide margin: the joint KL of \texttt{kde-tll} is two to five
-times theirs, and it does not improve with $n$, since more
-data cannot make up for a model that ignores $x$. The gap grows toward
-the ends of the covariate range, where the tau regimes and the marginal
-locations are furthest from their averages: at $d=3$ the baseline's KL is
-about $1.3$ at $x \in \{0.01,0.99\}$ against $0.16$ at $x=0.5$, while
-the oracle's is $0.29$ and $0.08$.
+baseline by a wide margin, and in every one of the $80$ repetitions: the
+joint KL of \texttt{kde-tll} is two to five and a half times theirs, and it barely
+improves with $n$, since more data cannot make up for a model that ignores
+$x$. Figure~\ref{fig:vine-kl-by-x} locates the gap: it is widest at the
+ends of the covariate range, where the tau regimes and the marginal
+locations are furthest from their averages. At $d=3$ the baseline's KL is
+about $1.0$ to $1.1$ at $x \in \{0.01,0.99\}$ against $0.18$ at $x=0.5$,
+while the oracle's is $0.24$ and $0.08$.
 
-\paragraph{The structure.} At $d=3$ the random structure costs nothing
-measurable: its KL is within a repetition's standard deviation of the
-oracle's, and it is lower in three of five repetitions at $n=500$ and two
-of five at $n=1000$. A three-dimensional vine has only three possible
-structures, and a non-simplified NPCC can absorb a wrong one through its
-conditioning. At $d=5$ the oracle is better in all ten repetitions, by
-about $0.09$ in joint KL at both sample sizes. Doubling $n$ reduces the
-NPCC KL by a third to nearly a half at both dimensions.
+\paragraph{The structure.} At $d=3$ a random structure costs little: the
+paired difference in joint KL, as mean $\pm$ one standard error, is
+$0.005 \pm 0.005$ at $n=500$,
+indistinguishable from zero, and $0.011 \pm 0.004$ at $n=1000$, small but
+detectable. A three-dimensional vine has only three possible structures,
+and a non-simplified NPCC absorbs most of a wrong one through its
+conditioning. At $d=5$ the cost is clear: about $0.08$ in joint KL, some
+$15$ to $25\%$ of the oracle's, with the oracle ahead in $39$ of $40$
+repetitions. Doubling $n$ reduces the NPCC KL by $30$ to $43\%$ in every
+case.
 
 \paragraph{Copula and margins.} The copula-scale KL accounts for most of
-the joint KL: for the NPCC arms the difference, a proxy for the margins'
-share, is $0.03$ to $0.07$. For \texttt{kde-tll} it is $0.23$ to $0.30$,
-the price of margins that ignore the location shift in $x$.
+the joint KL. For the NPCC arms the difference, a proxy for the margins'
+share, is $0.02$ to $0.08$; for \texttt{kde-tll} it is $0.22$ to $0.34$,
+the price of margins that ignore the location shift in $x$. The
+integrated squared error of the joint density tells the same story: in
+units of $10^{-2}$, it is $1.06 \pm 0.09$, $1.10 \pm 0.10$, and
+$3.13 \pm 0.17$ for oracle, random, and \texttt{kde-tll} at $d=3$,
+$n=500$, and $0.72 \pm 0.07$, $0.82 \pm 0.08$, and $1.79 \pm 0.13$ at
+$d=5$, $n=1000$.
 
-\paragraph{Cost.} On the study GPU box, one NPCC vine distribution fits in
-$8$ to $11$~s at $d=3$ and $19$ to $32$~s at $d=5$, and evaluating it at
-the $5000$ test points takes about $27$ and $90$~s. The TLL baseline takes
-a fraction of a second for both. These times were measured while the
-machine also ran another study, so they are indicative only.
+\paragraph{Cost.} On the study GPU box, the median fit of one NPCC vine
+distribution takes $3.5$~s at $d=3$ and $10$~s at $d=5$, and evaluating it
+at the $5000$ test points takes about $25$ and $82$~s. The TLL baseline
+takes a fraction of a second for both. The machine was shared with another
+study during part of the run, so these times are indicative.
 
 \section{Implementation Correspondence}
 
