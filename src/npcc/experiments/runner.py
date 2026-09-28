@@ -152,11 +152,37 @@ def _read_cell_shard(cells_root: Path, cell: Cell, fmt: str) -> _CellRows:
   return tables[0], tables[1], tables[2], tables[3]
 
 
+def _regime_fingerprint(grid: GridConfig) -> dict[str, list[float] | float]:
+  """By-value fingerprint of each tau regime used in the grid.
+
+  Evaluating each conditional regime on a fixed ``x`` grid (or reading a fixed
+  tau) makes a change to a regime's bounds *or* shape invalidate a checkpoint;
+  the band alone would miss a same-range redefinition, such as re-centering the
+  sinusoid.
+  """
+  fp_x = torch.linspace(
+    scenarios.X_MIN, scenarios.X_MAX, 11, dtype=torch.float64
+  )
+  fp: dict[str, list[float] | float] = {}
+  for name in sorted(grid.tau_scenarios):
+    spec = scenarios.TAU_SCENARIOS[name]
+    if spec.conditional:
+      assert spec.tau_of_x is not None
+      fp[name] = [round(float(t), 8) for t in spec.tau_of_x(fp_x)]
+    else:
+      assert spec.tau is not None
+      fp[name] = round(float(spec.tau), 8)
+  return fp
+
+
 def _grid_signature(grid: GridConfig, run: RunConfig) -> str:
   """Stable hash of everything that changes cell outputs (resume guard)."""
   payload = {
     "families": sorted(grid.families),
     "tau_scenarios": sorted(grid.tau_scenarios),
+    # A by-value fingerprint of each regime, so changing a regime's bounds or
+    # shape invalidates a checkpoint; a --resume must not mix definitions.
+    "tau_regimes": _regime_fingerprint(grid),
     "n": sorted(grid.n),
     "n_rep": grid.n_rep,
     "normalize": sorted(_norm_label(x) for x in grid.normalize),

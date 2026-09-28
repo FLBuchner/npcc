@@ -51,9 +51,12 @@ X_MAX: float = 0.99
 # Unconditional evaluation: an interior uv grid (boundaries excluded).
 UV_GRID_N: int = 20
 
-# Keep tau inside a band where every family's parameter stays well-conditioned.
+# Keep tau in a band where every family's parameter stays well-conditioned. The
+# upper end is 0.70, shared with the vine study: its h-function cascade saturates
+# to 0/1 in double precision near tau = 0.9 and underflows the exact densities
+# that score higher-dimensional fits, so tree 1 reproduces these regimes exactly.
 TAU_LO: float = 0.05
-TAU_HI: float = 0.90
+TAU_HI: float = 0.70
 _EPS: float = 1e-9
 
 
@@ -77,16 +80,20 @@ TAU_SCENARIOS: dict[str, ScenarioSpec] = {
   ),
   "constant": ScenarioSpec("constant", True, lambda x: torch.full_like(x, 0.5)),
   "sin": ScenarioSpec(
-    "sin", True, lambda x: _clip_tau(0.5 + 0.4 * torch.sin(2.0 * torch.pi * x))
+    "sin",
+    True,
+    lambda x: _clip_tau(
+      (TAU_LO + TAU_HI) / 2.0
+      + (TAU_HI - TAU_LO) / 2.0 * torch.sin(2.0 * torch.pi * x)
+    ),
   ),
   "quadratic": ScenarioSpec(
     "quadratic",
     True,
     lambda x: _clip_tau(TAU_LO + (TAU_HI - TAU_LO) * (2.0 * x - 1.0) ** 2),
   ),
-  "uncond25": ScenarioSpec("uncond25", False, tau=0.25),
-  "uncond50": ScenarioSpec("uncond50", False, tau=0.50),
-  "uncond75": ScenarioSpec("uncond75", False, tau=0.75),
+  "uncond35": ScenarioSpec("uncond35", False, tau=0.35),
+  "uncond70": ScenarioSpec("uncond70", False, tau=0.70),
 }
 
 

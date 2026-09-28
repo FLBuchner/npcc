@@ -129,7 +129,7 @@ class GridConfig:
   conditional_uv_grid_n: int = 20
   conditional_x_grid_n: int = 10
   surface_tau_levels: list[float] = field(
-    default_factory=lambda: [0.1, 0.5, 0.9]
+    default_factory=lambda: [0.1, 0.4, 0.7]
   )
   surface_families: list[str] = field(default_factory=lambda: ["clayton"])
   enable_tau_diagnostics: bool = True
@@ -258,7 +258,7 @@ def load_grid(path: str | Path) -> GridConfig:
       conditional_uv_grid_n=int(grid.get("conditional_uv_grid_n", 20)),
       conditional_x_grid_n=int(grid.get("conditional_x_grid_n", 10)),
       surface_tau_levels=[
-        float(v) for v in grid.get("surface_tau_levels", [0.1, 0.5, 0.9])
+        float(v) for v in grid.get("surface_tau_levels", [0.1, 0.4, 0.7])
       ],
       surface_families=[
         str(v) for v in grid.get("surface_families", ["clayton"])
