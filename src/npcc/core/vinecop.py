@@ -1,4 +1,4 @@
-"""Fixed-structure non-simplified vines built from Rosenblatt pair copulas."""
+"""Fixed-structure vines built from Rosenblatt pair copulas."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import torch
 from pyvinecopulib import RVineStructure
 from pyvinecopulib.core import (
   BicopLike,
+  ConditioningContext,
   ControlsLike,
   NonSimplifiedContext,
   VinecopBase,
@@ -20,11 +21,12 @@ from npcc.core.bicop import RosenblattBicop, _reject_discrete
 
 
 class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
-  """Fixed-structure non-simplified vine of Rosenblatt pair copulas.
+  """Fixed-structure vine of Rosenblatt pair copulas.
 
-  Each edge contains a fitted :class:`RosenblattBicop`. Higher-tree edges
-  receive their vine conditioning-set values followed by any external
-  covariates.
+  Each edge contains a fitted :class:`RosenblattBicop`. Under the default
+  non-simplified context, higher-tree edges receive their vine conditioning-set
+  values followed by any external covariates; under a simplified one they
+  receive the external covariates only.
 
   Parameters
   ----------
@@ -42,6 +44,10 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
     copulas' common device and supplying a different one is refused. For an
     unfitted vine there are no pairs to read, so it resolves the same way the
     fit controls do -- CUDA when available, CPU otherwise.
+  context
+    What each edge conditions on. ``None`` means
+    :class:`~pyvinecopulib.core.NonSimplifiedContext`, ``[u_D, x]``;
+    :class:`~pyvinecopulib.core.SimplifiedContext` forwards ``x`` alone.
 
   Notes
   -----
@@ -65,6 +71,7 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
     *,
     var_types: list[str] | None = None,
     device: str | torch.device | None = None,
+    context: ConditioningContext[torch.Tensor] | None = None,
   ) -> None:
     # At construction rather than per edge: every pair in this vine is a
     # `RosenblattBicop`, which models no atoms, so the vine can say so once
@@ -75,7 +82,7 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
 
     self._bind_vine(
       structure,
-      NonSimplifiedContext(),
+      NonSimplifiedContext() if context is None else context,
       var_types=var_types,
     )
 
@@ -244,8 +251,8 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
     # The pairs change here without the structure changing, which is the case
     # `_bind_vine` does not cover, so the base asks an implementation to drop
     # anything it memoized from them -- and names the hook rather than the
-    # attribute behind it. Nothing here memoizes the pairs: this vine's
-    # context assembles conditioning, so no batched state is ever built. The
+    # attribute behind it. Nothing here memoizes the pairs: this vine does not
+    # override `_build_batched`, so no batched state is ever built. The
     # call is the contract.
     self._invalidate_batched()
 
