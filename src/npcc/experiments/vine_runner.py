@@ -150,9 +150,11 @@ def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
     "tau_bounds": [scenarios.TAU_LO, scenarios.TAU_HI],
     "regimes": regime_fingerprint(),
     "mu_slope": vine_scenarios.MU_SLOPE,
-    "dims": sorted(grid.dims),
-    "n": sorted(grid.n),
-    "n_rep": grid.n_rep,
+    # `dims`, `n` and `n_rep` are absent because they choose which cells run,
+    # not what any cell computes: a cell is keyed by its own (d, n, rep), and
+    # its truth and seeds derive from those alone. Leaving them out is what
+    # lets a grid grow -- more repetitions, a new dimension -- and resume on
+    # top of the cells it already has.
     "arms": sorted(grid.arms),
     "eval_x_n": grid.eval_x_n,
     "eval_m": grid.eval_m,

@@ -13,7 +13,7 @@
 [grid]
 dims = [3, 5]
 n = [500, 1000]
-n_rep = 5
+n_rep = 20
 arms = ["oracle", "random", "tll"]
 
 # Evaluation: eval_m test points drawn from the truth at each of eval_x_n

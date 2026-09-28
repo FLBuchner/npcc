@@ -15,7 +15,7 @@ from pyvinecopulib.core import NonSimplifiedContext, SimplifiedContext
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.experiments import scenarios, vine_runner
 from npcc.experiments.config import EstimatorSpec, RunConfig
-from npcc.experiments.vine_config import VineGridConfig
+from npcc.experiments.vine_config import VineCell, VineGridConfig
 
 
 def _grid(*, arms: list[str] | None = None, eval_m: int = 20) -> VineGridConfig:
@@ -166,3 +166,40 @@ def test_the_signature_fingerprints_the_regimes(
   )
   assert spec is not scenarios.TAU_SCENARIOS["sin"]
   assert vine_runner.grid_signature(grid, run) != before
+
+
+def test_more_repetitions_resume_on_the_finished_cells(
+  register_uniform_backends: None,
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """Growing a grid must not refit, or throw away, the cells it already has.
+
+  A cell's output depends on its own (d, n, rep) only, so a signature that
+  hashed ``n_rep`` would refuse the resume and force a full rerun.
+  """
+  run = RunConfig(out=tmp_path, device="cpu", fmt="csv")
+  small = _grid(arms=["tll"])
+  first, _, _ = vine_runner.run_vine_study(small, run)
+
+  fitted: list[VineCell] = []
+  original = vine_runner.summarize_one_cell
+
+  def spy(cell: VineCell, *args: Any, **kwargs: Any) -> Any:
+    fitted.append(cell)
+    return original(cell, *args, **kwargs)
+
+  monkeypatch.setattr(vine_runner, "summarize_one_cell", spy)
+  grown = VineGridConfig(
+    dims=small.dims,
+    n=small.n,
+    n_rep=2,
+    estimators=small.estimators,
+    arms=small.arms,
+    eval_x_n=small.eval_x_n,
+    eval_m=small.eval_m,
+  )
+  again, _, _ = vine_runner.run_vine_study(grown, run, resume=True)
+  assert [c.rep for c in fitted] == [1]
+  kept = again[again["rep"] == 0]
+  assert kept["KL"].tolist() == pytest.approx(first["KL"].tolist())

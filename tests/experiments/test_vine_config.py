@@ -14,6 +14,7 @@ def test_shipped_vine_config_loads() -> None:
   cfg_path = Path(__file__).resolve().parents[2] / "configs" / "vine_study.toml"
   grid = load_vine_grid(cfg_path)
   assert grid.dims == [3, 5]
+  assert grid.n_rep == 20
   assert grid.arms == ["oracle", "random", "tll"]
   assert grid.estimators
 
