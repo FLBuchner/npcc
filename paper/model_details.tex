@@ -3,7 +3,9 @@
 \usepackage[a4paper,margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage{booktabs}
+\usepackage{graphicx}
 \usepackage{hyperref}
+\graphicspath{{figures/}}
 
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\I}{\mathbb{I}}
@@ -278,6 +280,7 @@ density queries, the grid scalings are linearly interpolated back to the
 requested $(u,v)$ locations.
 
 \section{Kendall's Tau}
+\label{sec:kendall}
 
 For a fixed covariate value $x$, Kendall's tau is estimated by a
 simulation recipe based on the inverse Rosenblatt transform. Draw a
@@ -297,6 +300,7 @@ copula, and Kendall's tau is computed as the rank Kendall correlation of
 these pairs.
 
 \section{Simulation Study Scenarios}
+\label{sec:scenarios}
 
 The simulation utilities generate data from known pyvinecopulib
 bivariate copula families. The implemented one-parameter families are
@@ -327,6 +331,288 @@ where the implementation clips the tau values to
 $[\tau_{\min},\tau_{\max}]=[0.05,0.90]$. The unconditional scenarios use
 fixed Kendall's tau values $0.25$, $0.50$, and $0.75$.
 
+\section{Empirical Comparison of Inner Models}
+
+The inner conditional-distribution model in
+Equation~\eqref{eq:symmetric-density} is a plug-in choice: any estimator
+of a univariate conditional predictive distribution can play the role of
+$\widehat f_{V \given U,X}$. To measure how much that choice matters, we
+ran the bivariate simulation study of the previous section over a reduced
+grid --- the Clayton and Gaussian families, the linear and sinusoidal
+$\tau(x)$ regimes, sample sizes $n \in \{200,500,1000\}$, and five
+repetitions, all with the logit transform. Each fitted density is scored
+against the exact copula on a fixed $20 \times 20$ grid at ten
+conditioning values, by integrated absolute error (IAE) and, for the
+density, Kullback--Leibler (KL) divergence.
+
+We compare three inner models: TabPFN read through its native criterion
+head, and two gradient-boosting baselines --- NGBoost, which fits a
+parametric predictive distribution, and CatBoost, which fits a
+\texttt{MultiQuantile} table that is reconstructed into a density as in
+Equation~\eqref{eq:quantile-density}.
+
+Table~\ref{tab:inner-model-accuracy} reports the headline accuracy and
+fit cost. TabPFN is the most accurate on every metric and, on the study
+GPU box, also the cheapest to fit; the two boosting baselines are both
+CPU-bound and neither exploits the accelerator. The gap is starkest in
+KL divergence, where CatBoost's quantile-table density is badly
+miscalibrated. Table~\ref{tab:accuracy-by-n} breaks the density accuracy
+down by sample size: every model improves with $n$, and the ordering is
+stable throughout.
+
+Figure~\ref{fig:accuracy-by-n} shows the same comparison graphically, and
+Figure~\ref{fig:density-recovery} illustrates the mechanism directly,
+plotting recovered conditional-density slices at three conditioning values
+and two dependence strengths for every family and $\tau(x)$ regime. At
+moderate dependence all three inner models recover the density; at strong
+dependence ($\tau(x) \approx 0.9$) the density is sharply peaked, and
+NGBoost under-peaks it while CatBoost's quantile-table reconstruction is
+visibly noisy, whereas TabPFN tracks the peak most closely. Finally,
+Figure~\ref{fig:conditional-tau} compares the fitted conditional Kendall's
+tau $\widehat\tau(x)$ with its target across the covariate range: all three
+inner models recover both the monotone (linear) and the non-monotone
+(sinusoidal) $\tau(x)$ regimes, with the largest deviations at the domain
+boundaries.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lrrrrr}
+    \toprule
+    Inner model & pdf IAE & pdf KL & $h_1$ IAE & $h_2$ IAE & Fit (s) \\
+    \midrule
+    TabPFN (criterion) & 0.246 & 0.123 & 0.035 & 0.035 & 0.9 \\
+    NGBoost & 0.459 & 0.455 & 0.083 & 0.081 & 12.9 \\
+    CatBoost & 0.926 & 7.122 & 0.101 & 0.101 & 56.6 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Accuracy of the NPCC by choice of inner conditional-distribution
+  model, averaged over families, $\tau(x)$ regimes, sample sizes, grid points
+  and repetitions ($2\times2\times3\times5$ cells). Lower is better; KL is a
+  density divergence and applies to the pdf only. Fit time is the mean
+  per-direction training time on the study GPU box.}
+  \label{tab:inner-model-accuracy}
+\end{table}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    & \multicolumn{3}{c}{pdf IAE} & \multicolumn{3}{c}{pdf KL} \\
+    \cmidrule(lr){2-4}\cmidrule(lr){5-7}
+    Inner model & $n{=}200$ & $500$ & $1000$ & $n{=}200$ & $500$ & $1000$ \\
+    \midrule
+    TabPFN (criterion) & 0.332 & 0.231 & 0.176 & 0.191 & 0.109 & 0.070 \\
+    NGBoost & 0.597 & 0.434 & 0.344 & 0.783 & 0.352 & 0.231 \\
+    CatBoost & 1.166 & 0.876 & 0.736 & 11.161 & 5.927 & 4.277 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Conditional-density accuracy versus training sample size,
+  averaged over families, $\tau(x)$ regimes, grid points and repetitions.
+  All inner models improve with $n$; the ordering is stable.}
+  \label{tab:accuracy-by-n}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{accuracy_by_n.pdf}
+  \caption{Conditional-density accuracy by inner model and sample size:
+  integrated absolute error (left) and Kullback--Leibler divergence
+  (right) of the fitted pdf, averaged over families, $\tau(x)$ regimes,
+  grid points and repetitions. Colors follow the Okabe--Ito
+  colorblind-safe palette.}
+  \label{fig:accuracy-by-n}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{density_recovery_grid.pdf}
+  \caption{Recovery of conditional copula density slices
+  $c(u,\,v \mid x)$ by inner model, at $n=1000$ on an $80\times80$
+  evaluation grid. Rows vary the fixed conditioning value
+  ($u\approx0.25,0.5,0.75$) and the target dependence
+  ($\tau(x)\approx0.5$, then $0.9$); columns vary the family and $\tau(x)$
+  regime. Each panel plots the density against $v$, averaged over
+  repetitions, with the exact copula in black. Each panel's $y$-axis is
+  scaled to the truth and the two smooth estimators; where CatBoost's
+  quantile-table reconstruction spikes above that range it is clipped.}
+  \label{fig:density-recovery}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{conditional_tau.pdf}
+  \caption{Fitted conditional Kendall's tau $\widehat\tau(x)$ as a function
+  of the covariate $x$, by inner model, for each family and $\tau(x)$
+  regime at $n=1000$. The estimate at each $x$ is averaged over
+  repetitions; the black curve is the target $\tau(x)$. Kendall's tau is
+  computed from the fitted model by the inverse-Rosenblatt simulation
+  recipe of Section~\ref{sec:kendall}.}
+  \label{fig:conditional-tau}
+\end{figure}
+
+\section{Vine Simulation Study}
+\label{sec:vine-study}
+
+The bivariate study scores one conditional pair copula. The vine study
+scores the construction the pair copulas are built for: a
+$d$-dimensional conditional distribution
+$f(\mathbf y \given x)$, $\mathbf y \in \R^d$, estimated as a regular vine
+of NPCC pair copulas on top of NPCC margins. It asks two questions: how
+much is lost when the vine structure is unknown, and how much is lost by
+an estimator that ignores the covariate. The study runs in dimensions
+$d \in \{3,5\}$, and it is implemented as \texttt{npcc-vinestudy},
+configured by \texttt{configs/vine\_study.toml}.
+
+\subsection{Data-Generating Process}
+
+Each repetition draws one true model, specified in three parts.
+
+\paragraph{Structure.} An R-vine structure $\mathcal V$ is drawn
+uniformly over all regular vines on $d$ variables (Algorithm~13 of
+Joe, 2014, as implemented by \texttt{RVineStructure.sample}). Tree
+$t \in \{1,\ldots,d-1\}$ has $d-t$ edges, and an edge
+$e = (a_e,b_e;D_e)$ has conditioning set $D_e$ with $|D_e| = t-1$.
+
+\paragraph{Pair copulas.} Each edge independently draws a family,
+uniformly from Clayton, Gumbel, Frank, Gaussian, and Joe, and a Kendall's
+tau regime $\tau_e(\cdot)$, uniformly from the four conditional regimes
+of Section~\ref{sec:scenarios} (linear, constant, sinusoidal,
+quadratic). Dependence is weakened with the tree level: the regime is
+mapped affinely from $[\tau_{\min},\tau_{\max}]$ onto
+$[\tau_{\min},\tau_{\max}^{\,t}]$,
+\begin{equation}
+  \tau_{e}^{(t)}(x)
+  =
+  \tau_{\min}
+  +
+  \bigl(\tau_{\max}^{\,t}-\tau_{\min}\bigr)
+  \frac{\tau_e(x)-\tau_{\min}}{\tau_{\max}-\tau_{\min}},
+  \label{eq:tau-decay}
+\end{equation}
+with $(\tau_{\min},\tau_{\max}) = (0.05,0.90)$. Tree~1 therefore
+reproduces the bivariate regimes exactly, and the upper ends of the bands
+of trees $1$ to $4$ are $0.90$, $0.81$, $0.73$, and $0.66$. The family's
+parameter at $x$ is the one whose Kendall's tau equals
+$\tau_e^{(t)}(x)$.
+
+The pair copulas depend on the covariate $x$ but \emph{not} on the values
+of their conditioning variables $\mathbf u_{D_e}$: on its own structure,
+the truth satisfies the simplifying assumption given $x$. At any fixed $x$
+it is therefore an ordinary parametric vine copula $c(\mathbf u \given x)$,
+which supplies both exact sampling and exact densities.
+
+\paragraph{Margins.} The margins are Gaussian with a location that moves
+with the covariate,
+\begin{equation}
+  Y_j \given X = x \;\sim\; \mathcal N\bigl(\mu_j(x),\,1\bigr),
+  \qquad
+  \mu_j(x) = a_j\bigl(x-\tfrac12\bigr),
+  \qquad
+  a_j \sim \mathrm{Unif}[-2,2],
+  \label{eq:vine-margins}
+\end{equation}
+independently for $j=1,\ldots,d$, so each marginal mean moves by up to one
+standard deviation in either direction over the covariate range. By
+Sklar's theorem the true joint density is
+\begin{equation}
+  f(\mathbf y \given x)
+  =
+  c\bigl(\mathbf u \given x\bigr)
+  \prod_{j=1}^d \phi\bigl(y_j-\mu_j(x)\bigr),
+  \qquad
+  u_j = \Phi\bigl(y_j-\mu_j(x)\bigr),
+  \label{eq:vine-joint}
+\end{equation}
+where $\phi$ and $\Phi$ denote the standard normal density and
+distribution function. Gaussian margins have a second role: they keep $f$
+bounded where the copula density $c$ has corner singularities, which is
+what makes the integrated squared error of the joint density below finite
+and estimable.
+
+\paragraph{Training sample.} As in the bivariate study, the covariate is a
+deterministic grid, $x_i$ equally spaced on $[0.01,0.99]$ for
+$i=1,\ldots,n$. Each $\mathbf u_i$ is the inverse Rosenblatt transform of
+independent uniforms under $c(\cdot \given x_i)$, and $\mathbf y_i$ is
+obtained from Equation~\eqref{eq:vine-margins}. The sample sizes are
+$n \in \{500,1000\}$, with five repetitions per $(d,n)$.
+
+\subsection{Estimators}
+
+Every estimator targets the joint density~\eqref{eq:vine-joint} on the
+data scale. Each is fitted by the two-step method (inference functions for
+margins): first the margins, then the vine copula on the estimated
+probability integral transforms $\widehat u_{ij} = \widehat F_j(y_{ij}
+\given x_i)$.
+
+\begin{description}
+  \item[\texttt{oracle}.] NPCC margins
+    $\widehat F_j(\cdot \given x)$, fitted with the same inner model as
+    the pairs but on the data scale (no support transform), and NPCC pair
+    copulas on the \emph{true} structure $\mathcal V$. Since the truth is
+    simplified on $\mathcal V$, every pair conditions on $x$ alone:
+    $\widehat c_{a_e,b_e;D_e}(\cdot,\cdot \given x)$.
+  \item[\texttt{random}.] The same margins, and NPCC pair copulas on a
+    structure drawn uniformly at random and independently of the truth.
+    On a wrong structure the true pair copulas generally depend on the
+    conditioning values, so this vine is \emph{non-simplified}: an edge
+    in tree $t \ge 2$ conditions on $(\mathbf u_{D_e}, x)$,
+    $\widehat c_{a_e,b_e;D_e}(\cdot,\cdot \given \mathbf u_{D_e}, x)$. This
+    is the realistic setting, in which the structure is unknown and the
+    estimator has to make up for a wrong one.
+  \item[\texttt{kde-tll}.] A covariate-blind baseline: univariate kernel
+    density margins and nonparametric transformation local-likelihood
+    (TLL) pair copulas from pyvinecopulib, on the true structure
+    $\mathcal V$, with $x$ ignored throughout. Since it shares the
+    oracle's structure, its gap to \texttt{oracle} prices the covariate
+    alone.
+\end{description}
+
+The NPCC arms are run for each inner-model configuration in the grid;
+the headline configuration is TabPFN (criterion head, v2.5) with the logit
+transform on the pair copulas.
+
+\subsection{Evaluation}
+
+Scoring is done at fixed covariate values $x_k$, $k=1,\ldots,5$, equally
+spaced on $[0.01,0.99]$. At each $x_k$, $m=1000$ test points
+$\mathbf y^\ast_{k1},\ldots,\mathbf y^\ast_{km}$ are drawn from
+$f(\cdot \given x_k)$, together with their true probability integral
+transforms $\mathbf u^\ast_{kl}$. With $f$ the truth and $\widehat f$ an
+estimate, three divergences are estimated by Monte Carlo under the truth:
+\begin{align}
+  \mathrm{KL}(x_k)
+  &= \E_f\bigl[\log f - \log \widehat f\,\bigr]
+  \approx \frac1m \sum_{l=1}^m
+    \log\frac{f(\mathbf y^\ast_{kl} \given x_k)}
+             {\widehat f(\mathbf y^\ast_{kl} \given x_k)},
+  \label{eq:vine-kl}\\
+  \mathrm{L1}(x_k)
+  &= \int \bigl|\widehat f - f\bigr|
+  = \E_f\Bigl|\frac{\widehat f}{f} - 1\Bigr|,
+  \label{eq:vine-l1}\\
+  \mathrm{ISE}(x_k)
+  &= \int \bigl(\widehat f - f\bigr)^2
+  = \E_f\Bigl[\frac{(\widehat f - f)^2}{f}\Bigr].
+  \label{eq:vine-ise}
+\end{align}
+To separate copula error from margin error, the same KL and L1 are also
+computed for the fitted vine copula alone, $\widehat c(\cdot \given x_k)$
+against $c(\cdot \given x_k)$ at the true transforms $\mathbf u^\ast_{kl}$
+(\texttt{KL\_copula}, \texttt{L1\_copula}). No copula-scale ISE is
+reported: its Monte Carlo estimate divides by $c$, and the corner peaks of
+$c$ make it too heavy-tailed to be informative.
+
+Each metric is computed per $x_k$ and then summarized over repetitions,
+both per $x_k$ and after averaging over $x_k$ within a repetition (mean,
+standard deviation, median, and 5\% and 95\% quantiles).
+
+\paragraph{Common random numbers.} The true model, the random structure of
+the \texttt{random} arm, and the test points depend only on $(d,
+\text{repetition})$; only the training sample also depends on $n$. Every
+sample size in a repetition therefore faces the same truth and is scored
+on the same test points, so differences across $n$ reflect estimation
+alone.
+
 \section{Implementation Correspondence}
 
 \begin{table}[h]
@@ -336,13 +622,13 @@ fixed Kendall's tau values $0.25$, $0.50$, and $0.75$.
     Mathematical object & Implementation \\
     \midrule
     Symmetric estimator in Equation~\eqref{eq:symmetric-density}
-      & \texttt{PFNRBicop} \\
+      & \texttt{RosenblattBicop} \\
     Criterion predictive distribution
-      & \texttt{TabPFNCriterionDistribution1D} \\
+      & \texttt{TabPFNCriterionBackend} \\
     Quantile predictive distribution
-      & \texttt{TabPFNQuantileDistribution1D} \\
+      & \texttt{TabPFNQuantileBackend} \\
     Shared support transforms
-      & \texttt{TabPFNDistribution1D} \\
+      & \texttt{ConditionalMargin} \\
     Sinkhorn projection
       & \texttt{sinkhorn\_iters} \\
     \bottomrule
