@@ -80,14 +80,14 @@ and the response is $U$.
 
 The fitted Neural Pair-Copula Construction (NPCC) density is the
 symmetric average
-\[
+\begin{equation}
   \widehat c_{\npcc}(u,v \given x)
   =
   \frac{1}{2}\widehat f_{V \given U,X}(v \given u,x)
   +
   \frac{1}{2}\widehat f_{U \given V,X}(u \given v,x).
   \label{eq:symmetric-density}
-\]
+\end{equation}
 This averaging reduces sensitivity to the Rosenblatt ordering. Without
 the optional projection in Section~\ref{sec:sinkhorn}, the average is
 not guaranteed to satisfy the two uniform marginal constraints exactly.
@@ -101,12 +101,12 @@ The inner univariate model can fit a transformed response
 \]
 where $Y$ is either $U$ or $V$. Densities are converted back to the
 copula scale by the change-of-variables formula
-\[
+\begin{equation}
   f_Y(y \given w)
   =
   f_Z(T(y) \given w)\,\left|T'(y)\right|.
   \label{eq:change-of-variables}
-\]
+\end{equation}
 The implementation supports the transformations in
 Table~\ref{tab:transforms}.
 
@@ -185,7 +185,7 @@ quantile table:
 \]
 The conditional density is recovered by differentiating the quantile
 function,
-\[
+\begin{equation}
   \widehat f_Z(z \given w)
   \approx
   \left[
@@ -193,7 +193,7 @@ function,
     \widehat Q_Z(\alpha \given w)
   \right]^{-1}_{\alpha=\widehat F_Z(z \given w)}.
   \label{eq:quantile-density}
-\]
+\end{equation}
 In the implementation, the derivative is computed by finite differences,
 floored by a positive constant for numerical stability, and then linearly
 interpolated.
@@ -202,24 +202,24 @@ interpolated.
 
 The fitted model exposes two conditional distribution functions, also
 called $h$-functions:
-\[
+\begin{equation}
   \widehat h_1(u,v \given x)
   =
   \widehat F_{V \given U,X}(v \given u,x),
   \label{eq:hfunc1}
-\]
-\[
+\end{equation}
+\begin{equation}
   \widehat h_2(u,v \given x)
   =
   \widehat F_{U \given V,X}(u \given v,x).
   \label{eq:hfunc2}
-\]
+\end{equation}
 The numbering follows the pyvinecopulib convention: $h_1$ conditions on
 the first argument and $h_2$ conditions on the second argument.
 
 The joint conditional copula CDF is approximated by averaging the two
 integrated Rosenblatt directions,
-\[
+\begin{equation}
   \widehat C(u,v \given x)
   =
   \frac{1}{2}
@@ -231,7 +231,7 @@ integrated Rosenblatt directions,
     \widehat F_{U \given V,X}(u \given t,x)\dd t
   \right].
   \label{eq:joint-cdf}
-\]
+\end{equation}
 The implementation evaluates these integrals by the trapezoidal rule.
 
 \section{Optional Sinkhorn Projection}
