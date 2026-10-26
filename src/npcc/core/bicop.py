@@ -49,8 +49,9 @@ device before the Cartesian-grid fast path evaluates it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import fields
-from typing import Self
+from typing import NamedTuple, Self
 
 import torch
 from pyvinecopulib.core import BicopBase, ControlsLike
@@ -67,6 +68,56 @@ from npcc.core.controls import FitControlsRosenblattBicop
 from npcc.core.margin import ConditionalMargin
 from npcc.core.margin_quantile_table import QuantileTableConfig
 from npcc.core.registry import create_backend
+
+
+class _ProjectionGrids(NamedTuple):
+  """What a Sinkhorn projection needs that does not depend on its iterations.
+
+  Held together so the inner-backend grid evaluation behind ``density`` can be
+  paid for once and reused across iteration counts.
+  """
+
+  u_grid: torch.Tensor
+  v_grid: torch.Tensor
+  wu: torch.Tensor
+  wv: torch.Tensor
+  x_inverse: torch.Tensor
+  density: torch.Tensor
+
+
+def _reject_discrete(var_types: Sequence[str] | None) -> None:
+  """Refuse a variable-type declaration this estimator cannot honor.
+
+  A pair declared discrete reads the four-column layout and answers with
+  difference quotients of its distribution function. This estimator's ``cdf``
+  is a trapezoidal integration of an inner conditional density, so differencing
+  it would return a plausible number from a model that estimates no atom at
+  all -- which is why the refusal is here rather than left to the
+  ``_cdf_raw``-is-missing guard upstream applies to a pair with no ``cdf``.
+
+  Parameters
+  ----------
+  var_types : sequence of str, or None
+      The two variable types, ``"c"`` or ``"d"``; ``None`` means continuous.
+
+  Returns
+  -------
+  None
+
+  Raises
+  ------
+  ValueError
+      If either type is discrete.
+  """
+  if var_types is None or all(t == "c" for t in var_types):
+    return
+
+  raise ValueError(
+    "RosenblattBicop must model continuous pairs; got "
+    f"var_types={list(var_types)}. Its inner backends estimate a conditional "
+    "density rather than an atom's probability, so put a Bicop or a "
+    "TorchTllBicop on a discrete edge."
+  )
 
 
 def _bicop_controls(
@@ -230,6 +281,11 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     lets the inherited plotting implementation hand it a NumPy grid.
   """
 
+  # `BicopBase` defaults this to `False`, and `pair_eval` reads it *before*
+  # the call -- so leaving the default makes every conditional evaluation
+  # raise rather than reaching the leaves, which all declare `x`.
+  supports_covariates: bool = True
+
   def __init__(self, controls: ControlsLike | None = None) -> None:
     self._apply_controls(_bicop_controls(controls))
 
@@ -256,6 +312,7 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     self.backend_kwargs = dict(controls.backend_kwargs or {})
     self.sinkhorn_iters = controls.sinkhorn_iters
     self.projection_grid_size = controls.projection_grid_size
+    self.cdf_n_int = controls.cdf_n_int
 
     self.v_given_ux_: ConditionalMargin = self._make_distribution()
     self.u_given_vx_: ConditionalMargin = self._make_distribution()
@@ -295,20 +352,6 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     self._v_grid_borders_ = borders
     self._u_grid_borders_ = borders
 
-  def _resolve_batch_size(self, batch_size: int | None) -> int:
-    effective = self.batch_size if batch_size is None else batch_size
-    if effective <= 0:
-      raise ValueError("batch_size must be positive.")
-    return effective
-
-  def _resolve_sinkhorn_iters(self, sinkhorn_iters: int | None) -> int | None:
-    effective = (
-      self.sinkhorn_iters if sinkhorn_iters is None else sinkhorn_iters
-    )
-    if effective is not None and effective <= 0:
-      raise ValueError("sinkhorn_iters must be None or a positive integer.")
-    return effective
-
   def _features(
     self, first_coord: torch.Tensor, x: torch.Tensor
   ) -> torch.Tensor:
@@ -319,38 +362,57 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     """Empty covariate matrix used when ``x`` is omitted."""
     return torch.empty((n, 0), dtype=torch.float64, device=self._device)
 
-  def _prepare_joint_inputs(
-    self,
-    uv: torch.Tensor,
-    x: torch.Tensor | None,
-  ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Place and validate paired copula observations and their covariates.
+  def _prep_args(self, u: torch.Tensor) -> torch.Tensor:
+    """Place ``u``, check its layout, and bring it into the open unit square.
 
-    Both arguments go through :meth:`_prep`, which is what lets a NumPy
-    evaluation grid from the inherited ``plot``, and a host covariate matrix
-    handed to a CUDA estimator, meet this estimator's own tensors.
+    Overrides the inherited hook, which every evaluation member reaches
+    through ``BicopBase._atoms``, so this is the single site the domain step
+    runs at. Only the *domain* step departs: placement and layout stay
+    upstream's ``_prep`` and ``_layout``, so this estimator refuses a shape
+    with the library's own message. The clamp is the half that forces the
+    override: upstream clamps at the working
+    precision, about ``1e-10`` in ``float64``, where this estimator clamps at
+    the caller's :attr:`eps`. The inner backends are fitted on ``logit(u)``,
+    where those two are some ten units of feature space apart, so inheriting
+    the narrower clamp would quietly move every near-boundary answer.
+
+    The rejection is the other half; :mod:`npcc.core._trim` says why a value
+    at ``{0, 1}`` is a defect here rather than a rounding artifact. Note what
+    it does *not* reach: a vine clamps at its own entry points before the
+    cascade builds anything, so a pair inside one never sees a boundary value
+    whatever this does.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations.
+
+    Returns
+    -------
+    torch.Tensor, shape (n, 2)
+        Placed, checked and clamped strictly inside the unit square.
     """
-    uv_t = self._prep(uv)
+    ua = self._layout(self._prep(u))
 
-    if uv_t.ndim != 2 or uv_t.shape[1] != 2:
-      raise ValueError(f"uv must have shape (n, 2); got {tuple(uv_t.shape)}")
+    return torch.column_stack(check_uv(ua[:, 0], ua[:, 1], self.eps))
 
-    u_t, v_t = check_uv(uv_t[:, 0], uv_t[:, 1], self.eps)
-
-    return u_t, v_t, self._prepare_covariates(x, uv_t.shape[0])
-
-  def _prepare_covariates(
+  def _covariates(
     self,
     x: torch.Tensor | None,
     n: int,
   ) -> torch.Tensor:
-    """Place covariates and check they are row-aligned with ``n`` rows.
+    """Place covariates, check the row alignment, and name the empty case.
 
     Placement and layout only, never the domain step: covariates are arbitrary
     reals rather than copula arguments, so they are brought onto this
     estimator's dtype and device but never clamped. That is the split
     :func:`pyvinecopulib.core.extend.prepare_covariates` draws, and whose
     row-alignment check this delegates to.
+
+    What it adds over that function is the empty default. Upstream answers
+    ``None`` for an absent ``x``; the inner regressors take a feature matrix,
+    so an unconditional pair needs the ``(n, 0)`` block :meth:`_features`
+    concatenates against.
 
     The layout is upstream's and is not widened here: ``(n,)`` is refused,
     because it says nothing about which axis is which. Reshaping a single
@@ -445,17 +507,23 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
       Backend and numerical configuration. When omitted, the configuration
       currently stored on the object is retained.
     var_types
-      Variable types supplied by pyvinecopulib. RosenblattBicop currently models
-      continuous pairs, so no type-specific fitting is required.
+      Variable types supplied by pyvinecopulib. Refused unless both are
+      continuous -- see :func:`_reject_discrete`.
     x
       Optional external covariates with shape ``(n, p)``.
     """
-    del var_types
+    # Before the fit rather than after it: the vine's engines declare an
+    # edge's types on the pair only once it is fitted, so this is the first
+    # place an atom is visible, and refusing here costs no backend call.
+    _reject_discrete(var_types)
 
     if controls is not None:
       self._apply_controls(_bicop_controls(controls))
 
-    u_t, v_t, x_t = self._prepare_joint_inputs(u, x)
+    # `_apply_controls` may just have changed `eps`, which `_prep_args` reads.
+    uv_t = self._prep_args(u)
+    u_t, v_t = uv_t[:, 0], uv_t[:, 1]
+    x_t = self._covariates(x, uv_t.shape[0])
 
     self.v_given_ux_.fit(v_t, x=self._features(u_t, x_t))
     self.u_given_vx_.fit(u_t, x=self._features(v_t, x_t))
@@ -466,63 +534,92 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
 
     return self
 
-  def pdf(
+  def with_var_types(self, var_types: Sequence[str] = ("c", "c")) -> Self:
+    """The same pair copula under different variable types.
+
+    Overridden to refuse a discrete declaration, which is the door one arrives
+    through: the vine's fit engines call this on a pair whose edge has an
+    atom. It refuses only when a type *is* discrete -- the all-continuous call
+    is the one ``continuous_of`` makes on every pair in the inverse-Rosenblatt
+    cascade and in the density plot, and it must keep working.
+
+    Parameters
+    ----------
+    var_types : sequence of str, default=("c", "c")
+        The two types, ``"c"`` or ``"d"``.
+
+    Returns
+    -------
+    RosenblattBicop
+        This pair copula, the all-continuous declaration being a no-op.
+
+    Raises
+    ------
+    ValueError
+        If either type is discrete.
+    """
+    _reject_discrete(var_types)
+    return super().with_var_types(var_types)
+
+  def _pdf_raw(
     self,
     u: torch.Tensor,
     *,
     x: torch.Tensor | None = None,
-    batch_size: int | None = None,
-    sinkhorn_iters: int | None = None,
   ) -> torch.Tensor:
-    """Return the conditional copula density ``c(u_i, v_i | x_i)``.
+    """Conditional copula density ``c(u_i, v_i | x_i)``.
 
-    ``batch_size`` overrides the model-level default chunk size for this
-    call.  ``sinkhorn_iters`` overrides the model-level default Sinkhorn
-    iteration count; ``None`` means "use ``self.sinkhorn_iters``".  If the
-    effective value is ``None``, no projection is applied.
+    The continuous leaf ``BicopBase.pdf`` dispatches to, so ``u`` arrives
+    placed, checked and clamped and this must not prepare it again. The
+    optional Sinkhorn projection runs here rather than in a public override,
+    which is what keeps it on the paths that reach the pair through the base
+    -- ``loglik``, ``plot``, and every vine cascade.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations in the open unit square.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+
+    Returns
+    -------
+    torch.Tensor, shape (n,)
+        Density values.
     """
+    u_t, v_t = u[:, 0], u[:, 1]
+    x_t = self._covariates(x, u.shape[0])
+
     with torch.inference_mode():
-      return self._pdf_torch(
-        u,
-        x,
-        batch_size=self._resolve_batch_size(batch_size),
-        sinkhorn_iters=self._resolve_sinkhorn_iters(sinkhorn_iters),
+      c_unprojected = self._unprojected_pdf(
+        u_t, v_t, x_t, batch_size=self.batch_size
       )
 
-  def _pdf_torch(
+      if self.sinkhorn_iters is None:
+        return c_unprojected
+
+      return self._project_points_by_x(
+        c_unprojected,
+        u_t,
+        v_t,
+        x_t,
+        batch_size=self.batch_size,
+        sinkhorn_iters=self.sinkhorn_iters,
+      )
+
+  def _projection_grids(
     self,
-    uv: torch.Tensor,
-    x: torch.Tensor | None,
-    *,
-    batch_size: int,
-    sinkhorn_iters: int | None,
-  ) -> torch.Tensor:
-    u_t, v_t, x_t = self._prepare_joint_inputs(uv, x)
-    c_raw = self._raw_pdf_torch(u_t, v_t, x_t, batch_size=batch_size)
-
-    if sinkhorn_iters is None:
-      return c_raw
-
-    # Apply Sinkhorn projection if enabled
-    return self._project_points_by_x(
-      c_raw,
-      u_t,
-      v_t,
-      x_t,
-      batch_size=batch_size,
-      sinkhorn_iters=sinkhorn_iters,
-    )
-
-  def _project_points_by_x(
-    self,
-    c_raw: torch.Tensor,
-    u: torch.Tensor,
-    v: torch.Tensor,
     x: torch.Tensor,
     *,
     batch_size: int,
-    sinkhorn_iters: int,
-  ) -> torch.Tensor:
+  ) -> _ProjectionGrids:
+    """Evaluate the density grid the Sinkhorn projection normalizes.
+
+    The expensive half of a projection, and the half that does not depend on
+    the iteration count: one batched inner-backend pass per *unique* covariate
+    row. Separated so a caller evaluating the same points under several
+    iteration counts pays for it once -- see :meth:`pdf_by_projection`.
+    """
     if self._u_grid_borders_ is None or self._v_grid_borders_ is None:
       self._get_grid_borders()
 
@@ -532,39 +629,132 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     u_grid = self._u_grid_borders_
     v_grid = self._v_grid_borders_
 
-    wu = self._trapezoidal_weights(u_grid)
-    wv = self._trapezoidal_weights(v_grid)
-
     if x.shape[1] == 0:
       x_unique = x[:1]
       x_inverse = torch.zeros(x.shape[0], dtype=torch.long, device=x.device)
     else:
       x_unique, x_inverse = torch.unique(x, dim=0, return_inverse=True)
 
-    # All unique-x density grids in a few batched forward passes.
-    density_all = self._raw_pdf_grids_by_x(
-      u_grid, v_grid, x_unique, batch_size=batch_size
+    return _ProjectionGrids(
+      u_grid=u_grid,
+      v_grid=v_grid,
+      wu=self._trapezoidal_weights(u_grid),
+      wv=self._trapezoidal_weights(v_grid),
+      x_inverse=x_inverse,
+      # All unique-x density grids in a few batched forward passes.
+      density=self._unprojected_pdf_grids_by_x(
+        u_grid, v_grid, x_unique, batch_size=batch_size
+      ),
     )
 
-    out = torch.empty_like(c_raw)
-    for x_idx in range(x_unique.shape[0]):
-      mask = x_inverse == x_idx
+  @staticmethod
+  def _scale_by_projection(
+    c_unprojected: torch.Tensor,
+    u: torch.Tensor,
+    v: torch.Tensor,
+    grids: _ProjectionGrids,
+    *,
+    sinkhorn_iters: int,
+  ) -> torch.Tensor:
+    """Scale a density by the projection its grids imply.
+
+    The cheap half: Sinkhorn IPF over an already-evaluated grid, per unique
+    covariate row, with no inner-backend pass at all.
+    """
+    out = torch.empty_like(c_unprojected)
+    for x_idx in range(grids.density.shape[1]):
+      mask = grids.x_inverse == x_idx
       if not torch.any(mask):
         continue
 
-      # Sinkhorn IPF stays per-x (cheap, no forward pass).
-      r, s = _sinkhorn_project(density_all[:, x_idx, :], wu, wv, sinkhorn_iters)
+      r, s = _sinkhorn_project(
+        grids.density[:, x_idx, :], grids.wu, grids.wv, sinkhorn_iters
+      )
 
-      r_interp = interp(u[mask], u_grid, r)
-      s_interp = interp(v[mask], v_grid, s)
+      r_interp = interp(u[mask], grids.u_grid, r)
+      s_interp = interp(v[mask], grids.v_grid, s)
 
-      out[mask] = c_raw[mask] * r_interp * s_interp
+      out[mask] = c_unprojected[mask] * r_interp * s_interp
 
     return out
 
+  def pdf_by_projection(
+    self,
+    u: torch.Tensor,
+    *,
+    x: torch.Tensor | None = None,
+    sinkhorn_iters: Sequence[int | None],
+  ) -> dict[int | None, torch.Tensor]:
+    """Densities at ``u`` under several Sinkhorn iteration counts.
+
+    Answers the same question as setting :attr:`sinkhorn_iters` and calling
+    :meth:`pdf` once per value, and is the reason to prefer this: the two
+    inner-backend evaluations a projection needs -- the density at ``u``, and
+    the density on the projection grid for each unique covariate row -- do not
+    depend on the iteration count, so this pays for them once. Only the
+    Sinkhorn iteration and its interpolation repeat, and neither reaches a
+    backend. The one-value case is the same work as :meth:`pdf`.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+    sinkhorn_iters : sequence of int or None
+        The iteration counts to evaluate under. ``None`` means no projection.
+
+    Returns
+    -------
+    dict
+        One density of shape ``(n,)`` per distinct entry, keyed by it.
+    """
+    uv_t = self._prep_args(u)
+    u_t, v_t = uv_t[:, 0], uv_t[:, 1]
+    x_t = self._covariates(x, uv_t.shape[0])
+
+    wanted = list(dict.fromkeys(sinkhorn_iters))
+
+    with torch.inference_mode():
+      unprojected = self._unprojected_pdf(
+        u_t, v_t, x_t, batch_size=self.batch_size
+      )
+
+      out: dict[int | None, torch.Tensor] = {}
+      grids: _ProjectionGrids | None = None
+      for iters in wanted:
+        if iters is None:
+          out[None] = unprojected
+          continue
+        if grids is None:
+          grids = self._projection_grids(x_t, batch_size=self.batch_size)
+        out[iters] = self._scale_by_projection(
+          unprojected, u_t, v_t, grids, sinkhorn_iters=iters
+        )
+
+    return out
+
+  def _project_points_by_x(
+    self,
+    c_unprojected: torch.Tensor,
+    u: torch.Tensor,
+    v: torch.Tensor,
+    x: torch.Tensor,
+    *,
+    batch_size: int,
+    sinkhorn_iters: int,
+  ) -> torch.Tensor:
+    return self._scale_by_projection(
+      c_unprojected,
+      u,
+      v,
+      self._projection_grids(x, batch_size=batch_size),
+      sinkhorn_iters=sinkhorn_iters,
+    )
+
   def _project_grid(
     self,
-    c_grid_raw: torch.Tensor,
+    c_grid_unprojected: torch.Tensor,
     u_grid: torch.Tensor,
     v_grid: torch.Tensor,
     *,
@@ -572,10 +762,10 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
   ) -> torch.Tensor:
     wu = self._trapezoidal_weights(u_grid)
     wv = self._trapezoidal_weights(v_grid)
-    r, s = _sinkhorn_project(c_grid_raw, wu, wv, sinkhorn_iters)
-    return r[:, None] * c_grid_raw * s[None, :]
+    r, s = _sinkhorn_project(c_grid_unprojected, wu, wv, sinkhorn_iters)
+    return r[:, None] * c_grid_unprojected * s[None, :]
 
-  def _raw_pdf_torch(
+  def _unprojected_pdf(
     self,
     u: torch.Tensor,
     v: torch.Tensor,
@@ -592,7 +782,7 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
 
     return 0.5 * (c_v_given_u + c_u_given_v)
 
-  def _raw_pdf_grid_torch(
+  def _unprojected_pdf_grid(
     self,
     u_grid: torch.Tensor,
     v_grid: torch.Tensor,
@@ -602,15 +792,15 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
   ) -> torch.Tensor:
     """Symmetric raw density grid ``out[i, j] = c(u_grid[i], v_grid[j] | x_row)``.
 
-    The single-covariate special case of :py:meth:`_raw_pdf_grids_by_x`;
+    The single-covariate special case of :py:meth:`_unprojected_pdf_grids_by_x`;
     ``x_row`` is a single ``(1, p)`` row, so ``n_x = 1`` and we slice it
     back out.
     """
-    return self._raw_pdf_grids_by_x(
+    return self._unprojected_pdf_grids_by_x(
       u_grid, v_grid, x_row, batch_size=batch_size
     )[:, 0, :]
 
-  def _raw_pdf_grids_by_x(
+  def _unprojected_pdf_grids_by_x(
     self,
     u_grid: torch.Tensor,
     v_grid: torch.Tensor,
@@ -628,7 +818,7 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     product ``(grid, x_unique)``, so all ``n_x`` per-x grids share the
     forward passes instead of looping one inner call per unique x.  This
     is the main speed lever for the conditional Sinkhorn projection;
-    :py:meth:`_raw_pdf_grid_torch` is the ``n_x = 1`` special case.
+    :py:meth:`_unprojected_pdf_grid` is the ``n_x = 1`` special case.
     """
     n_u, n_v, n_x = u_grid.shape[0], v_grid.shape[0], x_unique.shape[0]
 
@@ -657,20 +847,22 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     uv: torch.Tensor,
     *,
     x: torch.Tensor | None = None,
-    batch_size: int | None = None,
-    sinkhorn_iters: int | None = None,
   ) -> torch.Tensor:
-    """Log of the optionally projected :py:meth:`pdf`, floored at tiny.
+    """Log of the optionally projected ``pdf``, floored at tiny.
 
-    ``batch_size`` and ``sinkhorn_iters`` match :py:meth:`pdf`.
+    Parameters
+    ----------
+    uv : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+
+    Returns
+    -------
+    torch.Tensor, shape (n,)
+        Log-density values.
     """
-    with torch.inference_mode():
-      density = self._pdf_torch(
-        uv,
-        x,
-        batch_size=self._resolve_batch_size(batch_size),
-        sinkhorn_iters=self._resolve_sinkhorn_iters(sinkhorn_iters),
-      )
+    density = self.pdf(uv, x=x)
     return torch.log(torch.clamp(density, min=torch.finfo(density.dtype).tiny))
 
   def pdf_grid(
@@ -679,8 +871,6 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     v_grid: torch.Tensor,
     *,
     x_row: torch.Tensor | None = None,
-    batch_size: int | None = None,
-    sinkhorn_iters: int | None = None,
   ) -> torch.Tensor:
     """Density on the Cartesian product ``out[i, j] = c(u_grid[i], v_grid[j] | x)``.
 
@@ -690,44 +880,28 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     Rosenblatt directions are evaluated on the same Cartesian product
     (transposing the reverse one) and averaged.
 
-    ``batch_size`` and ``sinkhorn_iters`` match :py:meth:`pdf`.
+    The batch size and the Sinkhorn iteration count come from the controls,
+    as they do for ``pdf``.
     """
-    with torch.inference_mode():
-      return self._pdf_grid_torch(
-        u_grid,
-        v_grid,
-        x_row,
-        batch_size=self._resolve_batch_size(batch_size),
-        sinkhorn_iters=self._resolve_sinkhorn_iters(sinkhorn_iters),
-      )
-
-  def _pdf_grid_torch(
-    self,
-    u_grid: torch.Tensor,
-    v_grid: torch.Tensor,
-    x_row: torch.Tensor | None,
-    *,
-    batch_size: int,
-    sinkhorn_iters: int | None,
-  ) -> torch.Tensor:
     u_t, v_t, x_row_t = self._prepare_grid_inputs(u_grid, v_grid, x_row)
 
-    c_raw = self._raw_pdf_grid_torch(
-      u_t,
-      v_t,
-      x_row_t,
-      batch_size=batch_size,
-    )
+    with torch.inference_mode():
+      c_unprojected = self._unprojected_pdf_grid(
+        u_t,
+        v_t,
+        x_row_t,
+        batch_size=self.batch_size,
+      )
 
-    if sinkhorn_iters is None:
-      return c_raw
+      if self.sinkhorn_iters is None:
+        return c_unprojected
 
-    return self._project_grid(
-      c_raw,
-      u_t,
-      v_t,
-      sinkhorn_iters=sinkhorn_iters,
-    )
+      return self._project_grid(
+        c_unprojected,
+        u_t,
+        v_t,
+        sinkhorn_iters=self.sinkhorn_iters,
+      )
 
   # -------------------------------------------------------------------
   # h-functions (conditional CDFs along one axis)
@@ -741,7 +915,7 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
   # Equivalently, hfunc1 = dC/du and hfunc2 = dC/dv.
   # -------------------------------------------------------------------
 
-  def hfunc1(
+  def _hfunc1_raw(
     self,
     u: torch.Tensor,
     *,
@@ -749,14 +923,26 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
   ) -> torch.Tensor:
     """``h_1(u, v | x) = P(V <= v | U = u, X = x) = F_{V | U, X}(v | u, x)``.
 
-    Always available (the V|U regressor is always fitted).  This is a
-    direct read of the inner regressor's conditional CDF — no
-    integration, one batched inner ``cdf`` call.
+    Always available (the V|U regressor is always fitted). A direct read of
+    the inner regressor's conditional CDF -- no integration, one batched inner
+    ``cdf`` call. Convention matches
+    :py:meth:`pyvinecopulib.Bicop.hfunc1`: ``hfunc1`` conditions on the first
+    argument.
 
-    Convention matches :py:meth:`pyvinecopulib.Bicop.hfunc1`: ``hfunc1``
-    conditions on the first argument.
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations, already prepared by ``_prep_args``.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+
+    Returns
+    -------
+    torch.Tensor, shape (n,)
+        Conditional distribution values.
     """
-    u_t, v_t, x_t = self._prepare_joint_inputs(u, x)
+    u_t, v_t = u[:, 0], u[:, 1]
+    x_t = self._covariates(x, u.shape[0])
 
     out = self.v_given_ux_.cdf(v_t, x=self._features(u_t, x_t))
 
@@ -766,7 +952,7 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
       1.0 - self.eps,
     )
 
-  def hfunc2(
+  def _hfunc2_raw(
     self,
     u: torch.Tensor,
     *,
@@ -774,12 +960,24 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
   ) -> torch.Tensor:
     """``h_2(u, v | x) = P(U <= u | V = v, X = x) = F_{U | V, X}(u | v, x)``.
 
-    A direct read of the U|V regressor's conditional CDF.
+    A direct read of the U|V regressor's conditional CDF. Convention matches
+    :py:meth:`pyvinecopulib.Bicop.hfunc2`: ``hfunc2`` conditions on the second
+    argument.
 
-    Convention matches :py:meth:`pyvinecopulib.Bicop.hfunc2`: ``hfunc2``
-    conditions on the second argument.
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations, already prepared by ``_prep_args``.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+
+    Returns
+    -------
+    torch.Tensor, shape (n,)
+        Conditional distribution values.
     """
-    u_t, v_t, x_t = self._prepare_joint_inputs(u, x)
+    u_t, v_t = u[:, 0], u[:, 1]
+    x_t = self._covariates(x, u.shape[0])
 
     out = self.u_given_vx_.cdf(u_t, x=self._features(v_t, x_t))
 
@@ -789,24 +987,59 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
       1.0 - self.eps,
     )
 
-  def hinv1(
+  def _hinv1_raw(
     self,
     u: torch.Tensor,
     *,
     x: torch.Tensor | None = None,
   ) -> torch.Tensor:
-    """Invert :meth:`hfunc1` using the V|U backend's native quantiles."""
-    u_t, alpha_t, x_t = self._prepare_joint_inputs(u, x)
+    """Invert ``_hfunc1_raw`` using the V|U backend's native quantiles.
+
+    Overriding this optional leaf is what keeps the inversion exact and O(1)
+    in backend calls: the inherited default bisects ``_hfunc1_raw``, which
+    would turn one inner ``icdf`` into tens of batched forward passes and
+    return an approximation of a quantile the backend already knows.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Column 0 is the conditioning value; column 1 is the level to invert.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+
+    Returns
+    -------
+    torch.Tensor, shape (n,)
+        The inverted values.
+    """
+    u_t, alpha_t = u[:, 0], u[:, 1]
+    x_t = self._covariates(x, u.shape[0])
     return self.v_given_ux_.icdf(alpha_t, x=self._features(u_t, x_t))
 
-  def hinv2(
+  def _hinv2_raw(
     self,
     u: torch.Tensor,
     *,
     x: torch.Tensor | None = None,
   ) -> torch.Tensor:
-    """Invert :meth:`hfunc2` using the U|V backend's native quantiles."""
-    alpha_t, v_t, x_t = self._prepare_joint_inputs(u, x)
+    """Invert ``_hfunc2_raw`` using the U|V backend's native quantiles.
+
+    The counterpart of :meth:`_hinv1_raw`, and overridden for the same reason.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Column 0 is the level to invert; column 1 is the conditioning value.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+
+    Returns
+    -------
+    torch.Tensor, shape (n,)
+        The inverted values.
+    """
+    alpha_t, v_t = u[:, 0], u[:, 1]
+    x_t = self._covariates(x, u.shape[0])
     return self.u_given_vx_.icdf(alpha_t, x=self._features(v_t, x_t))
 
   def _sample_uniform(
@@ -838,34 +1071,47 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
   # Joint CDF
   # -------------------------------------------------------------------
 
-  def cdf(
+  def _cdf_raw(
     self,
     u: torch.Tensor,
     *,
     x: torch.Tensor | None = None,
-    n_int: int = 12,
-    batch_size: int | None = None,
   ) -> torch.Tensor:
     """Joint CDF ``C(u_i, v_i | x_i)`` evaluated row-by-row.
 
-    Trapezoidal integration of the inner conditional CDF, averaged over
-    both Rosenblatt directions:
+    Trapezoidal integration of the inner conditional CDF, averaged over both
+    Rosenblatt directions::
 
         C(u, v | x) = 0.5 (int_0^u F_{V|U,X}(v|s,x) ds
                            + int_0^v F_{U|V,X}(u|t,x) dt)
 
-    ``n_int`` is the number of trapezoid steps along the integration
-    axis; the default 12 trades a little accuracy for speed on this
-    per-row path.  :py:meth:`cdf_grid` shares one fine grid across the
-    whole Cartesian product, so it can afford a finer default (64).
-    ``batch_size`` overrides the model-level default chunk size for the
-    inner CDF calls used during integration.
-    """
-    if n_int < 2:
-      raise ValueError("n_int must be at least 2.")
+    The number of trapezoid steps is the controls'
+    :attr:`~npcc.core.controls.FitControlsRosenblattBicop.cdf_n_int`;
+    :meth:`cdf_grid` keeps its own, finer default, sharing one grid across the
+    whole Cartesian product.
 
-    effective_batch_size = self._resolve_batch_size(batch_size)
-    u_t, v_t, x_t = self._prepare_joint_inputs(u, x)
+    Two inherited members reach this leaf *without* going through
+    ``_prep_args`` -- ``rect_prob`` and ``cond_interval_prob`` call it
+    directly, since their own arguments are rectangle corners rather than a
+    pair argument. Neither is reachable here: both exist to serve a discrete
+    edge, which this estimator refuses.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations, already prepared by ``_prep_args``.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+
+    Returns
+    -------
+    torch.Tensor, shape (n,)
+        Distribution values.
+    """
+    n_int = self.cdf_n_int
+    effective_batch_size = self.batch_size
+    u_t, v_t = u[:, 0], u[:, 1]
+    x_t = self._covariates(x, u.shape[0])
 
     cdf_v_dir = self._integrate_one_direction(
       upper=u_t,

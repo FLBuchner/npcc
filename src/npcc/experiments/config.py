@@ -125,10 +125,11 @@ class GridConfig:
   n: list[int]
   n_rep: int
   projection_grid_size: int = 30
+  batch_size: int | None = None
   conditional_uv_grid_n: int = 20
   conditional_x_grid_n: int = 10
   surface_tau_levels: list[float] = field(
-    default_factory=lambda: [0.1, 0.5, 0.9]
+    default_factory=lambda: [0.1, 0.4, 0.7]
   )
   surface_families: list[str] = field(default_factory=lambda: ["clayton"])
   enable_tau_diagnostics: bool = True
@@ -158,6 +159,9 @@ class GridConfig:
       raise ValueError("n_rep must be a positive int.")
     if self.projection_grid_size < 2:
       raise ValueError("projection_grid_size must be >= 2.")
+
+    if self.batch_size is not None and self.batch_size <= 0:
+      raise ValueError("batch_size must be a positive int or omitted.")
     if self.conditional_uv_grid_n < 2:
       raise ValueError("conditional_uv_grid_n must be >= 2.")
     if self.conditional_x_grid_n < 1:
@@ -248,10 +252,13 @@ def load_grid(path: str | Path) -> GridConfig:
       n=[int(v) for v in grid["n"]],
       n_rep=int(grid["n_rep"]),
       projection_grid_size=int(grid.get("projection_grid_size", 30)),
+      batch_size=(
+        None if grid.get("batch_size") is None else int(grid["batch_size"])
+      ),
       conditional_uv_grid_n=int(grid.get("conditional_uv_grid_n", 20)),
       conditional_x_grid_n=int(grid.get("conditional_x_grid_n", 10)),
       surface_tau_levels=[
-        float(v) for v in grid.get("surface_tau_levels", [0.1, 0.5, 0.9])
+        float(v) for v in grid.get("surface_tau_levels", [0.1, 0.4, 0.7])
       ],
       surface_families=[
         str(v) for v in grid.get("surface_families", ["clayton"])

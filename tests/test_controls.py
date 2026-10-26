@@ -32,6 +32,7 @@ def test_bicop_controls_defaults() -> None:
   assert controls.backend_kwargs == {}
   assert controls.sinkhorn_iters is None
   assert controls.projection_grid_size == 101
+  assert controls.cdf_n_int == 12
 
 
 def test_controls_satisfy_pyvinecopulib_protocol() -> None:
@@ -92,6 +93,7 @@ def test_to_dict_contains_all_settings() -> None:
     backend_kwargs={"model_version": "v2.5"},
     sinkhorn_iters=5,
     projection_grid_size=51,
+    cdf_n_int=16,
   )
 
   settings = controls.to_dict()
@@ -106,6 +108,7 @@ def test_to_dict_contains_all_settings() -> None:
     "backend_kwargs": {"model_version": "v2.5"},
     "sinkhorn_iters": 5,
     "projection_grid_size": 51,
+    "cdf_n_int": 16,
   }
 
 
@@ -135,6 +138,17 @@ def test_nonpositive_sinkhorn_iterations_are_rejected() -> None:
 def test_small_projection_grid_is_rejected() -> None:
   with pytest.raises(ValueError, match="projection_grid_size"):
     FitControlsRosenblattBicop(projection_grid_size=1)
+
+
+def test_small_cdf_integration_grid_is_rejected() -> None:
+  """A trapezoid rule needs two points; one integrates nothing at all.
+
+  The guard used to sit on a per-call ``n_int`` keyword on ``cdf``. That
+  keyword is gone -- the base's ``cdf`` is a dispatcher forwarding nothing but
+  ``x`` -- so without this the setting would reach the integration unchecked.
+  """
+  with pytest.raises(ValueError, match="cdf_n_int"):
+    FitControlsRosenblattBicop(cdf_n_int=1)
 
 
 def test_unknown_backend_is_rejected() -> None:

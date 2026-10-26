@@ -46,6 +46,10 @@ class FitControlsRosenblattBicop:
     Number of Sinkhorn projection iterations. ``None`` disables projection.
   projection_grid_size
     Number of points per axis in the projection grid.
+  cdf_n_int
+    Number of trapezoid steps the per-row ``cdf`` integrates over. The
+    Cartesian-grid ``cdf_grid`` keeps its own, finer default: it shares one
+    grid across the whole product and can afford it.
   """
 
   backend: str = "tabpfn-criterion"
@@ -59,6 +63,7 @@ class FitControlsRosenblattBicop:
   backend_kwargs: Mapping[str, object] | None = field(default_factory=dict)
   sinkhorn_iters: int | None = None
   projection_grid_size: int = 101
+  cdf_n_int: int = 12
 
   def __post_init__(self) -> None:
     """Validate and normalize the controls.
@@ -102,6 +107,9 @@ class FitControlsRosenblattBicop:
     if self.projection_grid_size < 2:
       raise ValueError("projection_grid_size must be at least 2.")
 
+    if self.cdf_n_int < 2:
+      raise ValueError("cdf_n_int must be at least 2.")
+
     self.backend_kwargs = dict(self.backend_kwargs)
     validate_backend_kwargs(self.backend, self.backend_kwargs)
 
@@ -117,6 +125,7 @@ class FitControlsRosenblattBicop:
       "backend_kwargs": dict(self.backend_kwargs or {}),
       "sinkhorn_iters": self.sinkhorn_iters,
       "projection_grid_size": self.projection_grid_size,
+      "cdf_n_int": self.cdf_n_int,
     }
 
 

@@ -255,17 +255,35 @@ def test_fit_refuses_controls_it_cannot_honor(
     )
 
 
-def test_fit_refuses_weights_it_cannot_apply(
+def test_fit_refuses_a_declared_atom(
   register_uniform_backends: None,
 ) -> None:
-  """``supports_weights = False`` means refuse, not drop."""
+  """A declaration this margin cannot honor is refused, not dropped.
+
+  ``MarginBase.fit`` gained ``var_type`` when weights moved into the
+  controls, and a vine distribution hands each margin the type it resolved
+  for that column. These backends estimate a conditional density and no
+  atom, so accepting ``"d"`` would fit a continuous model under a discrete
+  declaration and report nothing.
+  """
   margin = make_margin(register_uniform_backends)
 
-  with pytest.raises(ValueError, match="cannot apply observation weights"):
-    margin.fit(
-      torch.rand(20, dtype=torch.float64),
-      weights=torch.ones(20, dtype=torch.float64),
-    )
+  with pytest.raises(ValueError, match="must model continuous variables"):
+    margin.fit(torch.rand(20, dtype=torch.float64), var_type="d")
+
+
+def test_fit_refuses_a_declared_bound(
+  register_uniform_backends: None,
+) -> None:
+  """A declared support is refused for the same reason as a declared atom.
+
+  The backends are fitted on a transform of the whole real line and impose
+  no bound, so a bounded declaration would be silently unenforced.
+  """
+  margin = make_margin(register_uniform_backends)
+
+  with pytest.raises(ValueError, match="must model unbounded variables"):
+    margin.fit(torch.rand(20, dtype=torch.float64), support=(0.0, None))
 
 
 def test_fit_rejects_a_one_dimensional_covariate(

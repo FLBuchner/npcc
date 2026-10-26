@@ -1,7 +1,13 @@
 import pytest
 import torch
 from pyvinecopulib import RVineStructure
-from pyvinecopulib.core import BicopLike, NonSimplifiedContext, VinecopBase
+from pyvinecopulib.core import (
+  BicopLike,
+  ConditioningContext,
+  NonSimplifiedContext,
+  SimplifiedContext,
+  VinecopBase,
+)
 
 from npcc import RosenblattBicop, RosenblattVinecop
 from npcc.core.controls import (
@@ -49,8 +55,11 @@ def fit_vine(
   u: torch.Tensor,
   *,
   x: torch.Tensor | None = None,
+  context: ConditioningContext[torch.Tensor] | None = None,
 ) -> RosenblattVinecop:
-  vine = RosenblattVinecop(None, make_structure(), device="cpu")
+  vine = RosenblattVinecop(
+    None, make_structure(), device="cpu", context=context
+  )
   return vine.fit(u, make_controls(), x=x)
 
 
@@ -60,6 +69,16 @@ def fitted_vine(
 ) -> RosenblattVinecop:
   u = random_tensor((40, 3), low=0.1, high=0.9, seed=42)
   return fit_vine(u)
+
+
+def test_the_vine_declares_that_it_honors_no_weights() -> None:
+  """`VinecopBase` defaults `supports_weights` to True, and this vine is not.
+
+  Weights ride in the controls now rather than in a `fit` argument, and
+  `reject_weights` reads this flag to decide. Left at the default, a weighted
+  controls object would be accepted and the unweighted fit returned.
+  """
+  assert RosenblattVinecop.supports_weights is False
 
 
 def test_rosenblatt_vinecop_subclass_vinecop_base() -> None:
@@ -149,10 +168,27 @@ def test_fit_installs_pair_copulas(
       assert pair.u_given_vx_._fitted is True
 
 
-def test_fit_assembles_non_simplified_context(
+@pytest.mark.parametrize(
+  ("context", "expected_widths"),
+  [
+    (None, [2, 2, 3]),
+    (NonSimplifiedContext(), [2, 2, 3]),
+    (SimplifiedContext(), [2, 2, 2]),
+  ],
+  ids=["default", "non-simplified", "simplified"],
+)
+def test_fit_assembles_the_requested_context(
   register_uniform_backends: None,
   monkeypatch: pytest.MonkeyPatch,
+  context: ConditioningContext[torch.Tensor] | None,
+  expected_widths: list[int],
 ) -> None:
+  """A tree-2 pair must see ``[u_D, x]`` or ``x`` alone, as the context says.
+
+  Guards both directions: a supplied context that the constructor drops, which
+  would make a simplified vine silently condition on ``u_D``, and a default
+  that stops being non-simplified.
+  """
   u = random_tensor((40, 3), low=0.1, high=0.9, seed=42)
   x = random_tensor((40, 2), low=-1.0, high=1.0, seed=43)
   context_widths: list[int | None] = []
@@ -180,9 +216,9 @@ def test_fit_assembles_non_simplified_context(
 
   monkeypatch.setattr(RosenblattBicop, "fit", record_fit)
 
-  fit_vine(u, x=x)
+  fit_vine(u, x=x, context=context)
 
-  assert context_widths == [2, 2, 3]
+  assert context_widths == expected_widths
 
 
 def test_sample_is_seeded_and_on_configured_device(

@@ -31,6 +31,7 @@ def make_controls(
   transform: str = "logit",
   batch_size: int | None = None,
   sinkhorn_iters: int | None = None,
+  cdf_n_int: int = 12,
 ) -> FitControlsRosenblattBicop:
   return FitControlsRosenblattBicop(
     backend=f"tabpfn-{method}",
@@ -39,6 +40,7 @@ def make_controls(
     batch_size=batch_size,
     sinkhorn_iters=sinkhorn_iters,
     projection_grid_size=21,
+    cdf_n_int=cdf_n_int,
   )
 
 
@@ -49,6 +51,7 @@ def fit_bicop(
   x: torch.Tensor | None = None,
   transform: str = "logit",
   sinkhorn_iters: int | None = None,
+  cdf_n_int: int = 12,
 ) -> RosenblattBicop:
   del patch_uniform
   model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
@@ -58,6 +61,7 @@ def fit_bicop(
       method,
       transform=transform,
       sinkhorn_iters=sinkhorn_iters,
+      cdf_n_int=cdf_n_int,
     ),
     x=x,
   )
@@ -320,29 +324,19 @@ class TestRosenblattBicopEvaluation:
     patch_uniform: None,
     method: str,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_uniform, method, cdf_n_int=16)
 
-    result = model.cdf(random_uv(6, seed=7), n_int=16)
+    result = model.cdf(random_uv(6, seed=7))
 
     assert result.shape == (6,)
     assert torch.all((result >= 0.0) & (result <= 1.0))
-
-  def test_cdf_rejects_small_integration_grid(
-    self,
-    patch_uniform: None,
-    method: str,
-  ) -> None:
-    model = fit_bicop(patch_uniform, method)
-
-    with pytest.raises(ValueError, match="at least 2"):
-      model.cdf(random_uv(2), n_int=1)
 
   def test_cdf_grid_matches_pointwise_cdf(
     self,
     patch_uniform: None,
     method: str,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_uniform, method, cdf_n_int=32)
     grid = torch.linspace(0.25, 0.75, 4, dtype=torch.float64)
 
     result = model.cdf_grid(grid, grid, n_int=32)
@@ -352,7 +346,7 @@ class TestRosenblattBicopEvaluation:
         grid.repeat(len(grid)),
       )
     )
-    expected = model.cdf(uv, n_int=32).reshape(len(grid), len(grid))
+    expected = model.cdf(uv).reshape(len(grid), len(grid))
 
     torch.testing.assert_close(result, expected, atol=2e-2, rtol=2e-2)
 
@@ -477,6 +471,86 @@ class TestSinkhornProjection:
     assert result.shape == (8, 8)
     assert torch.isfinite(result).all()
     assert torch.all(result >= 0.0)
+
+
+class TestProjectionSweep:
+  """Evaluating one fit under several Sinkhorn counts."""
+
+  def test_matches_setting_the_control_and_calling_pdf(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """The fast path must answer exactly what the slow one did.
+
+    `pdf_by_projection` exists to avoid re-paying for the inner-backend
+    passes, not to approximate them. If it ever diverged from setting
+    `sinkhorn_iters` and calling `pdf`, the study's numbers would change on a
+    performance fix.
+    """
+    model = fit_bicop(patch_uniform)
+    uv = random_uv(8, seed=5)
+
+    fast = model.pdf_by_projection(uv, sinkhorn_iters=[None, 2, 5])
+
+    for iters in (None, 2, 5):
+      model.sinkhorn_iters = iters
+      torch.testing.assert_close(fast[iters], model.pdf(uv))
+
+  def test_pays_for_the_backend_passes_once(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """Sweeping by hand re-ran every inner-backend pass per iteration count.
+
+    Both evaluations a projection needs -- the density at the points and the
+    density on the projection grid per unique covariate row -- are the same
+    whatever the iteration count, so a sweep that called `pdf` per value paid
+    for them again each time. That is the whole cost; the Sinkhorn iteration
+    reaches no backend.
+    """
+    model = fit_bicop(patch_uniform)
+    uv = random_uv(8, seed=5)
+    calls = 0
+    inner = model.v_given_ux_.pdf_grid
+
+    def counted(
+      y_grid: torch.Tensor,
+      /,
+      *,
+      x: torch.Tensor,
+      batch_size: int | None = None,
+    ) -> torch.Tensor:
+      nonlocal calls
+      calls += 1
+      return inner(y_grid, x=x, batch_size=batch_size)
+
+    model.v_given_ux_.pdf_grid = counted  # ty: ignore[invalid-assignment]
+    model.pdf_by_projection(uv, sinkhorn_iters=[2, 5, 9])
+    swept = calls
+
+    calls = 0
+    for iters in (2, 5, 9):
+      model.sinkhorn_iters = iters
+      model.pdf(uv)
+
+    assert swept > 0, "nothing was counted; the probe missed its target"
+    assert swept * 3 == calls, (swept, calls)
+
+  def test_an_unprojected_entry_needs_no_grid_at_all(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """`normalize = ["none"]` is the configured default and must stay free.
+
+    The projection grid is built lazily, so asking only for `None` must not
+    evaluate one -- otherwise the fix for the sweep would have made the
+    common single-entry case slower than it was.
+    """
+    model = fit_bicop(patch_uniform)
+
+    model.pdf_by_projection(random_uv(8, seed=5), sinkhorn_iters=[None])
+
+    assert model._u_grid_borders_ is None
 
 
 class TestPlacement:
@@ -607,3 +681,173 @@ class TestControlsContract:
     )
 
     assert model.eps == pytest.approx(1e-4)
+
+
+class TestTheBicopBaseContract:
+  """The leaves this estimator writes, and the dispatchers it does not."""
+
+  def test_every_public_evaluation_member_comes_from_the_base(self) -> None:
+    """A leftover override would bypass the base's var_types dispatch.
+
+    The migration's whole premise is that this class writes continuous leaves
+    and overrides no public member. An override that survived would still
+    work today -- the pair is continuous -- and would silently skip the
+    dispatch the moment anything declared a type.
+    """
+    for name in ("pdf", "cdf", "hfunc1", "hfunc2", "hinv1", "hinv2"):
+      assert getattr(RosenblattBicop, name) is getattr(BicopBase, name), name
+
+  def test_the_pair_declares_that_it_reads_covariates(self) -> None:
+    """`pair_eval` reads `supports_covariates` before it calls the leaf.
+
+    `BicopBase` defaults the flag to `False`, and this pair is conditional by
+    construction. Without the declaration every covariate evaluation raises a
+    `TypeError` naming the class instead of reaching leaves that all declare
+    `x` -- the leaf signature was never what marked a pair conditional.
+    """
+    assert RosenblattBicop.supports_covariates is True
+
+  @pytest.mark.parametrize("var_types", [["d", "c"], ["c", "d"], ["d", "d"]])
+  def test_fit_refuses_a_discrete_declaration(
+    self,
+    patch_uniform: None,
+    var_types: list[str],
+  ) -> None:
+    """`fit` used to `del var_types`, accepting an atom it cannot model.
+
+    The vine's engines declare an edge's types on the pair only *after* it is
+    fitted, so `fit` is the first place an atom is visible. Dropping it there
+    meant a discrete edge was accepted and then answered with a difference
+    quotient of a trapezoidal integration -- a plausible number from a model
+    that estimates no atom.
+    """
+    del patch_uniform
+    model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
+
+    with pytest.raises(ValueError, match="must model continuous pairs"):
+      model.fit(random_uv(), make_controls(), var_types=var_types)
+
+  def test_with_var_types_refuses_a_discrete_declaration(self) -> None:
+    """`with_var_types` is the other door, and the one the engines use.
+
+    Refusing only in `fit` would leave a pre-fitted pair declarable through
+    `_declared`, which the fit engines call on every edge carrying an atom.
+    """
+    model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
+
+    with pytest.raises(ValueError, match="must model continuous pairs"):
+      model.with_var_types(["d", "c"])
+
+  def test_declaring_a_pair_continuous_returns_it_unchanged(self) -> None:
+    """A refusal that did not test for "d" would break the cascade.
+
+    `continuous_of` calls `with_var_types()` with the all-continuous default
+    on every pair in the inverse-Rosenblatt cascade and in the density plot,
+    so an unconditional raise would make both unreachable.
+    """
+    model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
+
+    assert model.with_var_types() is model
+    assert model.with_var_types(["c", "c"]) is model
+
+  def test_the_domain_clamp_is_eps_and_not_the_library_width(self) -> None:
+    """Inheriting `_prep_args` would clamp at ~1e-10 instead of at `eps`.
+
+    Asserted on the hook rather than through a density, because a density
+    would only notice where it varies: the inherited clamp does not raise and
+    does not change a shape, it moves the value the inner regressors see. They
+    are fitted on `logit(u)`, where the two widths are some ten units of
+    feature space apart, so the defect this prevents is silent by
+    construction.
+    """
+    model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu", eps=1e-3))
+
+    prepped = model._prep_args(
+      torch.tensor([[1e-6, 1.0 - 1e-6]], dtype=torch.float64)
+    )
+
+    torch.testing.assert_close(
+      prepped, torch.tensor([[1e-3, 1.0 - 1e-3]], dtype=torch.float64)
+    )
+
+  @pytest.mark.parametrize(
+    "name", ["pdf", "cdf", "hfunc1", "hfunc2", "hinv1", "hinv2", "loglik"]
+  )
+  def test_boundary_values_are_rejected_on_every_inherited_member(
+    self,
+    patch_uniform: None,
+    name: str,
+  ) -> None:
+    """A rejection written inside a leaf could never fire.
+
+    The base clamps in `_prep_args` before a leaf sees anything, so the check
+    has to sit in that hook. Each public member reaches it through `_atoms`,
+    and `loglik` reaches it one level further out through `pdf`.
+    """
+    model = fit_bicop(patch_uniform)
+
+    with pytest.raises(ValueError, match="strictly inside"):
+      getattr(model, name)(torch.tensor([[0.0, 0.5]], dtype=torch.float64))
+
+  def test_hinv_reads_the_backend_quantile_rather_than_bisecting(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """`_hinv1_raw` is optional upstream, and the default is far worse.
+
+    Without the override the base bisects `_hfunc1_raw` through
+    `solve_increasing`, turning one inner `icdf` into tens of batched forward
+    passes and returning an approximation of a quantile the backend knows
+    exactly.
+    """
+    model = fit_bicop(patch_uniform)
+    uv = random_uv(5, seed=11)
+
+    result = model.hinv1(uv)
+    expected = model.v_given_ux_.icdf(
+      uv[:, 1], x=model._features(uv[:, 0], model._default_x(5))
+    )
+
+    torch.testing.assert_close(result, expected)
+
+  def test_the_projection_runs_when_the_base_dispatcher_calls(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """The Sinkhorn projection used to live in a public `pdf` override.
+
+    Moved into `_pdf_raw`, it has to still run on every path that reaches the
+    pair through the base -- `loglik`, `plot`, and each vine cascade -- which
+    a projection left in an override would have skipped.
+    """
+    projected = fit_bicop(patch_uniform, sinkhorn_iters=3)
+    plain = fit_bicop(patch_uniform)
+    uv = random_uv(6, seed=3)
+
+    assert not torch.allclose(projected.pdf(uv), plain.pdf(uv))
+    assert projected.loglik(uv) != plain.loglik(uv)
+
+  def test_the_projection_count_can_be_changed_after_the_fit(
+    self,
+    patch_uniform: None,
+  ) -> None:
+    """The study sweeps the projection over one fit and must not refit.
+
+    `sinkhorn_iters` moved from a per-call keyword onto the controls, so the
+    sweep in `npcc.experiments.runner` now writes the setting between
+    evaluations. That only works because the projection grid is built lazily:
+    a model fitted without projection caches no borders, and a sweep that
+    silently returned the unprojected density would compare a setting against
+    itself.
+    """
+    model = fit_bicop(patch_uniform)
+    uv = random_uv(5, seed=13)
+
+    assert model._u_grid_borders_ is None
+    unprojected = model.pdf(uv).clone()
+
+    model.sinkhorn_iters = 3
+    projected = model.pdf(uv)
+
+    assert model._u_grid_borders_ is not None
+    assert not torch.allclose(unprojected, projected)

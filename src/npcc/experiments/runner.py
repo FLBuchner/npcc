@@ -152,15 +152,46 @@ def _read_cell_shard(cells_root: Path, cell: Cell, fmt: str) -> _CellRows:
   return tables[0], tables[1], tables[2], tables[3]
 
 
+def _regime_fingerprint(grid: GridConfig) -> dict[str, list[float] | float]:
+  """By-value fingerprint of each tau regime used in the grid.
+
+  Evaluating each conditional regime on a fixed ``x`` grid (or reading a fixed
+  tau) makes a change to a regime's bounds *or* shape invalidate a checkpoint;
+  the band alone would miss a same-range redefinition, such as re-centering the
+  sinusoid.
+  """
+  fp_x = torch.linspace(
+    scenarios.X_MIN, scenarios.X_MAX, 11, dtype=torch.float64
+  )
+  fp: dict[str, list[float] | float] = {}
+  for name in sorted(grid.tau_scenarios):
+    spec = scenarios.TAU_SCENARIOS[name]
+    if spec.conditional:
+      assert spec.tau_of_x is not None
+      fp[name] = [round(float(t), 8) for t in spec.tau_of_x(fp_x)]
+    else:
+      assert spec.tau is not None
+      fp[name] = round(float(spec.tau), 8)
+  return fp
+
+
 def _grid_signature(grid: GridConfig, run: RunConfig) -> str:
   """Stable hash of everything that changes cell outputs (resume guard)."""
   payload = {
     "families": sorted(grid.families),
     "tau_scenarios": sorted(grid.tau_scenarios),
+    # A by-value fingerprint of each regime, so changing a regime's bounds or
+    # shape invalidates a checkpoint; a --resume must not mix definitions.
+    "tau_regimes": _regime_fingerprint(grid),
     "n": sorted(grid.n),
-    "n_rep": grid.n_rep,
+    # n_rep is intentionally absent: each cell's seed hashes cell.rep, not
+    # n_rep, so raising it adds reps and resumes rather than discarding cells.
     "normalize": sorted(_norm_label(x) for x in grid.normalize),
     "projection_grid_size": grid.projection_grid_size,
+    # `batch_size` is absent because it chunks the query set and leaves each
+    # prediction's context alone, so it changes throughput and not results.
+    # Including it would make re-tuning the batch for a different GPU discard
+    # every completed cell, which is the opposite of what `--resume` is for.
     "conditional_uv_grid_n": grid.conditional_uv_grid_n,
     "conditional_x_grid_n": grid.conditional_x_grid_n,
     "surface_tau_levels": sorted(grid.surface_tau_levels),
@@ -466,6 +497,7 @@ def summarize_one_cell(
   base_seed: int,
   device: str | None,
   projection_grid_size: int,
+  batch_size: int | None,
   conditional_uv_grid_n: int,
   conditional_x_grid_n: int,
   surface_tau_levels: list[float],
@@ -528,6 +560,7 @@ def summarize_one_cell(
         transform=cast("Literal['identity', 'logit', 'probit']", est.transform),
         device=device,
         projection_grid_size=projection_grid_size,
+        batch_size=batch_size,
         backend_kwargs=dict(est.backend_kwargs),
       )
     )
@@ -572,15 +605,19 @@ def summarize_one_cell(
 
       pdf_time = 0.0
       pdf_by_norm: dict[str, torch.Tensor] = {}
+      # One call for the whole `normalize` axis: the inner-backend passes a
+      # projection needs are the same for every iteration count, so sweeping
+      # `sinkhorn_iters` and calling `pdf` per value would re-pay for them.
+      t0 = perf_counter()
+      densities = model.pdf_by_projection(
+        torch.column_stack([metric_grid.u_flat, metric_grid.v_flat]),
+        x=metric_grid.x_flat,
+        sinkhorn_iters=normalize,
+      )
+      pdf_time += perf_counter() - t0
       for norm in normalize:
         norm_label = _norm_label(norm)
-        t0 = perf_counter()
-        pdf_hat = model.pdf(
-          torch.column_stack([metric_grid.u_flat, metric_grid.v_flat]),
-          x=metric_grid.x_flat,
-          sinkhorn_iters=norm,
-        ).cpu()
-        pdf_time += perf_counter() - t0
+        pdf_hat = densities[norm].cpu()
         pdf_by_norm[norm_label] = pdf_hat
         metric_rows += _metric_rows_for_quantity(
           cell,
@@ -646,15 +683,16 @@ def summarize_one_cell(
             tau_true=surface_tau_true,
           )
 
+        t0 = perf_counter()
+        surface_densities = model.pdf_by_projection(
+          torch.column_stack([surface_grid.u_flat, surface_grid.v_flat]),
+          x=surface_grid.x_flat,
+          sinkhorn_iters=normalize,
+        )
+        surface_time += perf_counter() - t0
         for norm in normalize:
           norm_label = _norm_label(norm)
-          t0 = perf_counter()
-          pdf_hat = model.pdf(
-            torch.column_stack([surface_grid.u_flat, surface_grid.v_flat]),
-            x=surface_grid.x_flat,
-            sinkhorn_iters=norm,
-          ).cpu()
-          surface_time += perf_counter() - t0
+          pdf_hat = surface_densities[norm].cpu()
           quantity_rows += _quantity_rows(
             cell,
             est,
@@ -784,6 +822,7 @@ def run_study(
       base_seed=run.base_seed,
       device=run.device,
       projection_grid_size=grid.projection_grid_size,
+      batch_size=grid.batch_size,
       conditional_uv_grid_n=grid.conditional_uv_grid_n,
       conditional_x_grid_n=grid.conditional_x_grid_n,
       surface_tau_levels=grid.surface_tau_levels,

@@ -19,12 +19,18 @@ from npcc.experiments.runner import (
   aggregate_study_outputs,
   run_study,
 )
+from npcc.experiments.vine_config import VineGridConfig, load_vine_grid
+from npcc.experiments.vine_runner import aggregate_vine_outputs, run_vine_study
 
 __all__ = [
   "GridConfig",
   "RunConfig",
+  "VineGridConfig",
   "aggregate_results",
   "aggregate_study_outputs",
+  "aggregate_vine_outputs",
   "load_grid",
+  "load_vine_grid",
   "run_study",
+  "run_vine_study",
 ]
