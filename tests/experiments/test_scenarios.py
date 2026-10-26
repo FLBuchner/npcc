@@ -40,7 +40,7 @@ def test_eval_grid_conditional_shapes() -> None:
 
 
 def test_eval_grid_unconditional_has_no_x() -> None:
-  grid = scenarios.eval_grid("uncond50")
+  grid = scenarios.eval_grid("uncond70")
   assert grid.conditional is False
   assert grid.x_flat is None
   assert grid.shape == (grid.u_flat.shape[0],)
@@ -69,10 +69,10 @@ def test_ground_truth_conditional_matches_pyvinecopulib() -> None:
 
 
 def test_ground_truth_unconditional_matches_pyvinecopulib() -> None:
-  family, scenario = "frank", "uncond50"
+  family, scenario = "frank", "uncond70"
   truth = scenarios.ground_truth(family, scenario)
   grid = scenarios.eval_grid(scenario)
-  cop = scenarios._bicop(scenarios.FAMILIES[family], 0.5)
+  cop = scenarios._bicop(scenarios.FAMILIES[family], 0.70)
   uv = torch.column_stack([grid.u_flat, grid.v_flat])
   expected = torch.from_numpy(cop.cdf(uv.numpy()))
   torch.testing.assert_close(truth["cdf"], expected, atol=1e-10, rtol=1e-7)
@@ -96,15 +96,15 @@ def test_sample_conditional_returns_x_linspace_in_unit_square() -> None:
 
 @pytest.mark.parametrize("family", ["clayton", "gumbel", "frank", "gaussian"])
 def test_sample_unconditional_recovers_target_tau(family: str) -> None:
-  u, v, x = scenarios.sample(family, "uncond50", n=4000, seed=1)
+  u, v, x = scenarios.sample(family, "uncond70", n=4000, seed=1)
   assert x is None
   tau = float(pv.utils.wdm(u.numpy(), v.numpy(), "tau"))
-  assert abs(tau - 0.5) < 0.06
+  assert abs(tau - 0.70) < 0.06
 
 
 def test_is_conditional_flags() -> None:
   assert scenarios.is_conditional("linear") is True
-  assert scenarios.is_conditional("uncond75") is False
+  assert scenarios.is_conditional("uncond70") is False
 
 
 def test_eval_grid_for_x_shapes_and_tiling() -> None:

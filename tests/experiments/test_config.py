@@ -21,7 +21,7 @@ from npcc.experiments.config import (
 _TOML = """
 [grid]
 families = ["clayton", "gumbel"]
-tau_scenarios = ["linear", "uncond50"]
+tau_scenarios = ["linear", "uncond70"]
 normalize = ["none", 5]
 n = [50, 100]
 n_rep = 3
