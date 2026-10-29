@@ -19,6 +19,7 @@ from typing import Any, Literal, Protocol
 
 import torch
 
+from npcc.core.backends._tabpfn_icdf import rowwise_icdf
 from npcc.core.backends.tabpfn_common import (
   _DEFAULT_MODEL_VERSION,
   ModelVersion,
@@ -63,7 +64,7 @@ class TabPFNCriterionBackend(ConditionalMargin):
   device
     Device used by the TabPFN model and returned tensors.
   batch_size
-    Maximum number of conditioning rows evaluated in one prediction call.
+    Maximum number of conditioning rows predicted and inverted per batch.
   model_kwargs
     Additional arguments passed to ``TabPFNRegressor``.
   model_version
@@ -280,18 +281,9 @@ class TabPFNCriterionBackend(ConditionalMargin):
 
       logits, criterion = self._predict_full(x_t[start:end])
 
-      for offset in range(end - start):
-        probability = float(p_t[start + offset].item())
-
-        quantile = criterion.icdf(
-          logits[offset : offset + 1],
-          probability,
-        )
-
-        transformed_quantiles[start + offset] = quantile.reshape(-1)[0].to(
-          device=p_t.device,
-          dtype=p_t.dtype,
-        )
+      transformed_quantiles[start:end] = rowwise_icdf(
+        criterion, logits, p_t[start:end]
+      )
 
     return self._inverse_transform(transformed_quantiles)
 
