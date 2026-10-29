@@ -1014,7 +1014,14 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     """
     u_t, alpha_t = u[:, 0], u[:, 1]
     x_t = self._covariates(x, u.shape[0])
-    return self.v_given_ux_.icdf(alpha_t, x=self._features(u_t, x_t))
+    out = self.v_given_ux_.icdf(alpha_t, x=self._features(u_t, x_t))
+
+    if not torch.isfinite(out).all():
+      raise ValueError("Inverse h-function returned non-finite values.")
+    if torch.any((out < 0) | (out > 1)):
+      raise ValueError("Inverse h-function returned values outside [0, 1].")
+
+    return torch.clamp(out, self.eps, 1.0 - self.eps)
 
   def _hinv2_raw(
     self,
@@ -1040,7 +1047,14 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     """
     alpha_t, v_t = u[:, 0], u[:, 1]
     x_t = self._covariates(x, u.shape[0])
-    return self.u_given_vx_.icdf(alpha_t, x=self._features(v_t, x_t))
+    out = self.u_given_vx_.icdf(alpha_t, x=self._features(v_t, x_t))
+
+    if not torch.isfinite(out).all():
+      raise ValueError("Inverse h-function returned non-finite values.")
+    if torch.any((out < 0) | (out > 1)):
+      raise ValueError("Inverse h-function returned values outside [0, 1].")
+
+    return torch.clamp(out, self.eps, 1.0 - self.eps)
 
   def _sample_uniform(
     self,
