@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -128,6 +129,85 @@ def test_sharded_runs_reproduce_the_unsharded_tables(
   for name in ("metrics_by_x", "summary_over_x", "diagnostics"):
     expected = (single / f"{name}.csv").read_text()
     assert (sharded / f"{name}.csv").read_text() == expected, name
+
+
+def test_every_process_of_a_run_records_the_code_it_ran(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """Each shard and the aggregation leave their own provenance record.
+
+  The tables carry no commit, and the processes of one run may start from
+  different checkouts, so a record per process is what traces every cell back
+  to the code that computed it; one record per run would hide a shard that
+  ran something else.
+  """
+  config = tmp_path / "study.toml"
+  config.write_text(_TOML)
+  out = tmp_path / "run"
+  common = ["--config", str(config), "--out", str(out), "--format", "csv"]
+  for index in range(2):
+    assert cli.main([*common, "--resume", "--shard", f"{index}/2"]) == 0
+  assert cli.main([*common, "--resume"]) == 0
+
+  lines = (out / "provenance.jsonl").read_text().splitlines()
+  records = [json.loads(line) for line in lines]
+
+  assert [r["options"]["shard"] for r in records] == [[0, 2], [1, 2], None]
+  assert all(r["options"]["config"] == str(config) for r in records)
+  assert all(
+    {"started", "npcc_commit", "uncommitted"} <= set(r) for r in records
+  )
+
+
+def test_a_shard_that_owns_no_cells_exits_cleanly(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """More shards than cells leaves a shard with nothing to do, not a crash.
+
+  With one cell and two shards, shard 1 owns no cell. Its tables are empty,
+  and sorting an empty table on the study's axes would raise on columns it
+  does not have.
+  """
+  config = tmp_path / "study.toml"
+  config.write_text(_TOML)
+  out = tmp_path / "run"
+  common = ["--config", str(config), "--out", str(out), "--format", "csv"]
+
+  assert cli.main([*common, "--resume", "--shard", "1/2"]) == 0
+  assert not list((out / "cells").glob("*/DONE"))
+
+
+def test_code_provenance_names_this_checkout_and_only_a_checkout(
+  tmp_path: Path,
+) -> None:
+  """The commit is this work tree's ``HEAD``, and nothing outside a checkout.
+
+  A package imported from anywhere but a checkout's ``src`` -- an installed
+  wheel inside a repository's virtual environment, say -- must not inherit the
+  enclosing repository's commit, or the record would name code that never ran.
+  """
+  from npcc.experiments import _study
+
+  here = Path(_study.__file__)
+  head = subprocess.run(
+    ["git", "-C", str(here.parent), "rev-parse", "HEAD"],
+    capture_output=True,
+    text=True,
+    check=False,
+  )
+  if head.returncode != 0:
+    pytest.skip("npcc is not imported from a git checkout")
+  record = _study.code_provenance()
+  assert record["npcc_commit"] == head.stdout.strip()
+  assert isinstance(record["uncommitted"], list)
+
+  stray = tmp_path / "a" / "b" / "c" / "module.py"
+  stray.parent.mkdir(parents=True)
+  stray.write_text("")
+  assert _study.code_provenance(stray) == {
+    "npcc_commit": None,
+    "uncommitted": None,
+  }
 
 
 @pytest.mark.parametrize("bad", ["1", "a/2", "-1/2", "1/"])

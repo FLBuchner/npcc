@@ -21,9 +21,11 @@ import hashlib
 import json
 import logging
 import os
+import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import fields
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Protocol, TypeVar, cast
@@ -557,6 +559,11 @@ def start(args: argparse.Namespace) -> RunConfig:
   API, ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` is the caller's to
   export.
 
+  Every process appends one line to ``provenance.jsonl`` in the output
+  directory: when it started, its parsed options and :func:`code_provenance`.
+  The result tables carry no commit, and the shards of one run are separate
+  processes, any of which may have started from another checkout.
+
   Parameters
   ----------
   args : argparse.Namespace
@@ -581,7 +588,96 @@ def start(args: argparse.Namespace) -> RunConfig:
     shard=args.shard,
   )
   run.out.mkdir(parents=True, exist_ok=True)
+  record = {
+    "started": datetime.now().astimezone().isoformat(timespec="seconds"),
+    "options": vars(args),
+    **code_provenance(),
+  }
+  with (run.out / "provenance.jsonl").open("a") as f:
+    f.write(json.dumps(record, default=str) + "\n")
   return run
+
+
+def code_provenance(
+  module: Path = Path(__file__),
+) -> dict[str, str | list[str] | None]:
+  """The npcc checkout a process runs: its commit and its uncommitted files.
+
+  Both are ``None`` unless ``module`` sits at ``src/npcc/experiments`` of a git
+  checkout's work tree -- an installed wheel, say, records nothing rather than
+  the commit of whatever repository happens to enclose it.
+
+  Parameters
+  ----------
+  module : pathlib.Path, optional
+      A file of the package; this module by default.
+
+  Returns
+  -------
+  dict
+      ``npcc_commit``, the checkout's ``HEAD``, and ``uncommitted``, the
+      tracked files under ``src``, ``configs`` and ``r_methods`` that differ
+      from it.
+  """
+  root = module.resolve().parents[3]
+
+  def git(*command: str) -> str | None:
+    try:
+      done = subprocess.run(
+        ["git", "-C", str(root), *command],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+      )
+    except (OSError, subprocess.SubprocessError):
+      return None
+    return done.stdout.strip()
+
+  top = git("rev-parse", "--show-toplevel")
+  if top is None or Path(top).resolve() != root:
+    return {"npcc_commit": None, "uncommitted": None}
+  status = git(
+    "status",
+    "--porcelain",
+    "--untracked-files=no",
+    "--",
+    "src",
+    "configs",
+    "r_methods",
+  )
+  return {
+    "npcc_commit": git("rev-parse", "HEAD"),
+    "uncommitted": None
+    if status is None
+    else [line[3:] for line in status.splitlines()],
+  }
+
+
+def sorted_frame(
+  rows: Sequence[Mapping[str, object]], by: list[str]
+) -> pd.DataFrame:
+  """Rows as a table sorted on ``by``, or an empty table when there are none.
+
+  A shard can own no cells -- a run with more shards than cells -- and an
+  empty table has none of the columns there are to sort on.
+
+  Parameters
+  ----------
+  rows : sequence of mapping
+      One mapping per row.
+  by : list of str
+      The columns to sort on, in order.
+
+  Returns
+  -------
+  pandas.DataFrame
+      The rows, sorted and renumbered from 0.
+  """
+  frame = pd.DataFrame(rows)
+  if frame.empty:
+    return frame
+  return frame.sort_values(by).reset_index(drop=True)
 
 
 def config_echo(

@@ -31,6 +31,7 @@ from npcc.experiments._study import (
   memory_usage,
   release_gpu,
   reset_gpu_peaks,
+  sorted_frame,
   summarize,
   summary_stats,
   sweep,
@@ -811,24 +812,15 @@ def run_study(
     "n",
     "rep",
   ]
-  metric_df = (
-    pd.DataFrame(metric_rows)
-    .sort_values([*sort_axes, "normalize", "quantity", "x"])
-    .reset_index(drop=True)
+  metric_df = sorted_frame(
+    metric_rows, [*sort_axes, "normalize", "quantity", "x"]
   )
-  quantity_df = pd.DataFrame(quantity_rows)
-  if not quantity_df.empty:
-    quantity_df = quantity_df.sort_values(
-      [*sort_axes, "normalize", "quantity", "target_tau", "x", "u", "v"]
-    ).reset_index(drop=True)
-  diagnostic_df = (
-    pd.DataFrame(diagnostic_rows)
-    .sort_values([*sort_axes, "normalize", "x"])
-    .reset_index(drop=True)
+  quantity_df = sorted_frame(
+    quantity_rows,
+    [*sort_axes, "normalize", "quantity", "target_tau", "x", "u", "v"],
   )
-  runtime_df = (
-    pd.DataFrame(runtime_rows).sort_values(sort_axes).reset_index(drop=True)
-  )
+  diagnostic_df = sorted_frame(diagnostic_rows, [*sort_axes, "normalize", "x"])
+  runtime_df = sorted_frame(runtime_rows, sort_axes)
   return metric_df, quantity_df, diagnostic_df, runtime_df, wall
 
 

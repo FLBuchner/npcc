@@ -55,6 +55,7 @@ from npcc.experiments._study import (
   memory_usage,
   release_gpu,
   reset_gpu_peaks,
+  sorted_frame,
   summarize,
   sweep,
 )
@@ -364,14 +365,8 @@ def run_vine_study(
   )
 
   sort_axes = ["d", "n", "arm", "label", "rep"]
-  metric_df = (
-    pd.DataFrame(metric_rows)
-    .sort_values([*sort_axes, "x"])
-    .reset_index(drop=True)
-  )
-  runtime_df = (
-    pd.DataFrame(runtime_rows).sort_values(sort_axes).reset_index(drop=True)
-  )
+  metric_df = sorted_frame(metric_rows, [*sort_axes, "x"])
+  runtime_df = sorted_frame(runtime_rows, sort_axes)
   return metric_df, runtime_df, wall
 
 
