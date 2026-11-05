@@ -29,6 +29,7 @@ _BUILTINS = (
   "tabicl-finetune",
   "tabpfn-finetune",
   "tabpfn-quantiles",
+  "xgboost",
 )
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -74,3 +75,24 @@ def test_cli_parser_requires_config_and_out() -> None:
   assert Path(ns.config).name == "g.toml"
   resumed = parser.parse_args(["--config", "g.toml", "--out", "o", "--resume"])
   assert resumed.resume is True
+
+
+def test_cli_leaves_the_cuda_allocator_at_its_default(
+  monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+  """Starting a study must not switch torch to expandable segments.
+
+  They are built on CUDA's virtual-memory API, which a virtualized GPU may
+  not offer, and there every CUDA allocation fails with "operation not
+  supported" -- so a run on such a box died at its first fit.
+  """
+  from npcc.experiments import _study
+
+  monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
+  args = _study.study_parser("probe", "A probe.").parse_args(
+    ["--config", str(tmp_path / "unused.toml"), "--out", str(tmp_path / "o")]
+  )
+
+  _study.start(args)
+
+  assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ

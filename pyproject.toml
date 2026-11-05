@@ -10,7 +10,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "pyvinecopulib>=1.0.0",
-  "tabpfn>=8.0",
+  # 9.0 is the first release with the TabPFN-3.5 checkpoints.
+  "tabpfn>=9.0",
   "torch>=2.5",
 ]
 
@@ -28,6 +29,14 @@ experiments = ["pandas>=2.0", "matplotlib>=3.7", "pyarrow>=15.0,<24.0"]
 ngboost = ["ngboost>=0.5.0"]
 tabicl = ["tabicl>=2.0"]
 lightgbm = ["lightgbm>=4.0"]
+# The CPU-only wheel, because the adapter fits on the host: XGBoost's CUDA path
+# fails on virtualized GPUs, and the GPU wheel's NCCL is the same library file
+# as the one torch ships, so installing one CUDA flavor over the other breaks
+# torch. macOS has no `xgboost-cpu` wheel, and its `xgboost` is CPU-only.
+xgboost = [
+  "xgboost-cpu>=2.1.1; sys_platform != 'darwin'",
+  "xgboost>=2.1.1; sys_platform == 'darwin'",
+]
 pytabkit = ["pytabkit>=1.5"]
 # Synthefy Nori. Pinned to the tvatter fork (see [tool.uv.sources]) until the
 # torch-uncapping fix lands on upstream PyPI; then this becomes a plain pin.
@@ -38,6 +47,8 @@ backends = [
   "ngboost>=0.5.0",
   "tabicl>=2.0",
   "lightgbm>=4.0",
+  "xgboost-cpu>=2.1.1; sys_platform != 'darwin'",
+  "xgboost>=2.1.1; sys_platform == 'darwin'",
   "pytabkit>=1.5",
   "synthefy-nori>=0.12",
 ]
@@ -207,6 +218,7 @@ allowed-unresolved-imports = [
   "pytabkit",
   "synthefy_nori",
   "tabicl",
+  "xgboost",
 ]
 # The same optional backends, for the case where they *are* installed: none
 # ships type information, so their members resolve to nothing and every

@@ -43,6 +43,7 @@ _OPTIONAL = (
   "pytabkit",
   "synthefy_nori",
   "tabicl",
+  "xgboost",
 )
 
 

@@ -521,10 +521,12 @@ def study_parser(prog: str, description: str) -> argparse.ArgumentParser:
 def start(args: argparse.Namespace) -> RunConfig:
   """Configure the process for a parsed study command line.
 
-  Sets the CUDA allocator to expandable segments, which reduces fragmentation
-  across many per-estimator fits. The allocator reads it on its first
-  allocation, so this is early enough, and a value already exported in the
-  shell wins.
+  The CUDA allocator is left at torch's default. Expandable segments would
+  reduce fragmentation across many per-estimator fits, but they are built on
+  CUDA's virtual-memory API, which a virtualized GPU may not offer -- and there
+  every allocation fails. A study peaks at a few GB, so on a GPU that has the
+  API, ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`` is the caller's to
+  export.
 
   Parameters
   ----------
@@ -536,7 +538,6 @@ def start(args: argparse.Namespace) -> RunConfig:
   RunConfig
       The run-level options, with the output directory created.
   """
-  os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
   logging.basicConfig(
     level=args.log_level,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",

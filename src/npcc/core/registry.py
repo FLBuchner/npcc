@@ -293,6 +293,23 @@ _register_builtin(
   },
 )
 _register_builtin(
+  "xgboost",
+  "npcc.core.backends.xgboost_quantile:XGBoostQuantileBackend",
+  extra="xgboost",
+  kwarg_types={
+    "n_estimators": int,
+    "learning_rate": float,
+    "max_depth": int,
+    "min_child_weight": float,
+    "subsample": float,
+    "colsample_bytree": float,
+    "reg_alpha": float,
+    "reg_lambda": float,
+    "n_jobs": int,
+    "random_state": int,
+  },
+)
+_register_builtin(
   "pytabkit-realmlp",
   "npcc.core.backends.pytabkit:PyTabKitRealMLPBackend",
   extra="pytabkit",

@@ -106,6 +106,59 @@ def test_lightgbm_refuses_a_parameter_it_controls() -> None:
     LightGBMQuantileBackend(alpha=0.5)
 
 
+def test_xgboost_backend_smoke() -> None:
+  pytest.importorskip("xgboost")
+  u, v = _gaussian_copula_sample(200, rho=0.6, seed=0)
+  m = RosenblattBicop(
+    FitControlsRosenblattBicop(
+      backend="xgboost",
+      device="cpu",
+      backend_kwargs={"n_estimators": 20, "random_state": 0},
+    )
+  ).fit(torch.column_stack([u, v]))
+  _check_fitted_model(m)
+
+
+def test_xgboost_predicts_one_column_per_level() -> None:
+  """The model predicts the table at every level the reconstruction reads.
+
+  XGBoost takes the levels as ``quantile_alpha`` and answers one column per
+  level; a width that drifted from ``config.alphas()`` would be read at the
+  wrong normal scores.
+  """
+  pytest.importorskip("xgboost")
+  from npcc.core.backends.xgboost_quantile import XGBoostQuantileBackend
+
+  config = QuantileTableConfig(n_quantiles=9)
+  margin = XGBoostQuantileBackend(
+    quantile_table_config=config, device="cpu", n_estimators=5
+  )
+  u, v = _gaussian_copula_sample(120, rho=0.5, seed=1)
+  x = u.double().reshape(-1, 1)
+  margin.fit(v.double(), x=x)
+
+  table = margin._predict_quantiles(x[:3], config.alphas())
+  assert table.shape == (3, config.n_quantiles)
+  cdf = margin.cdf(
+    torch.tensor([0.2, 0.8], dtype=torch.float64),
+    x=torch.tensor([[0.5], [0.5]], dtype=torch.float64),
+  )
+  assert cdf[0] < cdf[1]
+
+
+def test_xgboost_refuses_a_parameter_it_controls() -> None:
+  """A caller's ``quantile_alpha`` would silently replace the table's levels.
+
+  The reconstruction reads the predictions at ``config.alphas()``, so a model
+  fitted at other levels would be read at the wrong normal scores.
+  """
+  pytest.importorskip("xgboost")
+  from npcc.core.backends.xgboost_quantile import XGBoostQuantileBackend
+
+  with pytest.raises(ValueError, match=r"must control \['quantile_alpha'\]"):
+    XGBoostQuantileBackend(quantile_alpha=[0.5])
+
+
 def test_ngboost_backend_smoke() -> None:
   pytest.importorskip("ngboost")
   u, v = _gaussian_copula_sample(80, rho=0.6, seed=1)
