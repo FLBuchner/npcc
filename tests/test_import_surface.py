@@ -38,6 +38,7 @@ _SRC = _ROOT / "src" / "npcc"
 #: loads them whatever this package does, and asserting otherwise would pin a
 #: fact about someone else's dependency tree.
 _OPTIONAL = (
+  "catboost",
   "lightgbm",
   "ngboost",
   "pytabkit",

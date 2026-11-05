@@ -310,6 +310,19 @@ _register_builtin(
   },
 )
 _register_builtin(
+  "catboost",
+  "npcc.core.backends.catboost_quantile:CatBoostQuantileBackend",
+  extra="catboost",
+  kwarg_types={
+    "iterations": int,
+    "learning_rate": float,
+    "depth": int,
+    "l2_leaf_reg": float,
+    "thread_count": int,
+    "random_seed": int,
+  },
+)
+_register_builtin(
   "pytabkit-realmlp",
   "npcc.core.backends.pytabkit:PyTabKitRealMLPBackend",
   extra="pytabkit",

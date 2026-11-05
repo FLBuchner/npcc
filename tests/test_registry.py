@@ -20,6 +20,7 @@ from npcc.core import (
 from tests.conftest import NormalQuantileBackend, hermetic_backend
 
 _BUILTINS = (
+  "catboost",
   "lightgbm",
   "ngboost",
   "nori",

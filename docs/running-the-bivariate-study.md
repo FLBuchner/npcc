@@ -113,9 +113,9 @@ forward passes. It changes throughput and not results.
 process pool. Two consequences:
 
 - It overlaps well where the work releases the GIL — the TabPFN and other
-  torch backends, LightGBM's boosters and XGBoost. A many-core box does *not*
-  translate into linear speedup for `lightgbm` or `xgboost`, which already
-  fit on every core.
+  torch backends, and the LightGBM, XGBoost and CatBoost fits. A many-core box
+  does *not* translate into linear speedup for those three, which already fit
+  on every core.
 - All workers share one CUDA context and one device, so raise it for GPU
   occupancy rather than expecting it to scale with core count. Each concurrent
   cell also holds its own fitted backends, so memory grows with it.

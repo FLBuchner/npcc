@@ -10,6 +10,7 @@ failures. The TabPFN fine-tune smoke is opt-in: it is a GPU training loop.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -157,6 +158,52 @@ def test_xgboost_refuses_a_parameter_it_controls() -> None:
 
   with pytest.raises(ValueError, match=r"must control \['quantile_alpha'\]"):
     XGBoostQuantileBackend(quantile_alpha=[0.5])
+
+
+def test_catboost_backend_smoke() -> None:
+  pytest.importorskip("catboost")
+  u, v = _gaussian_copula_sample(200, rho=0.6, seed=0)
+  m = RosenblattBicop(
+    FitControlsRosenblattBicop(
+      backend="catboost",
+      device="cpu",
+      backend_kwargs={"iterations": 20, "random_seed": 0},
+    )
+  ).fit(torch.column_stack([u, v]))
+  _check_fitted_model(m)
+
+
+def test_catboost_refuses_a_parameter_it_controls() -> None:
+  """A caller's ``loss_function`` would silently replace the table's levels.
+
+  The reconstruction reads the predictions at ``config.alphas()``, so a model
+  fitted under another loss would be read as a quantile table it is not.
+  """
+  pytest.importorskip("catboost")
+  from npcc.core.backends.catboost_quantile import CatBoostQuantileBackend
+
+  with pytest.raises(ValueError, match=r"must control \['loss_function'\]"):
+    CatBoostQuantileBackend(loss_function="RMSE")
+
+
+def test_catboost_writes_nothing_to_the_working_directory(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """A fit leaves no ``catboost_info/`` behind in the caller's directory.
+
+  CatBoost writes one on every fit by default, so a study run from a checkout
+  littered the repository with training logs.
+  """
+  pytest.importorskip("catboost")
+  from npcc.core.backends.catboost_quantile import CatBoostQuantileBackend
+
+  monkeypatch.chdir(tmp_path)
+  u, v = _gaussian_copula_sample(60, rho=0.5, seed=3)
+  CatBoostQuantileBackend(device="cpu", iterations=5).fit(
+    v.double(), x=u.double().reshape(-1, 1)
+  )
+
+  assert list(tmp_path.iterdir()) == []
 
 
 def test_ngboost_backend_smoke() -> None:

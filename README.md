@@ -80,6 +80,7 @@ name:
 | `"ngboost"`            | NGBoost parametric (analytic)             | `npcc[ngboost]`    |
 | `"lightgbm"`           | LightGBM quantile boosters, one per level | `npcc[lightgbm]`   |
 | `"xgboost"`            | XGBoost multi-level quantile model (CPU)  | `npcc[xgboost]`    |
+| `"catboost"`           | CatBoost MultiQuantile model (CPU)        | `npcc[catboost]`   |
 | `"pytabkit-realmlp"`   | PyTabKit RealMLP                          | `npcc[pytabkit]`   |
 | `"pytabkit-tabm"`      | PyTabKit TabM                             | `npcc[pytabkit]`   |
 | `"tabicl"`             | TabICL foundation model                   | `npcc[tabicl]`     |
@@ -92,12 +93,13 @@ adds your own — with `kwarg_types={"depth": int, ...}` if its
 `backend_kwargs` should be checked when a study config loads.
 `npcc[backends]` installs every non-TabPFN extra at once.
 
-`"lightgbm"` and `"xgboost"` are the gradient-boosting backends. LightGBM fits
-the 21 levels of a quantile table concurrently, in well under a second per
-Rosenblatt direction at the study's sample sizes; XGBoost fits them in one
-model, in about a second, on the CPU (its CUDA path fails on virtualized GPUs).
-Both default to shallow trees and a short schedule, which did better than
-either library's own deeper defaults at these sample sizes.
+`"lightgbm"`, `"xgboost"` and `"catboost"` are the gradient-boosting backends,
+all on the CPU. LightGBM fits the 21 levels of a quantile table concurrently,
+in well under a second per Rosenblatt direction at the study's sample sizes;
+XGBoost fits them in one model in about a second (its CUDA path fails on
+virtualized GPUs), and CatBoost in one shared ensemble in a fraction of one.
+All three default to shallow trees and a short schedule, which did better
+than each library's own deeper defaults at these sample sizes.
 
 ### One base class
 

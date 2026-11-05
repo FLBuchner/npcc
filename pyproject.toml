@@ -37,6 +37,7 @@ xgboost = [
   "xgboost-cpu>=2.1.1; sys_platform != 'darwin'",
   "xgboost>=2.1.1; sys_platform == 'darwin'",
 ]
+catboost = ["catboost>=1.2"]
 pytabkit = ["pytabkit>=1.5"]
 # Synthefy Nori. Pinned to the tvatter fork (see [tool.uv.sources]) until the
 # torch-uncapping fix lands on upstream PyPI; then this becomes a plain pin.
@@ -49,6 +50,7 @@ backends = [
   "lightgbm>=4.0",
   "xgboost-cpu>=2.1.1; sys_platform != 'darwin'",
   "xgboost>=2.1.1; sys_platform == 'darwin'",
+  "catboost>=1.2",
   "pytabkit>=1.5",
   "synthefy-nori>=0.12",
 ]
@@ -211,6 +213,7 @@ respect-type-ignore-comments = false
 # The optional inner backends. Each is behind an extra, so a checkout synced
 # with only `--extra cpu` must still type-check -- which is what CI does.
 allowed-unresolved-imports = [
+  "catboost",
   "lightgbm",
   "ngboost",
   "ngboost.distns",

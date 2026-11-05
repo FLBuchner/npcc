@@ -218,7 +218,7 @@ def test_shipped_study_config_loads() -> None:
   assert grid.n == [200, 500, 1000, 2000]
   assert grid.n_rep == 10
   assert grid.normalize == [None]
-  assert len(grid.estimators) == 14
+  assert len(grid.estimators) == 16
   labels = [e.label for e in grid.estimators]
   assert len(labels) == len(set(labels))
   ids = [e.estimator_id for e in grid.estimators]
@@ -229,6 +229,7 @@ def test_shipped_study_config_loads() -> None:
     "tabicl",
     "lightgbm",
     "xgboost",
+    "catboost",
   }
   # TabPFN entries pin the model version through backend_kwargs.
   versions = {

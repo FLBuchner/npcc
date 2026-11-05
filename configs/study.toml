@@ -20,8 +20,8 @@
 # RTX 2080 Ti, workers=1, over a *smaller* grid than the one below: n_rep = 5,
 # n = [200,500,1000], 10 backends, giving ~2.06 h per seed and ~10.3 h total.
 # The grid below is larger on three axes at once -- n_rep = 10, n gains 2000
-# (the slowest point), and 14 estimators rather than 10 -- so that number is
-# not a budget for it. As configured this is 160 cells and 4480 fits (each
+# (the slowest point), and 16 estimators rather than 10 -- so that number is
+# not a budget for it. As configured this is 160 cells and 5120 fits (each
 # cell fits every estimator in both Rosenblatt directions).
 #
 # Time one cell on the target machine before committing to the full run:
@@ -35,9 +35,10 @@
 
 # CONCURRENCY. `--workers` runs whole data cells in a *thread* pool, so it
 # overlaps well where the work releases the GIL (the TabPFN and other torch
-# backends, LightGBM's boosters and XGBoost) and poorly where it does not. The
-# two gradient-boosting backends already fit on every core, so they gain least
-# from more workers. All workers share one CUDA context and one device, so on a single accelerator raise `--workers` for occupancy rather
+# backends, and the LightGBM, XGBoost and CatBoost fits) and poorly where it
+# does not. The gradient-boosting backends already fit on every core, so they
+# gain least from more workers. All workers share one CUDA context and one
+# device, so on a single accelerator raise `--workers` for occupancy rather
 # than expecting linear scaling, and watch memory: each concurrent cell holds
 # its own fitted backends.
 #
@@ -85,7 +86,7 @@ conditional_x_grid_n = 10
 # Plot-ready quantities are written only for these Kendall-tau slices and
 # families.
 surface_tau_levels = [0.1, 0.4, 0.7]
-surface_families = ["clayton"]
+surface_families = ["clayton", "gaussian"]
 
 # Kendall's tau diagnostics are sample-based and comparatively expensive.
 enable_tau_diagnostics = true
@@ -161,6 +162,16 @@ transform = "logit"
 [[grid.estimators]]
 label = "lightgbm-probit"
 backend = "lightgbm"
+transform = "probit"
+
+[[grid.estimators]]
+label = "catboost-logit"
+backend = "catboost"
+transform = "logit"
+
+[[grid.estimators]]
+label = "catboost-probit"
+backend = "catboost"
 transform = "probit"
 
 [[grid.estimators]]
