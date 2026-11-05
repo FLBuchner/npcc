@@ -1,10 +1,12 @@
 """Summarize E4's coherence CSVs: mean and SE over reps, by estimator and n.
 
 Within a repetition each quantity is averaged over families, regimes and x;
-the spread is then taken across repetitions, as in the E1 tables. Writes
+the spread is then taken across repetitions, as in the E1 tables. It reads
+every part under the run folder, subfolders included, so estimators run
+separately (on another device, say) each keep their own ``--out``. Writes
 ``directional.csv``, ``hfunc.csv``, ``projection.csv`` and ``mass_tail.csv``
 (the share of (cell, x) whose mass on the evaluation grid exceeds 1.1 and 2,
-with its median and maximum) next to the inputs, and from a ``--cost-only``
+with its median and maximum) into the run folder, and from a ``--cost-only``
 run ``projection_cost.csv`` with the projected-over-unprojected multiplier.
 
 Usage::
@@ -14,7 +16,6 @@ Usage::
 
 from __future__ import annotations
 
-import glob
 import math
 import sys
 from pathlib import Path
@@ -34,8 +35,13 @@ def mean_se(df: pd.DataFrame, by: list[str], cols: list[str]) -> pd.DataFrame:
 
 def main() -> None:
   run = Path(sys.argv[1])
-  parts = sorted(glob.glob(str(run / "coherence_*.csv")))
+  parts = sorted(run.rglob("coherence_*.csv"))
   df = pd.concat((pd.read_csv(p) for p in parts), ignore_index=True)
+  # A part copied or rerun into a second folder would be averaged in twice.
+  key = ["label", "family", "tau_scenario", "n", "rep", "diagnostic", "x"]
+  dup = df.duplicated([*key, "sinkhorn_iters"]).sum()
+  if dup:
+    raise SystemExit(f"{dup} rows of {run} appear in more than one part")
   dirn = df[df["diagnostic"] == "directional"]
   cols = [
     "iae_between_directions",
@@ -84,7 +90,7 @@ def main() -> None:
   )
   tail.reset_index().to_csv(run / "mass_tail.csv", index=False)
 
-  costs = sorted(glob.glob(str(run / "projection_cost_*.csv")))
+  costs = sorted(run.rglob("projection_cost_*.csv"))
   if costs:
     cost = pd.concat((pd.read_csv(p) for p in costs), ignore_index=True)
     cost["multiplier"] = cost["time_projected_s"] / cost["time_unprojected_s"]

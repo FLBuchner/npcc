@@ -65,15 +65,21 @@ the command behind every file in `results/e3_vdc/`.
 
 ## E4 — numerical coherence (§3.5)
 
-- Accuracy and coherence: `uv run --no-sync python scripts/paper/e4/coherence.py
-  --labels <tabpfn label> lightgbm-logit xgboost-logit catboost-logit
-  --n 500 2000 --reps 5 --sinkhorn 5 20 50 --out results/e4_coherence`
-  (add `--part I/K` to split; the gradient boosters were run with
-  `--device cpu`).
+- Accuracy and coherence, as two runs that differ only in estimators and
+  device; every row records the commit it ran from.
+  - The gradient boosters on CPU, from 7909ed7: `uv run --no-sync python
+    scripts/paper/e4/coherence.py --labels lightgbm-logit xgboost-logit
+    catboost-logit --n 500 2000 --reps 5 --sinkhorn 5 20 50 --device cpu
+    --part I/3 --out results/e4_coherence` for I in 0, 1, 2.
+  - TabPFN on the GPU, from 7000ae3: the same with `--labels
+    tabpfn-quantiles-v3-logit`, no `--device`, `--part I/2` for I in 0, 1,
+    and `--out results/e4_coherence/tabpfn`. E1c's scenario code (2b319b7)
+    was in the working tree but uncommitted; it reproduces 7000ae3's seeds,
+    draws and truths for these cells bit for bit.
 - Projection cost per distinct conditioning value, on an otherwise idle
   device: the same script with `--cost-only`.
 - Summary: `uv run --no-sync python scripts/paper/e4/summarize.py
-  results/e4_coherence`.
+  results/e4_coherence`, which reads the parts in both folders.
 
 ## Still to be filled in
 
