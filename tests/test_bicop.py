@@ -270,9 +270,9 @@ class _FlatDiagonalBackend(ConditionalMargin):
   def _predict_quantiles(
     self, x: torch.Tensor, alphas: torch.Tensor
   ) -> torch.Tensor:
-    centre = torch.logit(x[:, :1].clamp(0.01, 0.99))
+    center = torch.logit(x[:, :1].clamp(0.01, 0.99))
     scores = cast("torch.Tensor", torch.special.ndtri(alphas))
-    return centre + 0.5 * scores.unsqueeze(0)
+    return center + 0.5 * scores.unsqueeze(0)
 
 
 def test_projection_keeps_the_mass_of_a_flat_extrapolating_backend() -> None:

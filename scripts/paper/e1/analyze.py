@@ -78,7 +78,7 @@ BACKENDS: dict[str, dict[str, str]] = {
     "marker": "P",
   },
   # The established competitors (E1b), run as R scripts on the same cells:
-  # greys and dotted, so the Okabe-Ito colors stay with the six backends.
+  # grays and dotted, so the Okabe-Ito colors stay with the six backends.
   "gamcopula": {
     "name": "gamCopula",
     "group": "R",
