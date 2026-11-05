@@ -288,26 +288,43 @@ def test_an_external_estimator_has_no_fit_controls(stand_in: Path) -> None:
     )
 
 
-def test_the_r_study_scores_the_bivariate_study_cells(
+@pytest.mark.parametrize(
+  ("config", "estimators"),
+  [
+    (
+      "study_r.toml",
+      [
+        ("gamcopula", "external_r", "gamCopula"),
+        ("boostcopula", "external_r", "boostCopula"),
+      ],
+    ),
+    (
+      "study_r_smooth.toml",
+      [("boostcopula-smooth", "external_r", "boostCopula")],
+    ),
+  ],
+)
+def test_the_r_studies_score_the_bivariate_study_cells(
   monkeypatch: pytest.MonkeyPatch,
+  config: str,
+  estimators: list[tuple[str, str, str]],
 ) -> None:
   """The R baselines must be scored on the bivariate study's exact cells.
 
-  The two studies are compared estimator by estimator, so a data axis that
+  The studies are compared estimator by estimator, so a data axis that
   drifted between their configs would compare them on different samples.
   """
   monkeypatch.chdir(_ROOT)
   bivariate = load_grid(_ROOT / "configs" / "study.toml")
-  external = load_grid(_ROOT / "configs" / "study_r.toml")
+  external = load_grid(_ROOT / "configs" / config)
 
   for f in fields(GridConfig):
     if f.name != "estimators":
       assert getattr(external, f.name) == getattr(bivariate, f.name), f.name
   assert external.cells() == bivariate.cells()
-  assert [(e.label, e.kind, e.backend) for e in external.estimators] == [
-    ("gamcopula", "external_r", "gamCopula"),
-    ("boostcopula", "external_r", "boostCopula"),
-  ]
+  assert [
+    (e.label, e.kind, e.backend) for e in external.estimators
+  ] == estimators
 
 
 # ---------------------------------------------------------------------------
