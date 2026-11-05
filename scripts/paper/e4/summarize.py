@@ -2,8 +2,10 @@
 
 Within a repetition each quantity is averaged over families, regimes and x;
 the spread is then taken across repetitions, as in the E1 tables. Writes
-``directional.csv``, ``hfunc.csv`` and ``projection.csv`` (and, from a
-``--cost-only`` run, ``projection_cost.csv``) next to the inputs.
+``directional.csv``, ``hfunc.csv``, ``projection.csv`` and ``mass_tail.csv``
+(the share of (cell, x) whose mass on the evaluation grid exceeds 1.1 and 2,
+with its median and maximum) next to the inputs, and from a ``--cost-only``
+run ``projection_cost.csv`` with the projected-over-unprojected multiplier.
 
 Usage::
 
@@ -68,11 +70,25 @@ def main() -> None:
   overhead = cells.groupby(["label", "n"])["projection_overhead_s"].mean()
   table = table.merge(overhead.reset_index(), on=["label", "n"], how="left")
   table.to_csv(run / "projection.csv", index=False)
+
+  # Each (cell, x) separately: a mean over them hides the rare blow-ups.
+  g = proj.groupby(["label", "n", "sinkhorn_iters"])["mass"]
+  tail = pd.DataFrame(
+    {
+      "share_mass_gt_1.1": g.apply(lambda s: float((s > 1.1).mean())),
+      "share_mass_gt_2": g.apply(lambda s: float((s > 2.0).mean())),
+      "median_mass": g.median(),
+      "max_mass": g.max(),
+      "n_cell_x": g.size(),
+    }
+  )
+  tail.reset_index().to_csv(run / "mass_tail.csv", index=False)
+
   costs = sorted(glob.glob(str(run / "projection_cost_*.csv")))
   if costs:
-    pd.concat((pd.read_csv(p) for p in costs), ignore_index=True).to_csv(
-      run / "projection_cost.csv", index=False
-    )
+    cost = pd.concat((pd.read_csv(p) for p in costs), ignore_index=True)
+    cost["multiplier"] = cost["time_projected_s"] / cost["time_unprojected_s"]
+    cost.to_csv(run / "projection_cost.csv", index=False)
   print(f"{len(parts)} part(s), {df['label'].nunique()} estimators -> {run}")
 
 
