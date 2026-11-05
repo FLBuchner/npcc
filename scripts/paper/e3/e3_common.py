@@ -16,18 +16,27 @@ Every output row of E3 carries the flat provenance from :func:`provenance`,
 so a CSV can be read on its own: the VDC commit (the v0.2.0 tag commit and
 the main-branch merge commit whose tree is identical), the checkpoint
 sha256, the pyvinecopulib version of each environment, the npcc commit, the
-tabpfn version, and the sha256 of the script that wrote the row.
+tabpfn version, and -- in ``code_sha256`` -- the sha256 of the script that
+wrote the row and of every E3 module it had loaded, which ``e3_collect.py``
+checks against the files on disk, so a row produced by any other version of
+the code is caught.
+
+:func:`save_npz` writes an ``.npz`` byte for byte reproducibly (fixed member
+timestamps and order), so regenerating the samples regenerates their sha256.
 """
 
 from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import os
 import platform
 import subprocess
+import sys
 import time
+import zipfile
 from pathlib import Path
 
 VDC_REPO = Path("/home/thibault/vdc/vine-denoising-copula")
@@ -35,6 +44,8 @@ VDC_PYTHON = Path("/home/thibault/vdc/env/bin/python")
 NPCC_REPO = Path("/home/thibault/npcc")
 NPCC_PYTHON = NPCC_REPO / ".venv" / "bin" / "python"
 RESULTS = NPCC_REPO / "results" / "e3_vdc"
+#: The directory of the E3 scripts; every module here is fingerprinted.
+E3_DIR = Path(__file__).resolve().parent
 
 CHECKPOINT = Path(
   "/home/thibault/vdc/weights/vdc-denoiser-m64-v1/vdc-denoiser-m64-v1.pt"
@@ -133,6 +144,47 @@ def env_versions(python: Path, names: tuple[str, ...]) -> dict:
   return json.loads(out)
 
 
+def code_hashes(script: Path | str) -> dict[str, str]:
+  """sha256 of ``script`` and of every E3 module this process has loaded.
+
+  Called after a script's imports, so the map names exactly the E3 code that
+  ran. ``e3_collect.py`` compares it with the files on disk.
+  """
+  files = {Path(script).resolve()}
+  for module in list(sys.modules.values()):
+    origin = getattr(module, "__file__", None)
+    # Some extension modules report a bare relative name (torch's
+    # `_classes.py`), which would resolve against the working directory.
+    if not origin or not Path(origin).is_absolute():
+      continue
+    path = Path(origin).resolve()
+    if path.parent == E3_DIR and path.exists():
+      files.add(path)
+  return {f.name: sha256_file(f) for f in sorted(files)}
+
+
+def save_npz(path: Path, arrays: dict) -> None:
+  """Write ``arrays`` as a deflated ``.npz``, byte for byte reproducibly.
+
+  ``np.savez_compressed`` stamps the current time into every member, so the
+  same arrays written twice hash differently; here the members carry a fixed
+  timestamp and a sorted order, and the file's sha256 depends on the arrays
+  alone (for a given zlib).
+  """
+  import numpy as np
+
+  tmp = path.with_suffix(path.suffix + ".tmp")
+  with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for name in sorted(arrays):
+      buf = io.BytesIO()
+      np.lib.format.write_array(buf, np.asanyarray(arrays[name]), allow_pickle=False)
+      info = zipfile.ZipInfo(f"{name}.npy", date_time=(1980, 1, 1, 0, 0, 0))
+      info.compress_type = zipfile.ZIP_DEFLATED
+      info.external_attr = 0o644 << 16
+      zf.writestr(info, buf.getvalue())
+  tmp.replace(path)
+
+
 def provenance(script: Path | str, device: str) -> dict:
   """Flat provenance shared by every row a script writes.
 
@@ -176,6 +228,7 @@ def provenance(script: Path | str, device: str) -> dict:
     "npcc_dirty_paths": ";".join(git_dirty_paths(NPCC_REPO, "src", "configs")),
     "script": Path(script).name,
     "script_sha256": sha256_file(script),
+    "code_sha256": json.dumps(code_hashes(script), sort_keys=True),
     "device": device,
     "gpu": gpu_name() if device.startswith("cuda") else None,
     "hostname": platform.node(),

@@ -55,11 +55,17 @@ whatever per-method CSVs exist and lists the E1 estimators still missing.
   VDC's server and inter-process seconds;
 - ``e3c_crosscheck.csv``: the shared vine's TLL against pyvinecopulib's
   compiled TLL vine, and its NPCC against ``npcc.RosenblattVinecop``;
-- ``e3_summary.json``: all of the summaries with the shared provenance.
+- ``e3_code_check.csv``: every code hash the rows recorded (``code_sha256``,
+  and ``vdc_server_code_sha256`` where VDC's server ran) against the file on
+  disk, plus the Table 1 runner's ``source_sha256``. The collector exits
+  with an error if any row came from other code, unless ``--allow-stale``;
+- ``e3_summary.json``: all of the summaries with the shared provenance and
+  the code check.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
@@ -376,8 +382,55 @@ def missing(long: pd.DataFrame) -> list[str]:
   return [label for label in e3_npcc.ESTIMATORS if f"npcc-{label}" not in have]
 
 
+def code_check(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+  """Every recorded code hash against the file on disk.
+
+  One row per experiment, hash column (the writing process's ``code_sha256``,
+  or the VDC server's ``vdc_server_code_sha256``) and module; ``match`` says
+  whether the module on disk is the one that ran. A row with no recorded
+  hashes at all is reported under the module ``<none recorded>``.
+  """
+  rows = []
+  on_disk: dict[str, str] = {}
+
+  def current(name: str) -> str | None:
+    if name not in on_disk:
+      path = common.E3_DIR / name
+      on_disk[name] = common.sha256_file(path) if path.exists() else None
+    return on_disk[name]
+
+  for experiment, long in frames.items():
+    missing_hash = long["code_sha256"].isna() if "code_sha256" in long else pd.Series(True, index=long.index)
+    if missing_hash.any():
+      rows.append({"experiment": experiment, "source": "code_sha256", "module": "<none recorded>",
+                   "recorded": None, "on_disk": None, "match": False,
+                   "n_rows": int(missing_hash.sum()),
+                   "methods": ";".join(sorted(long.loc[missing_hash, "method"].unique()))})
+    for col in ("code_sha256", "vdc_server_code_sha256"):
+      if col not in long:
+        continue
+      for value, group in long.dropna(subset=[col]).groupby(col):
+        for name, sha in json.loads(value).items():
+          now = current(name)
+          rows.append({"experiment": experiment, "source": col, "module": name, "recorded": sha,
+                       "on_disk": now, "match": sha == now, "n_rows": len(group),
+                       "methods": ";".join(sorted(group["method"].unique()))})
+  runner = json.loads((common.RESULTS / "table1_rerun_cpu" / "results.json").read_text())
+  now = common.sha256_file(common.TABLE1_RUNNER)
+  rows.append({"experiment": "table1_rerun_cpu", "source": "runner source_sha256",
+               "module": common.TABLE1_RUNNER.name, "recorded": runner["source_sha256"],
+               "on_disk": now, "match": runner["source_sha256"] == now, "n_rows": len(runner["rows"]),
+               "methods": "vdc;tll;parametric"})
+  return pd.DataFrame(rows)
+
+
 def main() -> None:
+  p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+  p.add_argument("--allow-stale", action="store_true",
+                 help="write the summaries even if a row was produced by code that is not on disk")
+  args = p.parse_args()
   out = common.RESULTS
+  frames: dict[str, pd.DataFrame] = {}
   report: dict = {"provenance": common.provenance(__file__, "n/a (collection only)")}
   # E1 ran at 2f8fa94. Rows written before `npcc_core_dirty` was recorded per
   # row rely on this: the estimator code is the same in HEAD as in E1.
@@ -393,6 +446,7 @@ def main() -> None:
   a_dir = out / "e3a"
   if (a_dir / "vdc_side.csv").exists():
     a_long = read_long(a_dir, "E3a")
+    frames["E3a"] = a_long
     a_long.to_csv(out / "e3a_long.csv", index=False)
     a_sum, a_case = summarize_e3a(a_long)
     a_sum.to_csv(out / "e3a_summary.csv", index=False)
@@ -424,6 +478,7 @@ def main() -> None:
   b_dir = out / "e3b"
   if (b_dir / "vdc_side.csv").exists():
     b_long = read_long(b_dir, "E3b")
+    frames["E3b"] = b_long
     b_long.to_csv(out / "e3b_long.csv", index=False)
     b_sum = summarize_e3b(b_long)
     b_sum.to_csv(out / "e3b_summary.csv", index=False)
@@ -437,6 +492,7 @@ def main() -> None:
   c_dir = out / "e3c"
   if (c_dir / "vdc_side.csv").exists():
     c_long = read_long(c_dir, "E3c")
+    frames["E3c"] = c_long
     c_long.to_csv(out / "e3c_long.csv", index=False)
     c_sum = summarize_e3c(c_long)
     c_sum.to_csv(out / "e3c_summary.csv", index=False)
@@ -452,7 +508,20 @@ def main() -> None:
       if c_check is not None:
         print(c_check.groupby("check_arm")["abs_gap"].max())
 
+  check = code_check(frames)
+  check.to_csv(out / "e3_code_check.csv", index=False)
+  stale = check[~check["match"]]
+  report["code_check"] = {
+    "all_rows_from_code_on_disk": bool(stale.empty),
+    "modules_checked": sorted(set(check["module"])),
+    "mismatches": stale.to_dict("records"),
+  }
+  print("code check:", "every row was produced by the code on disk" if stale.empty
+        else f"{len(stale)} stale or unfingerprinted entries (see e3_code_check.csv)")
   common.write_json(json.loads(pd.Series(report).to_json()), out / "e3_summary.json")
+  if not stale.empty and not args.allow_stale:
+    sys.exit("e3_collect: rows must come from the code on disk; rerun the stale arms "
+             "or pass --allow-stale")
 
 
 if __name__ == "__main__":

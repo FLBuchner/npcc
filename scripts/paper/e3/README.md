@@ -1,0 +1,264 @@
+# E3 — comparison with VDC (§3.3)
+
+The scripts here compare NPCC with VDC (Safaai 2026, the vine denoising
+copula; <https://github.com/KempnerInstitute/vine-denoising-copula>) on VDC's
+own published settings. They write everything under `results/e3_vdc/`, which
+is not tracked. This file says how to build VDC's environment, how to check
+its weights, and which command produces each output file.
+
+- **E3a**: unconditional pair copulas, VDC's Table 1 cases, at
+  `n_train` = 2,000 and 10,000.
+- **E3b**: VDC's non-simplified stress test, the copula of `(U2, U3)`
+  switching at `U1 = 0.5`.
+- **E3c**: simplified vines with d ∈ {5, 10} on the true structure, with
+  every method in one vine machinery.
+
+Two environments are involved. VDC's code runs only in its own (`~/vdc/env`,
+Python 3.10, pyvinecopulib 0.7.5). Everything else runs in npcc's (`uv run
+--no-sync python ...`, pyvinecopulib 1.0). Nothing from VDC is installed into
+npcc's `.venv`. Where an npcc-side fit needs VDC's estimate — the adapted VDC
+pair copula of E3a's cross-check and of E3c — it gets it from
+`e3_vdc_server.py`, a process in VDC's environment.
+
+## The scripts
+
+| Script | Env | What it does |
+|---|---|---|
+| `e3_common.py` | both | Paths, provenance (versions, commits, the sha256 of every E3 module a process loaded), a byte-reproducible `.npz` writer, CSV/JSON writers |
+| `e3a_vdc_side.py` | VDC | E3a samples at both `n_train` (the runner's generator), the true grid density, VDC / TLL / parametric fits with KL, IAE, ISE and the grid maxima, and the Table 1 reproduction check |
+| `e3a_npcc_fit.py` | npcc | E3a NPCC arms, and `vdc-adapted`: VDC as a pyvinecopulib 1.0 pair copula, a cross-check of VDC's own lookup |
+| `e3b_vdc_side.py` | VDC | E3b samples (the stress test's generator, rebuilt: VDC's is not released), the oracle and pooled oracle, VDC / TLL / parametric pooled, and per-regime references |
+| `e3b_npcc_fit.py` | npcc | E3b NPCC arms, conditioning on `U1` and pooled |
+| `e3c_vdc_side.py` | VDC | E3c true vines and samples, and VDC's own vine on the true order (a reference) |
+| `e3c_npcc_fit.py` | npcc | E3c arms in one vine machinery: VDC, TLL and NPCC pairs in `e3_vine.SharedVinecop`; parametric selection and a TLL check in pyvinecopulib's compiled vine |
+| `e3_vdc_server.py` | VDC | VDC's density estimate as a service (started by `e3_vdc_pair.VdcServer`) |
+| `e3_vdc_pair.py` | npcc | The server client and `VdcBicop`: VDC's 64 x 64 grid replicate-padded and held by pyvinecopulib 1.0's `TorchTllBicop` with `norm_maxiter=0`, adapted from pyvinecopulib PR #217 |
+| `e3_vine.py` | npcc | `SharedVinecop`: a simplified pyvinecopulib 1.0 `VinecopBase` hosting any torch pair copula |
+| `e3_npcc.py` | npcc | E1's logit estimators (same labels and specs) and one timed fit |
+| `e3_collect.py` | npcc | Long tables, summaries, cross-checks, and the code check |
+| `e3_run_gpu_arms.py` | npcc | The pending GPU arms, once the GPU is free |
+
+Each script documents its design, metric and outputs at the top.
+
+## VDC's environment (once)
+
+VDC v0.2.0 is the tag commit `e09f3d3`. Its tree, `db4fe77`, is identical
+to that of `d5aaa46`, the release's merge into `main`.
+
+```bash
+git clone https://github.com/KempnerInstitute/vine-denoising-copula ~/vdc/vine-denoising-copula
+git -C ~/vdc/vine-denoising-copula checkout v0.2.0        # e09f3d3
+
+mamba create -y -p ~/vdc/env python=3.10 pip               # a conda prefix env; 3.10.22 here
+cd ~/vdc/vine-denoising-copula
+~/vdc/env/bin/python -m pip install -r paper/neurips2026/runners/constraints.txt
+~/vdc/env/bin/python -m pip install --no-deps -e .
+```
+
+The scripts find VDC through constants at the top of `e3_common.py`:
+`VDC_REPO`, `VDC_PYTHON`, `CHECKPOINT` and `NPCC_REPO` (this machine's
+`/home/thibault/...` paths). Edit them there to run anywhere else.
+
+`constraints.txt` pins the numerical stack of VDC's paper replays: torch
+2.9.1, NumPy 2.2.6, SciPy 1.15.3, pyvinecopulib 0.7.5, networkx 3.4.2,
+matplotlib 3.10.6, hydra-core 1.3.2, tqdm 4.67.3, h5py 3.13.0, PyYAML
+6.0.2, scikit-learn 1.7.2 and pytest 8.3.5. `pip freeze` in the env shows
+each at exactly that version, and VDC as `-e git+...@e09f3d35...`. The
+editable install is what VDC's runners expect from `--expected-module-root`.
+
+## The weights
+
+```bash
+mkdir -p ~/vdc/weights
+cd ~/vdc/vine-denoising-copula
+~/vdc/env/bin/python scripts/download_pretrained.py --model-id vdc-denoiser-m64-v1 \
+    --cache-dir ~/vdc/weights
+sha256sum ~/vdc/weights/vdc-denoiser-m64-v1/vdc-denoiser-m64-v1.pt
+# 8a1b71ad6d2012ed344b22a743a96e667d32a2ab54ade4444686e375e91f5c0f
+```
+
+The download comes from Hugging Face, `hsafaai/vdc-denoiser-m64-v1`
+(532 MB). Every E3 script that loads the model refuses any other sha256.
+
+## Commands, and the files they write
+
+Run everything from the npcc repository root. The CPU runs pin each process
+to one core and one BLAS/OpenMP thread, as VDC's runner times its methods;
+those are the settings below, with `nice -n 10` because the machine was
+shared. The core numbers are what the recorded run used and only matter for
+timings. First, in the shell that runs them:
+
+```bash
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+```
+
+### VDC's Table 1, reproduced with its own runner
+
+```bash
+cd ~/vdc/vine-denoising-copula
+nice -n 10 ~/vdc/env/bin/python paper/neurips2026/runners/reproduce_table1_likelihood.py \
+    --checkpoint ~/vdc/weights/vdc-denoiser-m64-v1/vdc-denoiser-m64-v1.pt \
+    --expected-module-root ~/vdc/vine-denoising-copula \
+    --device cpu --output ~/npcc/results/e3_vdc/table1_rerun_cpu \
+    > ~/npcc/results/e3_vdc/table1_rerun_cpu.log 2>&1
+```
+
+This writes `table1_rerun_cpu/results.json` and `likelihoods.npz`, with the
+runner unmodified. The means are VDC 0.0061112, TLL (its BIC choice between
+independence and TLL) 0.0134801 and parametric 0.00036485; the published
+ones are 0.00611124, 0.01348007 and 0.00036485.
+
+### E3a
+
+```bash
+taskset -c 12 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3a_vdc_side.py \
+    --reference-run results/e3_vdc/table1_rerun_cpu --out results/e3_vdc/e3a \
+    > results/e3_vdc/e3a_vdc_side.log 2>&1
+taskset -c 12 nice -n 10 uv run --no-sync python scripts/paper/e3/e3a_npcc_fit.py \
+    --estimators lightgbm-logit --n-train 2000 10000 --device cpu \
+    > results/e3_vdc/e3a_npcc_lightgbm.log 2>&1
+for est in catboost xgboost; do
+  taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3a_npcc_fit.py \
+      --estimators $est-logit --n-train 2000 10000 --device cpu \
+      > results/e3_vdc/e3a_npcc_$est.log 2>&1
+done
+taskset -c 12 nice -n 10 uv run --no-sync python scripts/paper/e3/e3a_npcc_fit.py \
+    --estimators vdc-adapted --vdc-core 12 --n-train 2000 10000 --device cpu \
+    > results/e3_vdc/e3a_npcc_vdc_adapted.log 2>&1
+```
+
+`e3a/` then holds:
+- `samples.npz` and `samples_n10000.npz`;
+- `grid_truth.npz`, the true density on the 200 x 200 midpoint grid;
+- `vdc_grids_n{2000,10000}.npz`, VDC's 64 x 64 grids;
+- `vdc_side.csv` and `vdc_side.json`, the VDC-env rows and the reproduction
+  check;
+- `npcc_cells/<estimator>/n<n_train>/`, one JSON row and one `.npy` of
+  test-point log-densities per fit;
+- `npcc_<estimator>.csv`, including `npcc_vdc-adapted.csv`, the cross-check.
+
+The independence probe — the largest fitted density on the grid and where it
+occurs — is part of every row (`grid_max_pdf`, `grid_argmax_u`,
+`grid_argmax_v`). The collector tabulates it.
+
+### E3b
+
+```bash
+taskset -c 13 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3b_vdc_side.py \
+    --out results/e3_vdc/e3b > results/e3_vdc/e3b_vdc_side.log 2>&1
+for est in lightgbm xgboost; do
+  taskset -c 13 nice -n 10 uv run --no-sync python scripts/paper/e3/e3b_npcc_fit.py \
+      --estimators $est-logit --device cpu > results/e3_vdc/e3b_npcc_$est.log 2>&1
+done
+taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3b_npcc_fit.py \
+    --estimators catboost-logit --device cpu > results/e3_vdc/e3b_npcc_catboost.log 2>&1
+```
+
+`e3b/` then holds `samples.npz`, `vdc_side.csv`, `vdc_side.json`,
+`npcc_cells/<estimator>/` and `npcc_<estimator>.csv`.
+
+### E3c
+
+```bash
+taskset -c 11 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3c_vdc_side.py \
+    --out results/e3_vdc/e3c > results/e3_vdc/e3c_vdc_side.log 2>&1
+taskset -c 13 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
+    --arms tll tll_cpp parametric vdc --vdc-core 13 > results/e3_vdc/e3c_npcc_competitors.log 2>&1
+taskset -c 11 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
+    --arms npcc-lightgbm-logit > results/e3_vdc/e3c_npcc_lightgbm.log 2>&1
+taskset -c 14 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
+    --arms npcc-xgboost-logit > results/e3_vdc/e3c_npcc_xgboost.log 2>&1
+taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
+    --arms npcc-catboost-logit rosenblatt-vinecop-check > results/e3_vdc/e3c_npcc_catboost.log 2>&1
+```
+
+`e3c/` then holds `samples.npz` (per cell: train, test, true log-density,
+order, structure matrix, edge cases), `vdc_side.csv` (VDC's own vine),
+`vdc_side.json`, `npcc_cells/<arm>/` and `npcc_<arm>.csv`.
+
+The recorded run ran these as five chains, one per core (11–15), starting
+each npcc-side command once its VDC side had written `vdc_side.json`. An
+npcc-side script needs nothing else, so the order across sub-experiments is
+free.
+
+### The summaries
+
+```bash
+uv run --no-sync python scripts/paper/e3/e3_collect.py
+```
+
+This writes, in `results/e3_vdc/`:
+- `e3a_long.csv`, `e3a_summary.csv` (per `n_train` and arm: KL, IAE and
+  ISE with stratified standard errors, the paired KL difference to VDC,
+  timings), `e3a_by_case.csv`, `e3a_table1_reproduction.csv`,
+  `e3a_independence_probe.csv` and `e3a_vdc_crosscheck.csv`;
+- `e3b_long.csv` and `e3b_summary.csv`;
+- `e3c_long.csv`, `e3c_summary.csv` and `e3c_crosscheck.csv`;
+- `e3_code_check.csv` and `e3_summary.json`.
+
+### The GPU arms
+
+TabPFN v2.5, v3 and v3.5, TabICL and Nori run once the GPU is free, naming
+the main-text TabPFN version, which is the only GPU arm at `n_train` =
+10,000:
+
+```bash
+uv run --no-sync python scripts/paper/e3/e3_run_gpu_arms.py --main-tabpfn <v2.5|v3|v3.5>
+```
+
+It runs E3a, E3b and E3c's GPU arms, each in its own process and each
+resuming from its per-fit files, then the collector. It removes
+`PYTORCH_CUDA_ALLOC_CONF` from the children's environment, since
+`expandable_segments` fails on this machine's vGPU.
+
+## Reproducibility
+
+- **Code.** Every row records, in `code_sha256`, the sha256 of the script
+  that wrote it and of every E3 module that process had loaded. Rows that
+  used the VDC server record the server's map too, in
+  `vdc_server_code_sha256`. `e3_collect.py` compares each hash with the file
+  on disk, and the Table 1 runner's recorded `source_sha256` with the
+  runner, writing `e3_code_check.csv`. It exits with an error if any row
+  came from other code (`--allow-stale` overrides). Each row also records
+  the npcc commit, whether `src/npcc/core` was modified (`npcc_core_dirty`),
+  and the modified paths elsewhere.
+- **Data.** Samples are drawn with pyvinecopulib 0.7.5 from fixed seeds, as
+  each VDC-side script documents. The `.npz` files are written byte for byte
+  reproducibly, so their sha256 recurs on regeneration. Every npcc-side
+  script checks the sha256 recorded by its VDC side before fitting.
+- **Determinism.** The VDC, TLL, parametric and CPU-backend fits are
+  deterministic on one thread. Two runs of E3a's CPU arms agreed fit by fit
+  (135 fits, identical KL). The GPU arms may differ in the last digits.
+- **Timings.** Indicative only: the machine was shared with E1, and every
+  row carries the one-minute load average. Clean timings are E6's job.
+
+## Deviations from VDC's published settings
+
+- **E3a, TLL.** The TLL arm is pyvinecopulib's TLL itself, with its defaults
+  (constant method, multiplier 1, a 30-point grid). These are the settings
+  of VDC's `fit_bicop`; `e3a_vdc_side.py` asserts that and records both.
+  VDC's runner instead chooses between independence and TLL by BIC; that is
+  kept only as `tll_runner_bic`, the reproduction check.
+- **E3a, n_train = 10,000.** Same generator and test set. The training draw
+  uses the runner's seeds `[seed, seed + 1]` with `n = 10000`; it is not a
+  superset of the 2,000-row draw (pyvinecopulib fills column by column).
+- **E3b.** VDC's `e18_nonsimplified_stress` generator is not released, so it
+  is rebuilt from the saved configuration and the appendix. On ten seeds it
+  reproduces VDC's seed-0 numbers to within about 0.003 nats for VDC and
+  parametric selection. The pooled TLL arm is TLL itself: on the pooled
+  sign-flip sample the runner's BIC choice picks independence every time
+  (TLL's effective degrees of freedom are about 130). Those rows are kept,
+  labelled `excluded`.
+- **E3c.** VDC runs as a pyvinecopulib 1.0 pair copula, from PR #217's
+  integration adapted to 1.0's API, so that every arm shares one vine
+  machinery. VDC's own vine on the true order is kept as a reference. VDC's
+  published vine timings compared TLL with R-vine selection on a CPU against
+  VDC on a greedy D-vine on an H100. Here the structure is fixed and true
+  for every arm, and every arm states its device.
+- **PR #217's VDC numbers.** The integration loaded VDC 0.1.0 through a
+  `sys.modules` shim that took `scatter_to_hist` from `vdc/data/hist.py`.
+  That function returns cell probabilities summing to 1, where VDC's
+  estimator expects a density with mean 1 — a factor of 64² too small.
+  Making that substitution in v0.2.0 reproduces the PR's independence probe
+  (53x at an anti-diagonal corner, mean |ĉ − 1| = 0.78). Without it, the
+  same input gives 2.0x and 0.014.

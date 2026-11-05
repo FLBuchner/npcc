@@ -109,6 +109,7 @@ def main() -> None:
 
   info = {
     "server": Path(__file__).name, "server_sha256": common.sha256_file(__file__),
+    "code_sha256": common.code_hashes(__file__),
     "checkpoint_sha256": checkpoint_sha, "vdc_commit": common.git_short(common.VDC_REPO),
     "vdc_module": str(Path(vdc.__file__).resolve()),
     "versions": {"python": sys.version.split()[0], "numpy": np.__version__,

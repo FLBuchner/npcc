@@ -103,7 +103,7 @@ def main() -> None:
   )
 
   sys.path.insert(0, str(Path(__file__).resolve().parent))
-  from e3a_vdc_side import ProjectionTimer, fit_tll_plain, save_or_verify_samples
+  from e3a_vdc_side import ProjectionTimer, fit_tll_plain
 
   assert Path(vdc.__file__).resolve().is_relative_to(common.VDC_REPO)
   assert common.sha256_file(a.checkpoint) == common.CHECKPOINT_SHA256
@@ -280,7 +280,7 @@ def main() -> None:
       print(f"done {case} seed {seed}", flush=True)
 
   samples = a.out / "samples.npz"
-  save_or_verify_samples(samples, {k: np.asarray(v) for k, v in arrays.items()})
+  common.save_npz(samples, {k: np.asarray(v) for k, v in arrays.items()})
   common.write_csv(rows, a.out / "vdc_side.csv")
   summary = {}
   for case in CASES:

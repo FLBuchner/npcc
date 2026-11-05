@@ -60,6 +60,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import e3_common as common  # noqa: E402
 import e3_npcc  # noqa: E402
+from e3_vdc_pair import VdcBicop, VdcServer  # noqa: E402
 from e3a_vdc_side import grid_metrics  # noqa: E402
 
 N_WARMUP_TEST = 2000
@@ -93,8 +94,6 @@ class VdcAdapted:
   """The adapted VDC pair copula, fitted through a VDC density server."""
 
   def __init__(self, cpu_core: int | None) -> None:
-    from e3_vdc_pair import VdcBicop, VdcServer
-
     self.server = VdcServer(cpu_core=cpu_core)
     VdcBicop.server = self.server
     self.cls = VdcBicop
@@ -188,7 +187,8 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
             gpdf = runner.pdf(grid_pts)
             grid_s = time.perf_counter() - t0
             timing = runner.pair.vdc_timing
-            extra = {"server_s": timing["server_s"], "projection_s": timing["projection_s"],
+            extra = {"vdc_server_code_sha256": json.dumps(runner.server.info["code_sha256"], sort_keys=True),
+                     "server_s": timing["server_s"], "projection_s": timing["projection_s"],
                      "ipc_s": timing["ipc_s"], "roundtrip_s": timing["roundtrip_s"],
                      "grid_equal_vdc_side": bool(np.array_equal(runner.pair.vdc_grid, vdc_grids[k])),
                      "grid_max_abs_diff_vdc_side": float(np.max(np.abs(runner.pair.vdc_grid - vdc_grids[k])))}

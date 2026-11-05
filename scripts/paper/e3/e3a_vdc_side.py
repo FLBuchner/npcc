@@ -51,9 +51,9 @@ square: IAE = mean ``|c_hat - c|`` and ISE = mean ``(c_hat - c)^2``, against
 the true copula density, plus the largest fitted density on the grid, the
 largest ratio ``c_hat / c``, and where each occurs.
 
-**Outputs** (under ``--out``): ``samples.npz`` (``n_train = 2000``, kept if
-its arrays are unchanged, since the NPCC rows record its sha256) and
-``samples_n10000.npz``; ``grid_truth.npz`` (the midpoints and the true density
+**Outputs** (under ``--out``, every ``.npz`` written byte for byte
+reproducibly by ``e3_common.save_npz``): ``samples.npz`` (``n_train = 2000``)
+and ``samples_n10000.npz``; ``grid_truth.npz`` (the midpoints and the true density
 on the grid, per case); ``vdc_grids_n{n}.npz`` (VDC's 64 x 64 grids, for the
 NPCC side's cross-check of the adapted VDC pair copula); ``vdc_side.csv``
 (one row per n_train x case x seed x method, with a ``role``); and
@@ -127,25 +127,6 @@ def check_tll_defaults() -> dict:
     raise RuntimeError(f"TLL defaults must match VDC's fit_bicop; got {resolved} vs {vdc_defaults}")
   return {"family_set": ["tll"], "num_threads": 1, "pyvinecopulib_defaults": resolved,
           "vdc_fit_bicop_defaults": vdc_defaults, "match": True}
-
-
-def save_or_verify_samples(path: Path, arrays: dict) -> None:
-  """Write ``arrays`` to ``path``, or check an existing file holds them.
-
-  The file's sha256 is recorded by every NPCC row fitted on it, and
-  ``np.savez_compressed`` stamps the time into the archive, so an existing
-  file is kept when its arrays are equal rather than rewritten.
-  """
-  if not path.exists():
-    np.savez_compressed(path, **arrays)
-    return
-  with np.load(path) as f:
-    same = set(f.files) == set(arrays) and all(
-      np.array_equal(f[key], value) for key, value in arrays.items())
-  if not same:
-    raise RuntimeError(
-      f"{path} must hold the regenerated samples; it differs. Move it aside "
-      "only together with the NPCC rows fitted on it.")
 
 
 def runner_constants(source: str) -> tuple[list, list]:
@@ -295,8 +276,8 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
   bicops = [pv.Bicop(family=getattr(pv.BicopFamily, f), rotation=r,
                      **({'parameters': np.asarray(pa)} if pa else {})) for f, pa, r in cases]
   grid_true = np.stack([bc.pdf(grid_pts) for bc in bicops])
-  np.savez_compressed(a.out / "grid_truth.npz", midpoints=g, pdf_true=grid_true,
-                      case=np.asarray([case_label(*c) for c in cases]))
+  common.save_npz(a.out / "grid_truth.npz", {"midpoints": g, "pdf_true": grid_true,
+                  "case": np.asarray([case_label(*c) for c in cases])})
 
   rows: list[dict] = []
   max_gap = {"logtrue": 0.0, **{m: 0.0 for m in RUNNER_METHODS}}
@@ -432,13 +413,13 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
       print(f"n={n_train} done {label}", flush=True)
 
     samples = a.out / ("samples.npz" if n_train == 2000 else f"samples_n{n_train}.npz")
-    save_or_verify_samples(samples, {
+    common.save_npz(samples, {
       "train": np.asarray(train), "test": np.asarray(test), "logtrue": np.asarray(logtrue),
       **{key: np.asarray(value) for key, value in meta.items()},
     })
     samples_sha[str(n_train)] = common.sha256_file(samples)
-    np.savez_compressed(a.out / f"vdc_grids_n{n_train}.npz", grids=np.asarray(grids),
-                        case=np.asarray(meta["case"]), seed=np.asarray(meta["seed"]))
+    common.save_npz(a.out / f"vdc_grids_n{n_train}.npz", {"grids": np.asarray(grids),
+                    "case": np.asarray(meta["case"]), "seed": np.asarray(meta["seed"])})
 
   common.write_csv(rows, a.out / "vdc_side.csv")
   means = {f"{m}@n={n}": float(np.mean([r["kl"] for r in rows if r["method"] == m and r["n_train"] == n]))

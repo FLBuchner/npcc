@@ -73,6 +73,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import e3_common as common  # noqa: E402
 import e3_npcc  # noqa: E402
+from e3_vdc_pair import VdcBicop, VdcServer  # noqa: E402
 from e3_vine import SharedVinecop  # noqa: E402
 
 SPECIAL = ("vdc", "tll", "tll_cpp", "parametric", "rosenblatt-vinecop-check")
@@ -122,8 +123,6 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
 
   server = None
   if "vdc" in a.arms:
-    from e3_vdc_pair import VdcBicop, VdcServer
-
     server = VdcServer(cpu_core=a.vdc_core)
     VdcBicop.server = server
   try:
@@ -183,7 +182,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
           extra = {"vdc_server_s": sum(c["server_s"] for c in calls),
                    "vdc_projection_s": sum(c["projection_s"] for c in calls),
                    "vdc_ipc_s": sum(c["ipc_s"] for c in calls), "vdc_calls": len(calls),
-                   "vdc_server_sha256": server.info["server_sha256"],
+                   "vdc_server_code_sha256": json.dumps(server.info["code_sha256"], sort_keys=True),
                    "vdc_server_versions": json.dumps(server.info["versions"])}
           machinery, pair = "shared", "e3_vdc_pair.VdcBicop (VDC grid, padded, TorchTllBicop norm_maxiter=0)"
         elif arm == "tll":

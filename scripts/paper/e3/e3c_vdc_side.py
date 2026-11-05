@@ -149,7 +149,7 @@ def main() -> None:
             f"excess {np.mean(ratio):.4f}, fit {fit_s:.1f} s, inf {inference_s:.1f} s", flush=True)
 
   samples = a.out / "samples.npz"
-  np.savez_compressed(samples, d=np.asarray(arrays["d"]), seed=np.asarray(arrays["seed"]), **per_cell)
+  common.save_npz(samples, {"d": np.asarray(arrays["d"]), "seed": np.asarray(arrays["seed"]), **per_cell})
   common.write_csv(rows, a.out / "vdc_side.csv")
   common.write_json({
     "experiment": "E3c",
