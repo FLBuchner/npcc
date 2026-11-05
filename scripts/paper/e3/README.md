@@ -11,7 +11,14 @@ its weights, and which command produces each output file.
 - **E3b**: VDC's non-simplified stress test, the copula of `(U2, U3)`
   switching at `U1 = 0.5`.
 - **E3c**: simplified vines with d ∈ {5, 10} on the true structure, with
-  every method in one vine machinery.
+  every method in one vine machinery. There are two designs: `decay`, the
+  primary one, where Kendall's tau shrinks by 0.7 per tree; and `strong`, a
+  stress variant with every tree as strong as the first.
+- **E3d**: vines on the same pair copulas and designs, but on a random
+  R-vine structure that no arm is told. The competitors select a structure
+  as a user would, and NPCC fits a non-simplified vine on a random structure
+  or on TLL's selected one.
+  Outputs go to `results/e3d_unknown_structure/`.
 
 Two environments are involved. VDC's code runs only in its own (`~/vdc/env`,
 Python 3.10, pyvinecopulib 0.7.5). Everything else runs in npcc's (`uv run
@@ -29,13 +36,19 @@ pair copula of E3a's cross-check and of E3c — it gets it from
 | `e3a_npcc_fit.py` | npcc | E3a NPCC arms, and `vdc-adapted`: VDC as a pyvinecopulib 1.0 pair copula, a cross-check of VDC's own lookup |
 | `e3b_vdc_side.py` | VDC | E3b samples (the stress test's generator, rebuilt: VDC's is not released), the oracle and pooled oracle, VDC / TLL / parametric pooled, and per-regime references |
 | `e3b_npcc_fit.py` | npcc | E3b NPCC arms, conditioning on `U1` and pooled |
-| `e3c_vdc_side.py` | VDC | E3c true vines and samples, and VDC's own vine on the true order (a reference) |
+| `e3c_vdc_side.py` | VDC | E3c, `strong` design: true vines and samples, and VDC's own vine on the true order (a reference) |
+| `e3c_decay_vdc_side.py` | VDC | E3c, `decay` design: the same orders and edge cases, tau scaled by 0.7 per tree, and VDC's own vine |
 | `e3c_npcc_fit.py` | npcc | E3c arms in one vine machinery: VDC, TLL and NPCC pairs in `e3_vine.SharedVinecop`; parametric selection and a TLL check in pyvinecopulib's compiled vine |
+| `e3d_structure.py` | both | Vine edges from a structure matrix or a D-vine order, and their recovery of a true structure |
+| `e3d_truth.py` | npcc | E3d truths: uniform random R-vines (E2's sampler), the nine cases, both designs, a random structure per cell |
+| `e3d_vdc_side.py` | VDC | E3d `vdc`: VDC's own pipeline, choosing its own greedy D-vine |
+| `e3d_npcc_fit.py` | npcc | E3d `parametric` and `tll` with Dissmann selection, true-structure references, and NPCC on random, TLL-selected and true structures |
 | `e3_vdc_server.py` | VDC | VDC's density estimate as a service (started by `e3_vdc_pair.VdcServer`) |
 | `e3_vdc_pair.py` | npcc | The server client and `VdcBicop`: VDC's 64 x 64 grid replicate-padded and held by pyvinecopulib 1.0's `TorchTllBicop` with `norm_maxiter=0`, adapted from pyvinecopulib PR #217 |
 | `e3_vine.py` | npcc | `SharedVinecop`: a simplified pyvinecopulib 1.0 `VinecopBase` hosting any torch pair copula |
 | `e3_npcc.py` | npcc | E1's logit estimators (same labels and specs) and one timed fit |
-| `e3_collect.py` | npcc | Long tables, summaries, cross-checks, and the code check |
+| `e3_collect.py` | npcc | Long tables, summaries, cross-checks, the common-set scoring, and the code check |
+| `e3_nan_diagnostics.py` | npcc | Which arms, trees and pair copulas give non-finite vine densities |
 | `e3_run_gpu_arms.py` | npcc | The pending GPU arms, once the GPU is free |
 
 Each script documents its design, metric and outputs at the top.
@@ -159,6 +172,26 @@ taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3b_npcc_fit.p
 
 ### E3c
 
+The two designs share `e3c_npcc_fit.py`, which takes the design's folder.
+For the primary `decay` design (`results/e3_vdc/e3c_decay/`; the recorded
+run used cores 10–13):
+
+```bash
+taskset -c 10 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3c_decay_vdc_side.py \
+    --out results/e3_vdc/e3c_decay > results/e3_vdc/e3c_decay_vdc_side.log 2>&1
+F=results/e3_vdc/e3c_decay
+taskset -c 10 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py --folder $F \
+    --arms tll tll_cpp parametric vdc --vdc-core 10 > results/e3_vdc/e3c_decay_npcc_competitors.log 2>&1
+taskset -c 11 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py --folder $F \
+    --arms npcc-lightgbm-logit > results/e3_vdc/e3c_decay_npcc_lightgbm.log 2>&1
+taskset -c 12 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py --folder $F \
+    --arms npcc-xgboost-logit > results/e3_vdc/e3c_decay_npcc_xgboost.log 2>&1
+taskset -c 13 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py --folder $F \
+    --arms npcc-catboost-logit rosenblatt-vinecop-check > results/e3_vdc/e3c_decay_npcc_catboost.log 2>&1
+```
+
+For the `strong` stress variant (`results/e3_vdc/e3c/`, the default folder):
+
 ```bash
 taskset -c 11 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3c_vdc_side.py \
     --out results/e3_vdc/e3c > results/e3_vdc/e3c_vdc_side.log 2>&1
@@ -172,14 +205,51 @@ taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.p
     --arms npcc-catboost-logit rosenblatt-vinecop-check > results/e3_vdc/e3c_npcc_catboost.log 2>&1
 ```
 
-`e3c/` then holds `samples.npz` (per cell: train, test, true log-density,
-order, structure matrix, edge cases), `vdc_side.csv` (VDC's own vine),
-`vdc_side.json`, `npcc_cells/<arm>/` and `npcc_<arm>.csv`.
+Each design's folder then holds:
+- `samples.npz`: per cell, the train and test samples, true log-density,
+  order, structure matrix and edge cases, plus each edge's tau for `decay`;
+- `vdc_side.csv` (VDC's own vine) and `vdc_side.json`, whose `design` key is
+  `"decay"` for the decay design (the strong design's predates the key);
+- `npcc_cells/<arm>/` and `npcc_<arm>.csv`.
 
-The recorded run ran these as five chains, one per core (11–15), starting
-each npcc-side command once its VDC side had written `vdc_side.json`. An
-npcc-side script needs nothing else, so the order across sub-experiments is
-free.
+The collector labels every merged E3c row with its `design`.
+
+The recorded run of E3a, E3b and the strong design ran as five chains, one
+per core (11–15), starting each npcc-side command once its VDC side had
+written `vdc_side.json`. An npcc-side script needs nothing else, so the order
+across sub-experiments is free.
+
+### E3d (unknown structure)
+
+```bash
+taskset -c 10 nice -n 10 uv run --no-sync python scripts/paper/e3/e3d_truth.py \
+    > results/e3d_unknown_structure_truth.log 2>&1
+taskset -c 10 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3d_vdc_side.py \
+    > results/e3d_unknown_structure_vdc_side.log 2>&1
+E=scripts/paper/e3/e3d_npcc_fit.py
+taskset -c 11 nice -n 10 uv run --no-sync python $E \
+    --arms parametric tll parametric_true tll_true vdc_true --vdc-core 11
+for v in random-ns tll-ns random-s true-s; do
+  taskset -c 12 nice -n 10 uv run --no-sync python $E --arms npcc-catboost-logit-$v
+done
+# GPU, main-text TabPFN (v3), once allowed:
+for v in random-ns tll-ns random-s true-s; do
+  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-logit-$v --device cuda --gpu-is-free
+done
+```
+
+The truths are random R-vines drawn uniformly with pyvinecopulib 1.0's
+`RVineStructure.sample` (E2's sampler), for d ∈ {5, 10} and seeds 101–1010,
+in both designs (paired: same structure and edge cases). The samples are
+drawn with pyvinecopulib 1.0. `results/e3d_unknown_structure/` then holds
+`samples.npz`, `truths.json`, `vdc_side.csv` and `vdc_side.json`,
+`cells/<arm>/` and `npcc_<arm>.csv`. The collector adds `e3d_long.csv` and
+`e3d_summary.csv` there.
+
+The competitors' `fit_s` includes their structure selection; arm (b)'s
+includes TLL's Dissmann selection, which it reuses. Every row records the
+structure it used and its recovery of the true one: the share of true edges
+found in each tree and overall, and whether it is the truth.
 
 ### The summaries
 
@@ -193,14 +263,19 @@ This writes, in `results/e3_vdc/`:
   timings), `e3a_by_case.csv`, `e3a_table1_reproduction.csv`,
   `e3a_independence_probe.csv` and `e3a_vdc_crosscheck.csv`;
 - `e3b_long.csv` and `e3b_summary.csv`;
-- `e3c_long.csv`, `e3c_summary.csv` and `e3c_crosscheck.csv`;
+- `e3c_long.csv`, `e3c_summary.csv` and `e3c_crosscheck.csv`, with a
+  `design` column (`decay` rows first);
 - `e3_code_check.csv` and `e3_summary.json`.
 
 ### The GPU arms
 
-TabPFN v2.5, v3 and v3.5, TabICL and Nori run once the GPU is free, naming
-the main-text TabPFN version, which is the only GPU arm at `n_train` =
-10,000:
+The GPU arms run once the GPU is free, naming the main-text TabPFN version:
+- E3a at `n_train` = 2,000 runs every in-context learner (TabPFN v2.5, v3
+  and v3.5, TabICL, Nori);
+- E3a at `n_train` = 10,000 runs the main TabPFN version only;
+- E3b runs every in-context learner;
+- E3c, both designs, runs the main TabPFN version only (TabICL and Nori
+  were dropped there for cost).
 
 ```bash
 uv run --no-sync python scripts/paper/e3/e3_run_gpu_arms.py --main-tabpfn <v2.5|v3|v3.5>
@@ -216,10 +291,18 @@ resuming from its per-fit files, then the collector. It removes
 - **Code.** Every row records, in `code_sha256`, the sha256 of the script
   that wrote it and of every E3 module that process had loaded. Rows that
   used the VDC server record the server's map too, in
-  `vdc_server_code_sha256`. `e3_collect.py` compares each hash with the file
-  on disk, and the Table 1 runner's recorded `source_sha256` with the
-  runner, writing `e3_code_check.csv`. It exits with an error if any row
-  came from other code (`--allow-stale` overrides). Each row also records
+  `vdc_server_code_sha256`. `e3_collect.py` looks each hash up in the
+  module's git history and on disk, and checks the Table 1 runner's recorded
+  `source_sha256` against the runner. It writes `e3_code_check.csv`, whose
+  `version` column names the commit holding each version that ran. It exits
+  with an error if any row came from code that is neither committed nor on
+  disk (`--allow-stale` overrides).
+- **Which commit each hash belongs to.** Some rows ran an earlier commit's
+  version of a module, while the module has since changed in comments only.
+  For example, rows produced before the American-spelling fix ran
+  `e3_vdc_pair.py` and `e3a_vdc_side.py` as committed in `7000ae3`. Those
+  rows stay valid and regenerable from that commit, and
+  `e3_code_check.csv` maps every recorded hash to its commit. Each row also records
   the npcc commit, whether `src/npcc/core` was modified (`npcc_core_dirty`),
   and the modified paths elsewhere.
 - **Data.** Samples are drawn with pyvinecopulib 0.7.5 from fixed seeds, as
@@ -231,6 +314,30 @@ resuming from its per-fit files, then the collector. It removes
   (135 fits, identical KL). The GPU arms may differ in the last digits.
 - **Timings.** Indicative only: the machine was shared with E1, and every
   row carries the one-minute load average. Clean timings are E6's job.
+
+## Non-finite densities
+
+pyvinecopulib's compiled vine returns a NaN density at a few test points of
+some fits. These points are not floored: a floor at 1e-300 would add about
+690 nats per point and turn a numerical fault into what looks like a
+modeling failure. Instead, `e3_collect.py` scores every arm of an E3c or
+E3d cell on the *common set*: the test points where every arm's density and
+the truth's are finite, the same set for all arms within a design, d and
+seed. `n_excluded` sits beside each row's own `n_nonfinite`.
+
+Each arm's per-point log-densities stay on disk:
+- E3c's npcc-side arrays hold the floor value where the density was NaN;
+  the collector checks, in `mask_exact`, that those points are exactly the
+  row's `n_nonfinite`;
+- E3d's arrays and VDC's own-vine arrays are raw, NaN kept.
+
+So the common set can always be recomputed. `e3_nan_diagnostics.py` writes
+`results/e3_vdc/e3_nan_diagnostics.csv`, listing every row with a NaN and,
+for the compiled vines, the tree and pair copula it comes from:
+
+```bash
+OMP_NUM_THREADS=1 taskset -c 14 nice -n 10 uv run --no-sync python scripts/paper/e3/e3_nan_diagnostics.py
+```
 
 ## Deviations from VDC's published settings
 
@@ -248,7 +355,13 @@ resuming from its per-fit files, then the collector. It removes
   parametric selection. The pooled TLL arm is TLL itself: on the pooled
   sign-flip sample the runner's BIC choice picks independence every time
   (TLL's effective degrees of freedom are about 130). Those rows are kept,
-  labelled `excluded`.
+  labeled `excluded`.
+- **E3c, designs.** The plan's "edges from the nine E3a cases" is the
+  `strong` design: every tree as dependent as the first. There, sequential
+  estimation loses most of its likelihood in the deep trees for every method,
+  even well-specified parametric selection. The paper lead made the `decay`
+  design primary (tau times 0.7 per tree, same orders, edge cases and
+  seeds), and kept `strong` as a stress variant.
 - **E3c.** VDC runs as a pyvinecopulib 1.0 pair copula, from PR #217's
   integration adapted to 1.0's API, so that every arm shares one vine
   machinery. VDC's own vine on the true order is kept as a reference. VDC's

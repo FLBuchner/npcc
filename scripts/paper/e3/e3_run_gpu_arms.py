@@ -4,19 +4,25 @@
 Launch only once the GPU is free of E1, naming the main-text TabPFN version:
 
     cd /home/thibault/npcc
-    uv run --no-sync python scripts/paper/e3/e3_run_gpu_arms.py --main-tabpfn v3.5
+    uv run --no-sync python scripts/paper/e3/e3_run_gpu_arms.py --main-tabpfn v3
 
 It runs, in order and each in its own process:
 
-1. E3a at ``n_train = 2000`` for every GPU estimator, and at ``n_train =
-   10000`` for the main-text TabPFN version only (the paper lead's scope);
+1. E3a at ``n_train = 2000`` for every GPU estimator (TabPFN v2.5, v3 and
+   v3.5, TabICL, Nori), and at ``n_train = 10000`` for the main-text TabPFN
+   version only;
 2. E3b for every GPU estimator;
-3. E3c for every GPU estimator, one vine fit per arm and cell;
+3. E3c, both designs (``decay`` in ``results/e3_vdc/e3c_decay/``, ``strong``
+   in ``results/e3_vdc/e3c/``), for the main-text TabPFN version only (the
+   paper lead dropped TabICL and Nori here for cost), one vine fit per cell;
 4. ``e3_collect.py``.
 
-Logs go to ``results/e3_vdc/e3{a,b,c}_npcc_gpu.log``. Every fit script
-resumes from its per-fit files, so an interrupted run continues when this is
-run again; ``--stages`` runs a subset.
+That scope is the paper lead's. ``--stages`` runs a subset, and two drivers
+may share the GPU, each with its own ``--stages`` (and ``--designs`` for E3c)
+and ``--no-collect``; the collector then runs once at the end. Logs go to
+``results/e3_vdc/e3{a,b,c}_npcc_gpu.log`` (``e3c_decay_npcc_gpu.log`` for the
+decay design). Every fit script resumes from its per-fit files, so an
+interrupted run continues when this is run again.
 
 ``PYTORCH_CUDA_ALLOC_CONF`` is removed from the children's environment: on
 this machine's vGPU an ``expandable_segments`` setting makes every CUDA
@@ -34,7 +40,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = Path("/home/thibault/npcc")
 RESULTS = REPO / "results" / "e3_vdc"
-sys.path.insert(0, str(HERE))
 
 
 def run(script: str, *args: str, log: Path | None = None) -> None:
@@ -55,9 +60,11 @@ def main() -> None:
                  help="the main-text TabPFN version, the only GPU arm at n_train = 10000")
   p.add_argument("--stages", nargs="+", default=["e3a", "e3b", "e3c"],
                  choices=["e3a", "e3b", "e3c"])
+  p.add_argument("--designs", nargs="+", default=["decay", "strong"], choices=["decay", "strong"],
+                 help="E3c designs to run")
+  p.add_argument("--no-collect", action="store_true",
+                 help="skip the collector, e.g. when two drivers share the GPU")
   a = p.parse_args()
-
-  import e3_npcc
 
   gpu = ("--device", "cuda", "--gpu-is-free")
   main_tabpfn = f"tabpfn-quantiles-{a.main_tabpfn}-logit"
@@ -68,9 +75,14 @@ def main() -> None:
   if "e3b" in a.stages:
     run("e3b_npcc_fit.py", "--estimators", "gpu", *gpu, log=RESULTS / "e3b_npcc_gpu.log")
   if "e3c" in a.stages:
-    arms = [f"npcc-{label}" for label in e3_npcc.GPU_ESTIMATORS]
-    run("e3c_npcc_fit.py", "--arms", *arms, *gpu, log=RESULTS / "e3c_npcc_gpu.log")
-  run("e3_collect.py")
+    arms = [f"npcc-{main_tabpfn}"]
+    folders = {"decay": ("e3c_decay", "e3c_decay_npcc_gpu.log"), "strong": ("e3c", "e3c_npcc_gpu.log")}
+    for design in a.designs:
+      folder, log = folders[design]
+      run("e3c_npcc_fit.py", "--folder", str(RESULTS / folder), "--arms", *arms, *gpu,
+          log=RESULTS / log)
+  if not a.no_collect:
+    run("e3_collect.py")
 
 
 if __name__ == "__main__":

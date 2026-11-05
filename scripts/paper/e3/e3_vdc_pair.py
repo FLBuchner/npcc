@@ -15,10 +15,10 @@ on ``(i + 0.5) / 64``. It is replicate-padded to ``66 x 66`` on
 ``[0, 0.5/64, ..., 63.5/64, 1]`` and handed to ``TorchTllBicop`` with
 ``norm_maxiter=0``, which keeps the values exactly as given. VDC's Sinkhorn
 projection already made the midpoint-rule margins uniform, and on the padded
-grid the trapezoidal integral equals that midpoint sum at every cell centre,
+grid the trapezoidal integral equals that midpoint sum at every cell center,
 so the margins stay uniform and the h-functions agree with VDC's own
-``(cumsum - density / 2) / m`` at the cell centres. The density is bilinear
-between cell centres and constant beyond the outer ones -- what VDC's own
+``(cumsum - density / 2) / m`` at the cell centers. The density is bilinear
+between cell centers and constant beyond the outer ones -- what VDC's own
 lookup (``HFuncLookup(use_spline=False).pdf``) does, so the two densities
 should agree everywhere in the open square.
 
@@ -132,14 +132,14 @@ def replicate_pad(density: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
   """Pad a cell-centred ``(m, m)`` density to ``(m + 2, m + 2)`` on ``[0, 1]``.
 
   The grid points are ``[0, 0.5/m, 1.5/m, ..., (m - 0.5)/m, 1]`` and the new
-  first and last rows and columns repeat their neighbours (PR #217's
+  first and last rows and columns repeat their neighbors (PR #217's
   ``_replicate_pad``).
   """
   if density.ndim != 2 or density.shape[0] != density.shape[1]:
     raise ValueError(f"density must be square and 2-D; got {tuple(density.shape)}")
   m = density.shape[0]
-  centres = (torch.arange(m, dtype=density.dtype, device=density.device) + 0.5) / m
-  points = torch.cat([centres.new_zeros(1), centres, centres.new_ones(1)])
+  centers = (torch.arange(m, dtype=density.dtype, device=density.device) + 0.5) / m
+  points = torch.cat([centers.new_zeros(1), centers, centers.new_ones(1)])
   padded = torch.nn.functional.pad(density[None, None], (1, 1, 1, 1), mode="replicate")[0, 0]
   return points, padded
 

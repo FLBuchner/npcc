@@ -39,8 +39,10 @@ structure=..., controls=...)``) on the same structure:
   ``npcc-catboost-logit`` in the shared vine.
 
 **Metrics.** Held-out log-likelihood = mean over the 20,000 test points of
-``log c_hat`` (floored at ``log 1e-300``), and excess NLL = mean of ``log
-c_true - log c_hat``, the KL estimate. ``fit_s`` is the vine fit along the
+``log c_hat`` (floored at ``log 1e-300``; a density the arm cannot evaluate,
+NaN, counts as the floor and is counted in ``n_nonfinite``), and excess NLL =
+mean of ``log c_true - log c_hat``, the KL estimate; ``excess_nll_finite`` is
+the same over the finite points only. ``fit_s`` is the vine fit along the
 fixed structure (every edge's pair fit and the h-functions passed between
 trees; nothing is selected); ``inference_s`` the log-density at the test
 points. For ``vdc``, the seconds VDC's estimates took inside the server
@@ -233,8 +235,15 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
           extra = {"estimator": est.label, "estimator_id": est.estimator_id,
                    "backend": est.backend, "transform": est.transform,
                    "model_version": e3_npcc.ESTIMATORS[est.label][1]}
-        n_nonfinite = int(np.sum(~np.isfinite(lp)))
-        lp = np.maximum(lp, np.log(common.LOG_FLOOR))
+        # A density the arm cannot evaluate (NaN) counts as the floor, as a
+        # density below it does: every arm is then scored on all the test
+        # points. `np.maximum` alone would pass a NaN through. The excess
+        # over the finite points is recorded beside it.
+        finite = np.isfinite(lp)
+        n_nonfinite = int(np.sum(~finite))
+        excess_finite = float(np.mean((logtrue - lp)[finite])) if finite.any() else None
+        floor = np.log(common.LOG_FLOOR)
+        lp = np.where(np.isnan(lp) | (lp < floor), floor, lp)
         ratio = logtrue - lp
         row = {
           "experiment": "E3c", "d": d, "seed": seed, "n_train": int(tr.shape[0]),
@@ -244,7 +253,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
           "test_loglik": float(np.mean(lp)), "true_loglik": float(np.mean(logtrue)),
           "excess_nll": float(np.mean(ratio)),
           "excess_nll_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
-          "n_nonfinite": n_nonfinite,
+          "n_nonfinite": n_nonfinite, "excess_nll_finite": excess_finite,
           "fit_s": fit_s, "inference_s": inference_s, **extra,
           "structure_selection": "none (true structure given)",
           "torch_threads": torch.get_num_threads(),

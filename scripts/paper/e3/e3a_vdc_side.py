@@ -31,7 +31,7 @@ sizes:
 - ``vdc``: the released ``vdc-denoiser-m64-v1`` with the runner's call
   (m = 64, 30 projection iterations, ``grid /= grid.mean()``) and its own
   lookup, ``HFuncLookup(use_spline=False).pdf`` -- bilinear between cell
-  centres, constant beyond the outer ones. The Sinkhorn projection is timed
+  centers, constant beyond the outer ones. The Sinkhorn projection is timed
   separately by wrapping ``vdc.models.projection.copula_project``, which
   VDC's estimator imports at call time;
 - ``tll``: pyvinecopulib's TLL itself, with pyvinecopulib's defaults

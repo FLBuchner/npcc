@@ -33,7 +33,8 @@ edge_batch_size=256)``, one torch thread, CPU). The comparison's arms run in
 one vine machinery on the NPCC side (``e3c_npcc_fit.py``); this row shows how
 far VDC's own vine machinery is from that.
 
-**Outputs** (under ``--out``): ``samples.npz`` (per cell: train, test, true
+**Outputs** (under ``--out``): ``vdc_own_cells/d<d>_s<seed>.npy`` (the
+reference's raw test-point log-densities), ``samples.npz`` (per cell: train, test, true
 log-density, order, structure matrix, the edge-to-case table),
 ``vdc_side.csv`` (one row per cell) and ``vdc_side.json`` (provenance and the
 design).
@@ -129,6 +130,11 @@ def main() -> None:
       lp = np.asarray(model.logpdf(te), dtype=np.float64)
       inference_s = time.perf_counter() - t0
       ratio = logtrue - lp
+      # Raw per-point log-densities (NaN kept), so the collector can score
+      # every arm on the test points where all arms are finite.
+      cells = a.out / "vdc_own_cells"
+      cells.mkdir(exist_ok=True)
+      np.save(cells / f"d{d}_s{seed}.npy", lp.astype(np.float32))
       rows.append({
         "experiment": "E3c", "d": d, "seed": seed, "n_train": N_TRAIN, "n_test": N_TEST,
         "n_edges": d * (d - 1) // 2, "order": json.dumps(order),

@@ -49,16 +49,28 @@ whatever per-method CSVs exist and lists the E1 estimators still missing.
 - ``e3b_summary.csv``: per case and method, the mean test NLL and excess
   NLL over the ten seeds with standard errors (``sd / sqrt(n_seeds)``), the
   paired difference to VDC, and timings;
-- ``e3c_long.csv`` / ``e3c_summary.csv``: per d and method, the mean held-out
+- ``e3c_long.csv`` / ``e3c_summary.csv``: per design (``decay``, the primary
+  one, from ``results/e3_vdc/e3c_decay/``; ``strong``, the stress variant,
+  from ``results/e3_vdc/e3c/``), d and method, the mean held-out
   log-likelihood and excess NLL over the five seeds with standard errors,
   the paired difference to VDC (in the same vine machinery), timings, and
   VDC's server and inter-process seconds;
-- ``e3c_crosscheck.csv``: the shared vine's TLL against pyvinecopulib's
-  compiled TLL vine, and its NPCC against ``npcc.RosenblattVinecop``;
+- E3c and E3d are scored on the *common set*: the test points where every
+  arm of a cell and the truth are finite (``common_set``; the paper lead's
+  rule for the few NaN densities pyvinecopulib's compiled vine returns), with
+  ``n_excluded`` per row;
+- ``e3c_crosscheck.csv``: per design, the shared vine's TLL against
+  pyvinecopulib's compiled TLL vine, and its NPCC against
+  ``npcc.RosenblattVinecop``;
+- in ``results/e3d_unknown_structure/``: ``e3d_long.csv`` and
+  ``e3d_summary.csv`` (per design, d and arm: excess NLL with its standard
+  error over the ten seeds, the paired gap to each competitor that selects a
+  structure -- VDC, TLL, parametric -- the structure recovery and timings);
 - ``e3_code_check.csv``: every code hash the rows recorded (``code_sha256``,
-  and ``vdc_server_code_sha256`` where VDC's server ran) against the file on
-  disk, plus the Table 1 runner's ``source_sha256``. The collector exits
-  with an error if any row came from other code, unless ``--allow-stale``;
+  and ``vdc_server_code_sha256`` where VDC's server ran) against committed
+  code and the file on disk, with the commit holding each version, plus the
+  Table 1 runner's ``source_sha256``. The collector exits with an error if
+  any row came from code that is neither, unless ``--allow-stale``;
 - ``e3_summary.json``: all of the summaries with the shared provenance and
   the code check.
 """
@@ -66,6 +78,7 @@ whatever per-method CSVs exist and lists the E1 estimators still missing.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -105,6 +118,14 @@ ROLES = {
                                                 "(checks the shared machinery's NPCC)"),
     "vdc_own": ("reference", "VDC's own vine implementation (D-vine on the true order, UCI-runner settings)"),
   },
+  "E3d": {
+    "vdc": ("arm", "VDC, its own pipeline and structure choice (greedy D-vine)"),
+    "parametric": ("arm", "parametric family selection (BIC), Dissmann structure selection"),
+    "tll": ("arm", "TLL (pyvinecopulib defaults), Dissmann structure selection"),
+    "parametric_true": ("reference", "parametric family selection (BIC) on the true structure"),
+    "tll_true": ("reference", "TLL on the true structure"),
+    "vdc_true": ("reference", "VDC pair copulas in the shared vine on the true structure"),
+  },
   "E3b": {
     "oracle": ("oracle", "oracle: true conditional density c(u2, u3 | u1)"),
     "pooled_oracle": ("reference", "true pooled density (C_low + C_high) / 2: the floor for any "
@@ -122,6 +143,15 @@ ROLES = {
 }
 
 
+E3D_VARIANTS = {
+  "random-ns": ("arm", "random structure, non-simplified"),
+  "tll-ns": ("arm", "TLL's selected structure, non-simplified"),
+  "random-s": ("ablation", "random structure, simplified (ablation)"),
+  "true-s": ("reference", "true structure, simplified (reference)"),
+}
+E3D_RESULTS = common.NPCC_REPO / "results" / "e3d_unknown_structure"
+
+
 def role_of(experiment: str, method: str) -> tuple[str, str]:
   """The ``(role, method_label)`` of ``method`` in ``experiment``."""
   if method.startswith("npcc-"):
@@ -132,6 +162,10 @@ def role_of(experiment: str, method: str) -> tuple[str, str]:
       return "arm", f"NPCC ({rest}), conditional on U1"
     if experiment == "E3c":
       return "arm", f"NPCC ({rest}) in the shared pyvinecopulib 1.0 vine"
+    if experiment == "E3d":
+      for variant, (role, text) in E3D_VARIANTS.items():
+        if rest.endswith(f"-{variant}"):
+          return role, f"NPCC ({rest[:-len(variant) - 1]}), {text}"
     return "arm", f"NPCC ({rest})"
   try:
     return ROLES[experiment][method]
@@ -293,15 +327,89 @@ def vdc_crosscheck(long: pd.DataFrame) -> pd.DataFrame | None:
   return out
 
 
+#: The primary E3c design first, then the stress variant.
+DESIGN_ORDER = {"decay": 0, "strong": 1}
+
+
+FLOOR = float(np.log(common.LOG_FLOOR))
+
+
+def common_set(long: pd.DataFrame, experiment: str, folders: dict[str, Path]) -> pd.DataFrame:
+  """Score every arm on the test points where all arms and the truth are finite.
+
+  The paper lead's rule for densities an arm cannot evaluate: no floor, and
+  one common set of test points per design, d and seed, shared by every arm
+  of that cell. Each arm's per-point log-densities are read from its
+  ``.npy``. E3c's npcc-side arrays hold the floor where the density was NaN,
+  so there a point at the floor counts as non-finite, and ``mask_exact``
+  says whether those points are exactly the row's ``n_nonfinite``. E3d's
+  arrays and VDC's own-vine arrays are raw, NaN kept.
+
+  Returns
+  -------
+  DataFrame
+      ``long`` with ``excess_nll``, ``test_loglik`` and ``true_loglik``
+      recomputed on the common set (the row's own values kept as
+      ``*_row``), and ``n_excluded``, ``n_common``, ``n_bad_arm`` and
+      ``mask_exact`` per row.
+  """
+  out = long.copy()
+  for col in ("excess_nll", "test_loglik", "true_loglik"):
+    out[f"{col}_row"] = out[col]
+  for col in ("n_excluded", "n_common", "n_bad_arm"):
+    out[col] = pd.Series(pd.NA, index=out.index, dtype="Int64")
+  out["mask_exact"] = pd.Series(pd.NA, index=out.index, dtype="boolean")
+  for (design, d, seed), group in out.groupby(["design", "d", "seed"], sort=False):
+    folder = folders[design]
+    if experiment == "E3c":
+      key, logtrue_key = f"d{d}_s{seed}", f"d{d}_s{seed}_logtrue"
+    else:
+      key = f"{design}_d{d}_s{seed}"
+      logtrue_key = f"{key}_logtrue"
+    with np.load(folder / "samples.npz") as f:
+      logtrue = f[logtrue_key].astype(np.float64)
+    arrays, bad = {}, {}
+    for idx, row in group.iterrows():
+      method = row["method"]
+      if experiment == "E3c":
+        path = (folder / "vdc_own_cells" / f"{key}.npy" if method == "vdc_own"
+                else folder / "npcc_cells" / method / f"{key}.npy")
+        floored = method != "vdc_own"
+      else:
+        path = folder / "cells" / method / f"{key}.npy"
+        floored = False
+      if not path.exists():
+        raise FileNotFoundError(f"{path} must exist to score {method} on the common set")
+      lp = np.load(path).astype(np.float64)
+      b = ~np.isfinite(lp)
+      if floored:
+        b |= lp <= FLOOR + 1e-3
+      arrays[idx], bad[idx] = lp, b
+      out.loc[idx, "n_bad_arm"] = int(b.sum())
+      nonfinite = row.get("n_nonfinite")
+      out.loc[idx, "mask_exact"] = bool(int(b.sum()) == int(0 if pd.isna(nonfinite) else nonfinite))
+    keep = np.isfinite(logtrue)
+    for b in bad.values():
+      keep &= ~b
+    for idx, lp in arrays.items():
+      test = np.maximum(lp[keep], FLOOR)
+      out.loc[idx, "excess_nll"] = float(np.mean(logtrue[keep] - test))
+      out.loc[idx, "test_loglik"] = float(np.mean(test))
+      out.loc[idx, "true_loglik"] = float(np.mean(logtrue[keep]))
+      out.loc[idx, "n_excluded"] = int((~keep).sum())
+      out.loc[idx, "n_common"] = int(keep.sum())
+  return out
+
+
 def summarize_e3c(long: pd.DataFrame) -> pd.DataFrame:
   shown = long[long["role"].isin(["arm", "reference"])]
-  vdc = shown[shown["method"] == "vdc"].set_index(["d", "seed"])["excess_nll"]
+  vdc = shown[shown["method"] == "vdc"].set_index(["design", "d", "seed"])["excess_nll"]
   rows = []
-  for (d, method), group in shown.groupby(["d", "method"], sort=False):
+  for (design, d, method), group in shown.groupby(["design", "d", "method"], sort=False):
     n = len(group)
-    paired = (group.set_index(["d", "seed"])["excess_nll"] - vdc).dropna()
+    paired = (group.set_index(["design", "d", "seed"])["excess_nll"] - vdc).dropna()
     row = {
-      "d": d, "method": method, "role": group["role"].iloc[0],
+      "design": design, "d": d, "method": method, "role": group["role"].iloc[0],
       "method_label": group["method_label"].iloc[0],
       "vine_machinery": group["vine_machinery"].iloc[0],
       "n_seeds": n, "seeds": ";".join(str(s) for s in sorted(group["seed"].unique())),
@@ -314,8 +422,14 @@ def summarize_e3c(long: pd.DataFrame) -> pd.DataFrame:
       "se_excess_nll": float(group["excess_nll"].std(ddof=1) / np.sqrt(n)),
       "mean_excess_minus_vdc": float(paired.mean()) if len(paired) else None,
       "se_excess_minus_vdc": float(paired.std(ddof=1) / np.sqrt(len(paired))) if len(paired) > 1 else None,
+      "n_nonfinite_total": int(pd.to_numeric(group.get("n_nonfinite"), errors="coerce").fillna(0).sum()),
+      "n_excluded_total": int(pd.to_numeric(group.get("n_excluded"), errors="coerce").fillna(0).sum()),
+      "share_excluded": float(pd.to_numeric(group.get("n_excluded"), errors="coerce").fillna(0).sum()
+                              / (n * int(group["n_test"].iloc[0]))),
       **timing(group),
     }
+    if "excess_nll_finite" in group and group["excess_nll_finite"].notna().any():
+      row["mean_excess_nll_finite"] = float(pd.to_numeric(group["excess_nll_finite"]).mean())
     for col in ("vdc_server_s", "vdc_projection_s", "vdc_ipc_s"):
       if col in group and group[col].notna().any():
         row[f"{col}_mean"] = float(group[col].mean())
@@ -329,7 +443,9 @@ def summarize_e3c(long: pd.DataFrame) -> pd.DataFrame:
   order = {"arm": 0, "reference": 1}
   out = pd.DataFrame(rows)
   out["_order"] = out["role"].map(order)
-  return out.sort_values(["d", "_order", "mean_excess_nll"], kind="stable").drop(columns="_order")
+  out["_design"] = out["design"].map(DESIGN_ORDER)
+  return out.sort_values(["_design", "d", "_order", "mean_excess_nll"],
+                         kind="stable").drop(columns=["_order", "_design"])
 
 
 def e3c_crosscheck(long: pd.DataFrame) -> pd.DataFrame | None:
@@ -337,14 +453,55 @@ def e3c_crosscheck(long: pd.DataFrame) -> pd.DataFrame | None:
   pairs = [("tll", "tll_cpp"), ("npcc-catboost-logit", "rosenblatt-vinecop-check")]
   rows = []
   for a_m, b_m in pairs:
-    a = long[long["method"] == a_m].set_index(["d", "seed"])["test_loglik"]
-    b = long[long["method"] == b_m].set_index(["d", "seed"])["test_loglik"]
+    a = long[long["method"] == a_m].set_index(["design", "d", "seed"])["test_loglik"]
+    b = long[long["method"] == b_m].set_index(["design", "d", "seed"])["test_loglik"]
     both = pd.concat([a.rename("shared"), b.rename("reference")], axis=1).dropna()
-    for (d, seed), r in both.iterrows():
-      rows.append({"shared_arm": a_m, "check_arm": b_m, "d": d, "seed": seed,
+    for (design, d, seed), r in both.iterrows():
+      rows.append({"design": design, "shared_arm": a_m, "check_arm": b_m, "d": d, "seed": seed,
                    "loglik_shared": r["shared"], "loglik_check": r["reference"],
                    "abs_gap": abs(r["shared"] - r["reference"])})
   return pd.DataFrame(rows) if rows else None
+
+
+def summarize_e3d(long: pd.DataFrame) -> pd.DataFrame:
+  """Per design, d and arm: excess NLL, paired gaps to each selecting competitor, recovery."""
+  rows = []
+  competitors = ("vdc", "tll", "parametric")
+  base = {c: long[long["method"] == c].set_index(["design", "d", "seed"])["excess_nll"] for c in competitors}
+  for (design, d, method), group in long.groupby(["design", "d", "method"], sort=False):
+    n = len(group)
+    row = {
+      "design": design, "d": d, "method": method, "role": group["role"].iloc[0],
+      "method_label": group["method_label"].iloc[0], "structure": group["structure"].iloc[0],
+      "n_seeds": n, "seeds": ";".join(str(s) for s in sorted(group["seed"].unique())),
+      "n_train": int(group["n_train"].iloc[0]), "n_test": int(group["n_test"].iloc[0]),
+      "mean_true_loglik": float(group["true_loglik"].mean()),
+      "mean_test_loglik": float(group["test_loglik"].mean()),
+      "mean_excess_nll": float(group["excess_nll"].mean()),
+      "se_excess_nll": float(group["excess_nll"].std(ddof=1) / np.sqrt(n)),
+    }
+    indexed = group.set_index(["design", "d", "seed"])["excess_nll"]
+    for c in competitors:
+      paired = (indexed - base[c]).dropna()
+      if len(paired) > 1 and c != method:
+        row[f"mean_excess_minus_{c}"] = float(paired.mean())
+        row[f"se_excess_minus_{c}"] = float(paired.std(ddof=1) / np.sqrt(len(paired)))
+    row.update({
+      "mean_recovery_tree1": float(group["recovery_tree1"].mean()),
+      "mean_recovery_overall": float(group["recovery_overall"].mean()),
+      "share_structure_equals_truth": float(group["structure_equals_truth"].astype(str).eq("True").mean()),
+      "n_nonfinite_total": int(pd.to_numeric(group.get("n_nonfinite"), errors="coerce").fillna(0).sum()),
+      "n_excluded_total": int(pd.to_numeric(group.get("n_excluded"), errors="coerce").fillna(0).sum()),
+      "share_excluded": float(pd.to_numeric(group.get("n_excluded"), errors="coerce").fillna(0).sum()
+                              / (n * int(group["n_test"].iloc[0]))),
+      **timing(group), **provenance_of(group),
+    })
+    rows.append(row)
+  order = {"arm": 0, "ablation": 1, "reference": 2}
+  out = pd.DataFrame(rows)
+  out["_o"] = out["role"].map(order)
+  out["_d"] = out["design"].map(DESIGN_ORDER)
+  return out.sort_values(["_d", "d", "_o", "mean_excess_nll"], kind="stable").drop(columns=["_o", "_d"])
 
 
 def summarize_e3b(long: pd.DataFrame) -> pd.DataFrame:
@@ -382,22 +539,48 @@ def missing(long: pd.DataFrame) -> list[str]:
   return [label for label in e3_npcc.ESTIMATORS if f"npcc-{label}" not in have]
 
 
+def committed_versions(name: str) -> dict[str, str]:
+  """sha256 -> the first commit holding that version of an E3 module."""
+  rel = f"scripts/paper/e3/{name}"
+  repo = str(common.NPCC_REPO)
+  commits = subprocess.run(["git", "-C", repo, "rev-list", "--all", "--reverse", "--", rel],
+                           check=True, capture_output=True, text=True).stdout.split()
+  versions: dict[str, str] = {}
+  for commit in commits:
+    blob = subprocess.run(["git", "-C", repo, "show", f"{commit}:{rel}"],
+                          capture_output=True, check=False).stdout
+    if blob:
+      versions.setdefault(hashlib.sha256(blob).hexdigest(), commit[:7])
+  return versions
+
+
 def code_check(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
-  """Every recorded code hash against the file on disk.
+  """Every recorded code hash against committed code and the file on disk.
 
   One row per experiment, hash column (the writing process's ``code_sha256``,
-  or the VDC server's ``vdc_server_code_sha256``) and module; ``match`` says
-  whether the module on disk is the one that ran. A row with no recorded
-  hashes at all is reported under the module ``<none recorded>``.
+  or the VDC server's ``vdc_server_code_sha256``) and module. ``match`` says
+  whether the version that ran is committed or is the file on disk, and
+  ``version`` names it: the first commit holding it (a later comment-only
+  edit, such as a spelling fix, leaves rows made with the earlier commit
+  valid and regenerable), or ``working tree`` while not yet committed. A row
+  with no recorded hashes at all is reported under ``<none recorded>``.
   """
   rows = []
   on_disk: dict[str, str] = {}
+  history: dict[str, dict[str, str]] = {}
 
   def current(name: str) -> str | None:
     if name not in on_disk:
       path = common.E3_DIR / name
       on_disk[name] = common.sha256_file(path) if path.exists() else None
     return on_disk[name]
+
+  def version(name: str, sha: str) -> str | None:
+    if name not in history:
+      history[name] = committed_versions(name)
+    if sha in history[name]:
+      return history[name][sha]
+    return "working tree" if sha == current(name) else None
 
   for experiment, long in frames.items():
     missing_hash = long["code_sha256"].isna() if "code_sha256" in long else pd.Series(True, index=long.index)
@@ -411,15 +594,16 @@ def code_check(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
         continue
       for value, group in long.dropna(subset=[col]).groupby(col):
         for name, sha in json.loads(value).items():
-          now = current(name)
+          found = version(name, sha)
           rows.append({"experiment": experiment, "source": col, "module": name, "recorded": sha,
-                       "on_disk": now, "match": sha == now, "n_rows": len(group),
-                       "methods": ";".join(sorted(group["method"].unique()))})
+                       "on_disk": current(name), "version": found, "match": found is not None,
+                       "n_rows": len(group), "methods": ";".join(sorted(group["method"].unique()))})
   runner = json.loads((common.RESULTS / "table1_rerun_cpu" / "results.json").read_text())
   now = common.sha256_file(common.TABLE1_RUNNER)
   rows.append({"experiment": "table1_rerun_cpu", "source": "runner source_sha256",
                "module": common.TABLE1_RUNNER.name, "recorded": runner["source_sha256"],
-               "on_disk": now, "match": runner["source_sha256"] == now, "n_rows": len(runner["rows"]),
+               "on_disk": now, "version": f"VDC {common.VDC_TAG}" if runner["source_sha256"] == now else None,
+               "match": runner["source_sha256"] == now, "n_rows": len(runner["rows"]),
                "methods": "vdc;tll;parametric"})
   return pd.DataFrame(rows)
 
@@ -489,9 +673,20 @@ def main() -> None:
                    "device"]].to_string(index=False))
       print("E3b pending:", missing(b_long))
 
-  c_dir = out / "e3c"
-  if (c_dir / "vdc_side.csv").exists():
-    c_long = read_long(c_dir, "E3c")
+  c_frames = []
+  for c_dir in (out / "e3c_decay", out / "e3c"):
+    if not (c_dir / "vdc_side.csv").exists():
+      continue
+    # The strong design's VDC side predates the key, so it reads as "strong".
+    design = json.loads((c_dir / "vdc_side.json").read_text()).get("design", "strong")
+    frame = read_long(c_dir, "E3c")
+    if "design" in frame and frame["design"].notna().any() and (frame["design"].dropna() != design).any():
+      raise ValueError(f"{c_dir} rows must all be design {design!r}")
+    frame["design"] = design
+    c_frames.append(frame)
+  if c_frames:
+    c_long = pd.concat(c_frames, ignore_index=True, sort=False)
+    c_long = common_set(c_long, "E3c", {"strong": out / "e3c", "decay": out / "e3c_decay"})
     frames["E3c"] = c_long
     c_long.to_csv(out / "e3c_long.csv", index=False)
     c_sum = summarize_e3c(c_long)
@@ -500,13 +695,28 @@ def main() -> None:
     c_check = e3c_crosscheck(c_long)
     if c_check is not None:
       c_check.to_csv(out / "e3c_crosscheck.csv", index=False)
-      report["e3c"]["crosscheck_max_abs_gap"] = c_check.groupby("check_arm")["abs_gap"].max().to_dict()
+      report["e3c"]["crosscheck_max_abs_gap"] = {
+        f"{design}/{arm}": gap for (design, arm), gap in
+        c_check.groupby(["design", "check_arm"])["abs_gap"].max().items()}
     with show():
-      print(c_sum[["d", "method", "role", "n_seeds", "mean_test_loglik", "mean_true_loglik",
+      print(c_sum[["design", "d", "method", "role", "n_seeds", "mean_test_loglik", "mean_true_loglik",
                    "mean_excess_nll", "se_excess_nll", "mean_excess_minus_vdc",
                    "fit_s_median", "inference_s_median"]].to_string(index=False))
       if c_check is not None:
-        print(c_check.groupby("check_arm")["abs_gap"].max())
+        print(c_check.groupby(["design", "check_arm"])["abs_gap"].max())
+
+  if (E3D_RESULTS / "vdc_side.csv").exists():
+    d_long = common_set(read_long(E3D_RESULTS, "E3d"), "E3d",
+                        {"decay": E3D_RESULTS, "strong": E3D_RESULTS})
+    frames["E3d"] = d_long
+    d_long.to_csv(E3D_RESULTS / "e3d_long.csv", index=False)
+    d_sum = summarize_e3d(d_long)
+    d_sum.to_csv(E3D_RESULTS / "e3d_summary.csv", index=False)
+    report["e3d"] = {"summary": d_sum.to_dict("records")}
+    with show():
+      print(d_sum[["design", "d", "method", "role", "n_seeds", "mean_excess_nll", "se_excess_nll",
+                   "mean_recovery_tree1", "mean_recovery_overall", "fit_s_median",
+                   "inference_s_median"]].to_string(index=False))
 
   check = code_check(frames)
   check.to_csv(out / "e3_code_check.csv", index=False)
@@ -516,11 +726,11 @@ def main() -> None:
     "modules_checked": sorted(set(check["module"])),
     "mismatches": stale.to_dict("records"),
   }
-  print("code check:", "every row was produced by the code on disk" if stale.empty
+  print("code check:", "every row was produced by committed code or the code on disk" if stale.empty
         else f"{len(stale)} stale or unfingerprinted entries (see e3_code_check.csv)")
   common.write_json(json.loads(pd.Series(report).to_json()), out / "e3_summary.json")
   if not stale.empty and not args.allow_stale:
-    sys.exit("e3_collect: rows must come from the code on disk; rerun the stale arms "
+    sys.exit("e3_collect: rows must come from committed code or the code on disk; rerun the stale arms "
              "or pass --allow-stale")
 
 
