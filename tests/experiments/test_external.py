@@ -302,6 +302,10 @@ def test_an_external_estimator_has_no_fit_controls(stand_in: Path) -> None:
       "study_r_smooth.toml",
       [("boostcopula-smooth", "external_r", "boostCopula")],
     ),
+    (
+      "study_r_smooth_cv.toml",
+      [("boostcopula-smooth-cv", "external_r", "boostCopula")],
+    ),
   ],
 )
 def test_the_r_studies_score_the_bivariate_study_cells(
