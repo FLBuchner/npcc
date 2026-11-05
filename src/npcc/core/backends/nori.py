@@ -6,7 +6,7 @@ conditional quantiles directly. It predicts every requested probability level
 in a single call.
 
 PDF, CDF, inverse CDF, and grid evaluation are inherited from
-:class:`QuantileTableDistribution1D`.
+:class:`~npcc.core.margin.ConditionalMargin`.
 
 Nori uses a NumPy-facing estimator interface. Input conversion is isolated
 inside this adapter, and predictions are immediately converted back to torch
@@ -17,25 +17,23 @@ This backend requires the ``synthefy-nori`` optional dependency.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 import torch
 from synthefy_nori import NoriRegressor
 
-from npcc.core.margin_quantile_table import (
-  QuantileTableConfig,
-  QuantileTableDistribution1D,
-)
+from npcc.core._transform import Transform
+from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 
 
-class NoriBackend(QuantileTableDistribution1D):
+class NoriBackend(ConditionalMargin):
   """Conditional margin using Synthefy Nori's quantile output.
 
   Parameters
   ----------
   transform
     Response transformation inherited from
-    :class:`QuantileTableDistribution1D`.
+    :class:`~npcc.core.margin.ConditionalMargin`.
   quantile_table_config
     Quantile-table reconstruction configuration.
   eps
@@ -54,7 +52,7 @@ class NoriBackend(QuantileTableDistribution1D):
   def __init__(
     self,
     *,
-    transform: Literal["identity", "logit", "probit"] = "logit",
+    transform: Transform = "logit",
     quantile_table_config: QuantileTableConfig | None = None,
     eps: float = 1e-6,
     device: str | torch.device | None = None,
@@ -106,7 +104,10 @@ class NoriBackend(QuantileTableDistribution1D):
     x: torch.Tensor,
     alphas: torch.Tensor,
   ) -> torch.Tensor:
-    """Predict one quantile table for a chunk of conditioning rows."""
+    """Predict one quantile table for a chunk of conditioning rows.
+
+    Nori documents ``(len(quantiles), n_samples)``, so the levels lead.
+    """
     assert self.model_ is not None
 
     x_host = (
@@ -124,28 +125,4 @@ class NoriBackend(QuantileTableDistribution1D):
       quantiles=alphas.tolist(),
     )
 
-    quantiles = torch.as_tensor(
-      predicted,
-      dtype=x.dtype,
-      device=x.device,
-    )
-
-    n_chunk = x.shape[0]
-    n_alphas = alphas.shape[0]
-    expected_shape = (n_chunk, n_alphas)
-    nori_shape = (n_alphas, n_chunk)
-
-    if quantiles.ndim == 1:
-      quantiles = quantiles.reshape(nori_shape)
-
-    if quantiles.shape == nori_shape:
-      return quantiles.T
-
-    if quantiles.shape == expected_shape:
-      return quantiles
-
-    raise RuntimeError(
-      "Unexpected Nori quantile output shape. "
-      f"Got {quantiles.shape}, expected {nori_shape} "
-      f"or {expected_shape}."
-    )
+    return self._quantile_rows(predicted, x, levels_first=True)

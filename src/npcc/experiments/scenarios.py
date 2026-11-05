@@ -4,8 +4,8 @@ A *scenario* pairs a copula family with a Kendall's-tau regime and defines:
 
 - :func:`sample` — draw a training set ``(u, v[, x])`` from the known copula;
 - :func:`eval_grid` — the fixed points at which estimates are scored;
-- :func:`ground_truth` — the exact ``pdf`` / ``cdf`` / ``hfunc1`` / ``hfunc2``
-  on that evaluation grid.
+- :func:`ground_truth` — the exact ``pdf`` / ``hfunc1`` / ``hfunc2`` on that
+  evaluation grid.
 
 Everything is backed by :mod:`pyvinecopulib`: ``Bicop.tau_to_parameters`` maps a
 target Kendall's tau to the family's parameter, and ``Bicop.hinv1`` provides a
@@ -40,7 +40,7 @@ FAMILIES: dict[str, pv.BicopFamily] = {
   "joe": pv.BicopFamily.joe,
 }
 
-QUANTITIES: tuple[str, ...] = ("pdf", "cdf", "hfunc1", "hfunc2")
+QUANTITIES: tuple[str, ...] = ("pdf", "hfunc1", "hfunc2")
 
 # Conditional evaluation grid defaults.
 CONDITIONAL_UV_GRID_N: int = 20
@@ -117,6 +117,11 @@ class EvalGrid:
   u_axis: torch.Tensor
   v_axis: torch.Tensor
 
+  @property
+  def uv(self) -> torch.Tensor:
+    """The evaluation points as one ``(n_points, 2)`` copula argument."""
+    return torch.column_stack([self.u_flat, self.v_flat])
+
 
 def interior_axis(n: int) -> torch.Tensor:
   """Midpoint grid on ``(0, 1)`` with boundaries excluded."""
@@ -132,15 +137,24 @@ def conditional_x_axis(n: int) -> torch.Tensor:
   return torch.linspace(X_MIN, X_MAX, n, dtype=torch.float64)
 
 
-def _bicop(family: pv.BicopFamily, tau: float) -> pv.Bicop:
-  """Bicop of ``family`` whose Kendall's tau equals ``tau``."""
+def bicop(family: pv.BicopFamily, tau: float) -> pv.Bicop:
+  """Return the ``family`` copula whose Kendall's tau equals ``tau``.
+
+  Parameters
+  ----------
+  family : pyvinecopulib.BicopFamily
+      A one-parameter family.
+  tau : float
+      The target Kendall's tau.
+
+  Returns
+  -------
+  pyvinecopulib.Bicop
+      The copula.
+  """
   proto = pv.Bicop(family=family)
   params = proto.tau_to_parameters(float(tau))
   return pv.Bicop(family=family, parameters=params)
-
-
-def is_conditional(scenario: str) -> bool:
-  return TAU_SCENARIOS[scenario].conditional
 
 
 def eval_grid(
@@ -150,24 +164,11 @@ def eval_grid(
   conditional_x_grid_n: int = CONDITIONAL_X_GRID_N,
 ) -> EvalGrid:
   """Fixed evaluation grid for ``scenario`` (conditional or unconditional)."""
-  spec = TAU_SCENARIOS[scenario]
-  if spec.conditional:
-    u_axis = interior_axis(conditional_uv_grid_n)
-    v_axis = interior_axis(conditional_uv_grid_n)
-    uu, vv = torch.meshgrid(u_axis, v_axis, indexing="ij")
-    u_pairs = uu.reshape(-1)
-    v_pairs = vv.reshape(-1)
-    x_axis = conditional_x_axis(conditional_x_grid_n)
-    n_pairs = u_pairs.shape[0]
-    return EvalGrid(
-      u_flat=u_pairs.repeat_interleave(conditional_x_grid_n),
-      v_flat=v_pairs.repeat_interleave(conditional_x_grid_n),
-      x_flat=x_axis.repeat(n_pairs).reshape(-1, 1),
-      shape=(n_pairs, conditional_x_grid_n),
-      conditional=True,
-      x_axis=x_axis,
-      u_axis=u_axis,
-      v_axis=v_axis,
+  if TAU_SCENARIOS[scenario].conditional:
+    return eval_grid_for_x(
+      scenario,
+      conditional_x_axis(conditional_x_grid_n),
+      conditional_uv_grid_n=conditional_uv_grid_n,
     )
   axis = interior_axis(UV_GRID_N)
   uu, vv = torch.meshgrid(axis, axis, indexing="ij")
@@ -210,14 +211,25 @@ def eval_grid_for_x(
   )
 
 
+def _quantities(cop: pv.Bicop, uv: torch.Tensor) -> dict[str, torch.Tensor]:
+  """Every scored quantity of ``cop`` at the points ``uv``."""
+  uv_host = uv.contiguous().numpy()
+  return {
+    "pdf": torch.from_numpy(cop.pdf(uv_host)),
+    "hfunc1": torch.from_numpy(cop.hfunc1(uv_host)),
+    "hfunc2": torch.from_numpy(cop.hfunc2(uv_host)),
+  }
+
+
 def ground_truth(
   family: str, scenario: str, grid: EvalGrid | None = None
 ) -> dict[str, torch.Tensor]:
-  """Exact pdf/cdf/hfunc1/hfunc2 on :func:`eval_grid` for ``(family, scenario)``.
+  """Exact pdf/hfunc1/hfunc2 on ``grid`` for ``(family, scenario)``.
 
-  Conditional: one ``Bicop`` per evaluation ``x`` (50), evaluated at the 25 uv
-  pairs, stacked into ``(n_pairs, n_x)`` grids.  Unconditional: a single
-  ``Bicop`` evaluated on the flattened uv grid.
+  Conditional: one ``Bicop`` per evaluation ``x``, evaluated at every uv pair,
+  stacked into ``(n_pairs, n_x)`` grids.  Unconditional: a single ``Bicop``
+  evaluated on the flattened uv grid. ``grid`` defaults to the scenario's
+  :func:`eval_grid`.
   """
   fam = FAMILIES[family]
   spec = TAU_SCENARIOS[scenario]
@@ -225,29 +237,15 @@ def ground_truth(
 
   if spec.conditional:
     assert spec.tau_of_x is not None and grid.x_axis is not None
-    tau_x = spec.tau_of_x(grid.x_axis)
-    u_grid = grid.u_flat.reshape(grid.shape)
-    v_grid = grid.v_flat.reshape(grid.shape)
-    uv = torch.column_stack([u_grid[:, 0], v_grid[:, 0]])
-    uv_host = uv.numpy()
-    cols: dict[str, list[torch.Tensor]] = {q: [] for q in QUANTITIES}
-    for tau in tau_x:
-      cop = _bicop(fam, float(tau))
-      cols["pdf"].append(torch.from_numpy(cop.pdf(uv_host)))
-      cols["cdf"].append(torch.from_numpy(cop.cdf(uv_host)))
-      cols["hfunc1"].append(torch.from_numpy(cop.hfunc1(uv_host)))
-      cols["hfunc2"].append(torch.from_numpy(cop.hfunc2(uv_host)))
-    return {q: torch.stack(cols[q], dim=1) for q in QUANTITIES}
+    pairs = grid.uv.reshape(*grid.shape, 2)[:, 0]
+    cols = [
+      _quantities(bicop(fam, float(tau)), pairs)
+      for tau in spec.tau_of_x(grid.x_axis)
+    ]
+    return {q: torch.stack([c[q] for c in cols], dim=1) for q in QUANTITIES}
 
   assert spec.tau is not None
-  cop = _bicop(fam, spec.tau)
-  uv = torch.column_stack([grid.u_flat, grid.v_flat]).numpy()
-  return {
-    "pdf": torch.from_numpy(cop.pdf(uv)),
-    "cdf": torch.from_numpy(cop.cdf(uv)),
-    "hfunc1": torch.from_numpy(cop.hfunc1(uv)),
-    "hfunc2": torch.from_numpy(cop.hfunc2(uv)),
-  }
+  return _quantities(bicop(fam, spec.tau), grid.uv)
 
 
 def sample(
@@ -265,7 +263,7 @@ def sample(
 
   if not spec.conditional:
     assert spec.tau is not None
-    cop = _bicop(fam, spec.tau)
+    cop = bicop(fam, spec.tau)
     seeds = torch.randint(1, 2**31 - 1, (3,), generator=generator).tolist()
     uv = torch.from_numpy(
       cop.sample(n, seeds=[int(s) for s in seeds]),
@@ -284,9 +282,10 @@ def sample(
   v = torch.empty(n, dtype=torch.float64)
   # ponytail: one Bicop per row because tau(x) is continuous and pyvinecopulib
   # does not vectorize hinv1 over row-specific parameters. O(n) Bicop builds is
-  # negligible next to the TabPFN fit; if it ever bites, group by rounded tau.
+  # negligible next to an estimator's fit; if it ever bites, group by rounded
+  # tau.
   for i in range(n):
-    cop = _bicop(fam, float(tau_x[i]))
+    cop = bicop(fam, float(tau_x[i]))
     uv_host = torch.stack([u[i], w[i]]).reshape(1, 2).numpy()
     v[i] = float(cop.hinv1(uv_host).item())
   return u, v, x.reshape(-1, 1)

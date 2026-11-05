@@ -60,7 +60,7 @@ def test_ground_truth_conditional_matches_pyvinecopulib() -> None:
 
   assert torch.unique(uv, dim=0).shape[0] == grid.shape[0]
   for x_idx, tau in enumerate(tau_x):
-    cop = scenarios._bicop(scenarios.FAMILIES[family], float(tau))
+    cop = scenarios.bicop(scenarios.FAMILIES[family], float(tau))
     expected_pdf = torch.from_numpy(cop.pdf(uv.numpy()))
     torch.testing.assert_close(
       truth["pdf"][:, x_idx], expected_pdf, atol=1e-10, rtol=1e-7
@@ -72,10 +72,9 @@ def test_ground_truth_unconditional_matches_pyvinecopulib() -> None:
   family, scenario = "frank", "uncond70"
   truth = scenarios.ground_truth(family, scenario)
   grid = scenarios.eval_grid(scenario)
-  cop = scenarios._bicop(scenarios.FAMILIES[family], 0.70)
-  uv = torch.column_stack([grid.u_flat, grid.v_flat])
-  expected = torch.from_numpy(cop.cdf(uv.numpy()))
-  torch.testing.assert_close(truth["cdf"], expected, atol=1e-10, rtol=1e-7)
+  cop = scenarios.bicop(scenarios.FAMILIES[family], 0.70)
+  expected = torch.from_numpy(cop.hfunc1(grid.uv.numpy()))
+  torch.testing.assert_close(truth["hfunc1"], expected, atol=1e-10, rtol=1e-7)
   assert truth["pdf"].shape == grid.shape
 
 
@@ -100,11 +99,6 @@ def test_sample_unconditional_recovers_target_tau(family: str) -> None:
   assert x is None
   tau = float(pv.utils.wdm(u.numpy(), v.numpy(), "tau"))
   assert abs(tau - 0.70) < 0.06
-
-
-def test_is_conditional_flags() -> None:
-  assert scenarios.is_conditional("linear") is True
-  assert scenarios.is_conditional("uncond70") is False
 
 
 def test_eval_grid_for_x_shapes_and_tiling() -> None:

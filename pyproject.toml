@@ -25,11 +25,9 @@ experiments = ["pandas>=2.0", "matplotlib>=3.7", "pyarrow>=15.0,<24.0"]
 # Optional non-TabPFN inner backends (mirrors ScoringBench's
 # requirements_models.txt).  Each is selected via
 # RosenblattBicop(backend=...).
-gbm = ["scikit-learn>=1.3"]
 ngboost = ["ngboost>=0.5.0"]
 tabicl = ["tabicl>=2.0"]
-catboost = ["catboost>=1.2"]
-xgboost = ["xgboost>=2.0"]
+lightgbm = ["lightgbm>=4.0"]
 pytabkit = ["pytabkit>=1.5"]
 # Synthefy Nori. Pinned to the tvatter fork (see [tool.uv.sources]) until the
 # torch-uncapping fix lands on upstream PyPI; then this becomes a plain pin.
@@ -37,11 +35,9 @@ nori = ["synthefy-nori>=0.12"]
 # Umbrella of every non-TabPFN backend, installable alongside a CUDA flavor,
 # e.g. `uv sync --extra cu130 --extra backends`.
 backends = [
-  "scikit-learn>=1.3",
   "ngboost>=0.5.0",
   "tabicl>=2.0",
-  "catboost>=1.2",
-  "xgboost>=2.0",
+  "lightgbm>=4.0",
   "pytabkit>=1.5",
   "synthefy-nori>=0.12",
 ]
@@ -204,16 +200,13 @@ respect-type-ignore-comments = false
 # The optional inner backends. Each is behind an extra, so a checkout synced
 # with only `--extra cpu` must still type-check -- which is what CI does.
 allowed-unresolved-imports = [
-  "catboost",
+  "lightgbm",
   "ngboost",
   "ngboost.distns",
   "ngboost.learners",
   "pytabkit",
-  "sklearn",
-  "sklearn.ensemble",
   "synthefy_nori",
   "tabicl",
-  "xgboost",
 ]
 # The same optional backends, for the case where they *are* installed: none
 # ships type information, so their members resolve to nothing and every
@@ -221,14 +214,12 @@ allowed-unresolved-imports = [
 # the accurate description -- the adapter that wraps each one is where the shape
 # is checked, at run time, by its tests.
 replace-imports-with-any = [
-  "catboost",
   "ngboost",
   "ngboost.distns",
   "ngboost.learners",
   "pytabkit",
   "synthefy_nori",
   "tabicl",
-  "xgboost",
 ]
 
 [tool.pytest.ini_options]
@@ -275,7 +266,7 @@ dictionary = ".codespell-prose.txt,-"
 ignore-multiline-regex = "codespell:ignore-begin *\\n.*?codespell:ignore-end *\\n"
 # `*.pdf` skips the committed figure assets: codespell decodes their binary
 # content into spurious "typos".
-skip = ".claude/*,*/htmlcov/*,*/results/*,*/catboost_info/*,*/uv.lock,*/.venv/*,*.codespell-prose.txt,*test_prose.py,*.pdf"
+skip = ".claude/*,*/htmlcov/*,*/results/*,*/uv.lock,*/.venv/*,*.codespell-prose.txt,*test_prose.py,*.pdf"
 # Domain vocabulary and author names read as misspellings. `aas` is Kjersti
 # Aas; `nd` and `iff` are mathematical.
 ignore-words-list = "aas,nd,iff,ans,te,strat"

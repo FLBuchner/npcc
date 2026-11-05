@@ -113,9 +113,10 @@ forward passes. It changes throughput and not results.
 process pool. Two consequences:
 
 - It overlaps well where the work releases the GIL — the TabPFN and other
-  torch backends — and poorly where it does not, which is the sklearn-style
-  CPU backends in the grid (`ngboost`, `xgboost`, `pytabkit`). A many-core box
-  does *not* translate into linear speedup for those.
+  torch backends, and LightGBM's boosters — and poorly where it does not,
+  which is the sklearn-style CPU backends in the grid (`ngboost`,
+  `pytabkit`). A many-core box does *not* translate into linear speedup for
+  those, nor for `lightgbm`, which already fits its levels on every core.
 - All workers share one CUDA context and one device, so raise it for GPU
   occupancy rather than expecting it to scale with core count. Each concurrent
   cell also holds its own fitted backends, so memory grows with it.

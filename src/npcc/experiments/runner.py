@@ -10,15 +10,11 @@ conditioning values. This keeps KL as a fixed-``x`` copula-density metric.
 
 from __future__ import annotations
 
-import gc
 import hashlib
 import json
 import logging
-import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal, cast
+from typing import Any, NamedTuple, cast
 
 import pandas as pd
 import torch
@@ -26,130 +22,27 @@ import torch
 from npcc.core.bicop import RosenblattBicop
 from npcc.core.controls import FitControlsRosenblattBicop
 from npcc.experiments import metrics, scenarios
+from npcc.experiments._study import (
+  SUMMARY_STATS,
+  Rows,
+  derive_seed,
+  memory_usage,
+  release_gpu,
+  reset_gpu_peaks,
+  summarize,
+  summary_stats,
+  sweep,
+)
 from npcc.experiments.config import Cell, EstimatorSpec, GridConfig, RunConfig
 from npcc.experiments.scenarios import EvalGrid
 
 logger = logging.getLogger(__name__)
 
-_EPS: float = 1e-12
-
-# Avoid pandas/pyarrow Arrow-string inference crashes seen on Windows while
-# building and sorting the large mixed string/numeric experiment tables.
-pd.options.future.infer_string = False
+TABLES: tuple[str, ...] = ("metrics", "quantities", "diagnostics", "runtime")
 
 
 def _norm_label(norm: int | None) -> str:
   return "none" if norm is None else str(norm)
-
-
-def _data_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
-  """Build a DataFrame without pandas' optional Arrow-backed string inference."""
-  with pd.option_context("future.infer_string", False):
-    return pd.DataFrame(rows)
-
-
-def _system_mem_mb() -> tuple[float, float]:
-  """(process RSS, system MemAvailable) in MiB from ``/proc``; (0, 0) if absent.
-
-  A headless run that wedges the whole box over SSH is usually system-RAM
-  exhaustion, not a GPU OOM — logging MemAvailable per estimator exposes a
-  creeping leak before it kills the machine.
-  """
-  rss = avail = 0.0
-  try:
-    for line in Path("/proc/self/status").read_text().splitlines():
-      if line.startswith("VmRSS:"):
-        rss = float(line.split()[1]) / 1024.0
-        break
-    for line in Path("/proc/meminfo").read_text().splitlines():
-      if line.startswith("MemAvailable:"):
-        avail = float(line.split()[1]) / 1024.0
-        break
-  except OSError:
-    pass
-  return rss, avail
-
-
-def _release_gpu() -> None:
-  """Release cached CUDA memory between estimators/cells (no-op on CPU).
-
-  The estimator loop reassigns ``model`` each iteration; without this, freed
-  backend modules linger in the CUDA caching allocator and peak memory creeps
-  up across the 20 estimators/cell (foundation-model and fine-tune backends
-  are the heaviest). ``empty_cache`` only returns *unused* blocks to the
-  driver, so it is safe under any worker count.
-  """
-  gc.collect()
-  if torch.cuda.is_available():
-    torch.cuda.empty_cache()
-
-
-def _write_table(df: pd.DataFrame, base: Path, fmt: str) -> None:
-  """Write ``df`` to ``base`` with the ``.parquet``/``.csv`` suffix for ``fmt``."""
-  if fmt == "parquet":
-    df.to_parquet(base.with_suffix(".parquet"), index=False)
-  else:
-    df.to_csv(base.with_suffix(".csv"), index=False)
-
-
-def _read_table(base: Path, fmt: str) -> pd.DataFrame:
-  """Read a table written by :func:`_write_table`; empty frame if absent."""
-  path = base.with_suffix(".parquet" if fmt == "parquet" else ".csv")
-  if not path.exists():
-    return _data_frame([])
-  with pd.option_context("future.infer_string", False):
-    if fmt == "parquet":
-      return pd.read_parquet(path)
-    return pd.read_csv(path)
-
-
-_SHARD_TABLES: tuple[str, ...] = (
-  "metrics",
-  "quantities",
-  "diagnostics",
-  "runtime",
-)
-_CellRows = tuple[
-  list[dict[str, Any]],
-  list[dict[str, Any]],
-  list[dict[str, Any]],
-  list[dict[str, Any]],
-]
-
-
-def _cell_key(cell: Cell) -> str:
-  return f"{cell.family}__{cell.tau_scenario}__n{cell.n}__rep{cell.rep}"
-
-
-def _cell_done(cells_root: Path, cell: Cell) -> bool:
-  """True once a cell's shard is fully written (the ``DONE`` marker is last)."""
-  return (cells_root / _cell_key(cell) / "DONE").exists()
-
-
-def _write_cell_shard(
-  cells_root: Path, cell: Cell, rows: _CellRows, fmt: str
-) -> None:
-  """Persist one cell's four row-lists, then a ``DONE`` marker written last.
-
-  The marker-last ordering makes the shard atomic: a crash mid-write leaves no
-  ``DONE``, so :func:`_cell_done` reports the cell as pending and it recomputes.
-  """
-  cell_dir = cells_root / _cell_key(cell)
-  cell_dir.mkdir(parents=True, exist_ok=True)
-  for name, cell_rows in zip(_SHARD_TABLES, rows, strict=True):
-    if cell_rows:
-      _write_table(_data_frame(cell_rows), cell_dir / name, fmt)
-  (cell_dir / "DONE").write_text("")
-
-
-def _read_cell_shard(cells_root: Path, cell: Cell, fmt: str) -> _CellRows:
-  """Read back a cell's four row-lists written by :func:`_write_cell_shard`."""
-  cell_dir = cells_root / _cell_key(cell)
-  tables = [
-    _read_table(cell_dir / name, fmt).to_dict("records")
-    for name in _SHARD_TABLES
-  ]
-  return tables[0], tables[1], tables[2], tables[3]
 
 
 def _regime_fingerprint(grid: GridConfig) -> dict[str, list[float] | float]:
@@ -199,33 +92,10 @@ def _grid_signature(grid: GridConfig, run: RunConfig) -> str:
     "enable_tau_diagnostics": grid.enable_tau_diagnostics,
     "tau_diagnostic_n": grid.tau_diagnostic_n,
     "base_seed": run.base_seed,
-    "estimators": sorted(s.estimator_id for s in grid.estimator_specs()),
+    "estimators": sorted(s.estimator_id for s in grid.estimators),
   }
   encoded = json.dumps(payload, sort_keys=True).encode()
   return hashlib.sha256(encoded).hexdigest()
-
-
-def _guard_manifest(
-  out: Path, grid: GridConfig, run: RunConfig, resume: bool
-) -> None:
-  """Write (or, on resume, verify) the grid-signature manifest."""
-  path = out / "manifest.json"
-  signature = _grid_signature(grid, run)
-  if resume and path.exists():
-    previous = json.loads(path.read_text()).get("signature")
-    if previous != signature:
-      raise ValueError(
-        "Grid signature changed since the checkpoint in this output "
-        "directory; use a fresh --out or drop --resume."
-      )
-  path.write_text(json.dumps({"signature": signature}, indent=2))
-
-
-def _nan_quantile(s: pd.Series, q: float) -> float:
-  values = torch.tensor(s.to_numpy(), dtype=torch.float64)
-  if torch.isnan(values).all():
-    return float("nan")
-  return float(torch.nanquantile(values, q))
 
 
 def _cell_seed(base_seed: int, cell: Cell) -> int:
@@ -248,16 +118,6 @@ def _base_row(cell: Cell, est: EstimatorSpec, seed: int) -> dict[str, object]:
     "transform": est.transform,
     "backend": est.backend,
   }
-
-
-def _estimator_seed(cell_seed: int, estimator_id: str) -> int:
-  """Deterministic per-estimator seed mixing the cell seed and estimator id.
-
-  Decorrelates stochastic fits across estimators without feeding back into
-  ``estimator_id`` (which must stay a pure function of the config).
-  """
-  digest = hashlib.sha256(f"{cell_seed}:{estimator_id}".encode()).digest()
-  return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
 
 def _tau_values(scenario: str, x_axis: torch.Tensor | None) -> torch.Tensor:
@@ -283,35 +143,28 @@ def _metric_rows_for_quantity(
   include_kl: bool,
 ) -> list[dict[str, object]]:
   """Metric rows after averaging pointwise errors over uv at fixed x."""
-  base = _base_row(cell, est, seed)
-  base.update({"normalize": normalize, "quantity": quantity})
+  base = {
+    **_base_row(cell, est, seed),
+    "normalize": normalize,
+    "quantity": quantity,
+  }
 
   if grid.conditional:
     assert grid.x_axis is not None
     tau_x = _tau_values(cell.tau_scenario, grid.x_axis)
     truth_grid = truth.reshape(grid.shape)
     pred_grid = pred.reshape(grid.shape)
-    rows: list[dict[str, object]] = []
-    for x_idx, x_val in enumerate(grid.x_axis):
-      y_true = truth_grid[:, x_idx]
-      y_hat = pred_grid[:, x_idx]
-      err = y_hat - y_true
-      kl = float("nan")
-      if include_kl:
-        y_true_pos = y_true.clamp_min(_EPS)
-        y_hat_pos = y_hat.clamp_min(_EPS)
-        kl = float((y_true_pos * torch.log(y_true_pos / y_hat_pos)).mean())
-      rows.append(
-        {
-          **base,
-          "x": float(x_val),
-          "tau_true": float(tau_x[x_idx]),
-          "IAE": float(err.abs().mean()),
-          "ISE": float(err.square().mean()),
-          "KL": kl,
-        }
-      )
-    return rows
+    return [
+      {
+        **base,
+        "x": float(x_val),
+        "tau_true": float(tau_x[x_idx]),
+        **metrics.grid_metrics(
+          truth_grid[:, x_idx], pred_grid[:, x_idx], include_kl=include_kl
+        ),
+      }
+      for x_idx, x_val in enumerate(grid.x_axis)
+    ]
 
   stats = metrics.grid_metrics(truth, pred, include_kl=include_kl)
   tau = _tau_values(cell.tau_scenario, None)[0]
@@ -489,136 +342,132 @@ def _diagnostic_rows(
   return rows, tau_time
 
 
+class _Surface(NamedTuple):
+  """The grid surfaces are stored on, with its truth and tau labels."""
+
+  grid: EvalGrid
+  truth: dict[str, torch.Tensor]
+  target_tau: torch.Tensor
+  tau_true: torch.Tensor
+
+
+def _surface(cell: Cell, grid: GridConfig) -> _Surface | None:
+  """The cell's surface grid, if its family stores surfaces and it has an x."""
+  if (
+    cell.family not in grid.surface_families
+    or not scenarios.TAU_SCENARIOS[cell.tau_scenario].conditional
+  ):
+    return None
+
+  rows = _surface_x_rows(cell.tau_scenario, grid.surface_tau_levels)
+  surface_grid = scenarios.eval_grid_for_x(
+    cell.tau_scenario,
+    torch.tensor([row["x"] for row in rows], dtype=torch.float64),
+    conditional_uv_grid_n=grid.conditional_uv_grid_n,
+  )
+  return _Surface(
+    grid=surface_grid,
+    truth=scenarios.ground_truth(cell.family, cell.tau_scenario, surface_grid),
+    target_tau=torch.tensor(
+      [row["target_tau"] for row in rows], dtype=torch.float64
+    ),
+    tau_true=torch.tensor(
+      [row["tau_true"] for row in rows], dtype=torch.float64
+    ),
+  )
+
+
+def _predict(
+  model: RosenblattBicop, grid: EvalGrid, normalize: list[int | None]
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, float]]:
+  """Every scored quantity on ``grid``, on the host, and what each took.
+
+  The density is evaluated in one call for the whole ``normalize`` axis: the
+  inner-backend passes a projection needs are the same for every iteration
+  count, so sweeping ``sinkhorn_iters`` and calling ``pdf`` per value would
+  re-pay for them.
+
+  Returns
+  -------
+  hfuncs : dict
+      ``hfunc1`` and ``hfunc2``.
+  pdfs : dict
+      The density under each ``normalize`` entry, keyed by its label.
+  timings : dict
+      Seconds per ``hfunc1``, ``hfunc2`` and ``pdf``.
+  """
+  hfuncs: dict[str, torch.Tensor] = {}
+  timings: dict[str, float] = {}
+  for name, fn in (("hfunc1", model.hfunc1), ("hfunc2", model.hfunc2)):
+    t0 = perf_counter()
+    hfuncs[name] = fn(grid.uv, x=grid.x_flat).cpu()
+    timings[name] = perf_counter() - t0
+
+  t0 = perf_counter()
+  densities = model.pdf_by_projection(
+    grid.uv, x=grid.x_flat, sinkhorn_iters=normalize
+  )
+  timings["pdf"] = perf_counter() - t0
+  pdfs = {_norm_label(norm): densities[norm].cpu() for norm in normalize}
+  return hfuncs, pdfs, timings
+
+
 def summarize_one_cell(
   cell: Cell,
-  estimator_specs: list[EstimatorSpec],
-  normalize: list[int | None],
+  grid: GridConfig,
   *,
   base_seed: int,
   device: str | None,
-  projection_grid_size: int,
-  batch_size: int | None,
-  conditional_uv_grid_n: int,
-  conditional_x_grid_n: int,
-  surface_tau_levels: list[float],
-  surface_families: list[str],
-  enable_tau_diagnostics: bool,
-  tau_diagnostic_n: int,
-) -> tuple[
-  list[dict[str, Any]],
-  list[dict[str, Any]],
-  list[dict[str, Any]],
-  list[dict[str, Any]],
-]:
+) -> tuple[Rows, Rows, Rows, Rows]:
   """Fit every estimator on one cell's data and return all output rows."""
   seed = _cell_seed(base_seed, cell)
 
   u, v, x = scenarios.sample(cell.family, cell.tau_scenario, cell.n, seed)
   metric_grid = scenarios.eval_grid(
     cell.tau_scenario,
-    conditional_uv_grid_n=conditional_uv_grid_n,
-    conditional_x_grid_n=conditional_x_grid_n,
+    conditional_uv_grid_n=grid.conditional_uv_grid_n,
+    conditional_x_grid_n=grid.conditional_x_grid_n,
   )
   truth = scenarios.ground_truth(cell.family, cell.tau_scenario, metric_grid)
+  surface = _surface(cell, grid)
 
-  surface_rows = _surface_x_rows(cell.tau_scenario, surface_tau_levels)
-  surface_grid: EvalGrid | None = None
-  surface_truth: dict[str, torch.Tensor] | None = None
-  surface_target_tau: torch.Tensor | None = None
-  surface_tau_true: torch.Tensor | None = None
-  if cell.family in surface_families and metric_grid.conditional:
-    surface_x = torch.tensor(
-      [row["x"] for row in surface_rows], dtype=torch.float64
-    )
-    surface_grid = scenarios.eval_grid_for_x(
-      cell.tau_scenario, surface_x, conditional_uv_grid_n=conditional_uv_grid_n
-    )
-    surface_truth = scenarios.ground_truth(
-      cell.family, cell.tau_scenario, surface_grid
-    )
-    surface_target_tau = torch.tensor(
-      [row["target_tau"] for row in surface_rows], dtype=torch.float64
-    )
-    surface_tau_true = torch.tensor(
-      [row["tau_true"] for row in surface_rows], dtype=torch.float64
-    )
+  metric_rows: Rows = []
+  quantity_rows: Rows = []
+  diagnostic_rows: Rows = []
+  runtime_rows: Rows = []
 
-  metric_rows: list[dict[str, Any]] = []
-  quantity_rows: list[dict[str, Any]] = []
-  diagnostic_rows: list[dict[str, Any]] = []
-  runtime_rows: list[dict[str, Any]] = []
-
-  for est in estimator_specs:
+  for est in grid.estimators:
     t0 = perf_counter()
-    est_seed = _estimator_seed(seed, est.estimator_id)
-    torch.manual_seed(est_seed)
-    if torch.cuda.is_available():
-      torch.cuda.reset_peak_memory_stats()
+    torch.manual_seed(derive_seed(seed, est.estimator_id))
+    reset_gpu_peaks()
     model = RosenblattBicop(
-      FitControlsRosenblattBicop(
-        backend=est.backend,
-        transform=cast("Literal['identity', 'logit', 'probit']", est.transform),
+      est.controls(
+        FitControlsRosenblattBicop,
         device=device,
-        projection_grid_size=projection_grid_size,
-        batch_size=batch_size,
-        backend_kwargs=dict(est.backend_kwargs),
+        projection_grid_size=grid.projection_grid_size,
+        batch_size=grid.batch_size,
       )
     )
     model.fit(torch.column_stack([u, v]), x=x)
     fit_time = perf_counter() - t0
 
     with torch.inference_mode():
-      timings: dict[str, float] = {}
-      single_preds: dict[str, torch.Tensor] = {}
-      for q, fn in (
-        (
-          "hfunc1",
-          lambda m=model: m.hfunc1(
-            torch.column_stack([metric_grid.u_flat, metric_grid.v_flat]),
-            x=metric_grid.x_flat,
-          ),
-        ),
-        (
-          "hfunc2",
-          lambda m=model: m.hfunc2(
-            torch.column_stack([metric_grid.u_flat, metric_grid.v_flat]),
-            x=metric_grid.x_flat,
-          ),
-        ),
-      ):
-        t0 = perf_counter()
-        single_preds[q] = fn().cpu()
-        timings[q] = perf_counter() - t0
-
-      for q in ("hfunc1", "hfunc2"):
+      hfuncs, pdf_by_norm, timings = _predict(
+        model, metric_grid, grid.normalize
+      )
+      for q, pred in hfuncs.items():
         metric_rows += _metric_rows_for_quantity(
           cell,
           est,
           seed,
           q,
           truth[q],
-          single_preds[q],
+          pred,
           metric_grid,
           normalize="none",
           include_kl=False,
         )
-
-      pdf_time = 0.0
-      pdf_by_norm: dict[str, torch.Tensor] = {}
-      # One call for the whole `normalize` axis: the inner-backend passes a
-      # projection needs are the same for every iteration count, so sweeping
-      # `sinkhorn_iters` and calling `pdf` per value would re-pay for them.
-      t0 = perf_counter()
-      densities = model.pdf_by_projection(
-        torch.column_stack([metric_grid.u_flat, metric_grid.v_flat]),
-        x=metric_grid.x_flat,
-        sinkhorn_iters=normalize,
-      )
-      pdf_time += perf_counter() - t0
-      for norm in normalize:
-        norm_label = _norm_label(norm)
-        pdf_hat = densities[norm].cpu()
-        pdf_by_norm[norm_label] = pdf_hat
+      for norm_label, pdf_hat in pdf_by_norm.items():
         metric_rows += _metric_rows_for_quantity(
           cell,
           est,
@@ -638,80 +487,36 @@ def summarize_one_cell(
         model,
         pdf_by_norm,
         metric_grid,
-        enable_tau_diagnostics=enable_tau_diagnostics,
-        tau_diagnostic_n=tau_diagnostic_n,
+        enable_tau_diagnostics=grid.enable_tau_diagnostics,
+        tau_diagnostic_n=grid.tau_diagnostic_n,
       )
       diagnostic_rows += diag_rows
 
       surface_time = 0.0
-      if (
-        surface_grid is not None
-        and surface_truth is not None
-        and surface_target_tau is not None
-        and surface_tau_true is not None
-      ):
-        surface_preds: dict[str, torch.Tensor] = {}
-        for q, fn in (
-          (
-            "hfunc1",
-            lambda m=model: m.hfunc1(
-              torch.column_stack([surface_grid.u_flat, surface_grid.v_flat]),
-              x=surface_grid.x_flat,
-            ),
-          ),
-          (
-            "hfunc2",
-            lambda m=model: m.hfunc2(
-              torch.column_stack([surface_grid.u_flat, surface_grid.v_flat]),
-              x=surface_grid.x_flat,
-            ),
-          ),
-        ):
-          t0 = perf_counter()
-          surface_preds[q] = fn().cpu()
-          surface_time += perf_counter() - t0
+      if surface is not None:
+        s_hfuncs, s_pdfs, s_timings = _predict(
+          model, surface.grid, grid.normalize
+        )
+        surface_time = sum(s_timings.values())
+        surface_preds = [
+          *((q, "none", pred) for q, pred in s_hfuncs.items()),
+          *(("pdf", label, pdf_hat) for label, pdf_hat in s_pdfs.items()),
+        ]
+        for q, norm_label, pred in surface_preds:
           quantity_rows += _quantity_rows(
             cell,
             est,
             seed,
             q,
-            surface_truth[q],
-            surface_preds[q],
-            surface_grid,
-            normalize="none",
-            target_tau=surface_target_tau,
-            tau_true=surface_tau_true,
-          )
-
-        t0 = perf_counter()
-        surface_densities = model.pdf_by_projection(
-          torch.column_stack([surface_grid.u_flat, surface_grid.v_flat]),
-          x=surface_grid.x_flat,
-          sinkhorn_iters=normalize,
-        )
-        surface_time += perf_counter() - t0
-        for norm in normalize:
-          norm_label = _norm_label(norm)
-          pdf_hat = surface_densities[norm].cpu()
-          quantity_rows += _quantity_rows(
-            cell,
-            est,
-            seed,
-            "pdf",
-            surface_truth["pdf"],
-            pdf_hat,
-            surface_grid,
+            surface.truth[q],
+            pred,
+            surface.grid,
             normalize=norm_label,
-            target_tau=surface_target_tau,
-            tau_true=surface_tau_true,
+            target_tau=surface.target_tau,
+            tau_true=surface.tau_true,
           )
 
-    gpu_peak_reserved_mb = 0.0
-    gpu_peak_alloc_mb = 0.0
-    if torch.cuda.is_available():
-      gpu_peak_reserved_mb = torch.cuda.max_memory_reserved() / 1024**2
-      gpu_peak_alloc_mb = torch.cuda.max_memory_allocated() / 1024**2
-    rss_mb, mem_available_mb = _system_mem_mb()
+    memory = memory_usage()
     # Flushed per line, so this survives a hard machine crash and names the
     # last (culprit) estimator with its peak VRAM and the system-RAM headroom.
     logger.info(
@@ -721,44 +526,33 @@ def summarize_one_cell(
       cell.family,
       cell.tau_scenario,
       cell.n,
-      gpu_peak_reserved_mb,
-      gpu_peak_alloc_mb,
-      rss_mb,
-      mem_available_mb,
+      memory["gpu_peak_reserved_mb"],
+      memory["gpu_peak_alloc_mb"],
+      memory["rss_mb"],
+      memory["mem_available_mb"],
     )
 
     runtime_rows.append(
       {
-        "family": cell.family,
-        "tau_scenario": cell.tau_scenario,
-        "n": cell.n,
-        "rep": cell.rep,
-        "seed": seed,
-        "label": est.label,
-        "estimator_id": est.estimator_id,
-        "transform": est.transform,
-        "backend": est.backend,
+        **_base_row(cell, est, seed),
         "fit_time": fit_time,
-        "pdf_time": pdf_time,
+        "pdf_time": timings["pdf"],
         "h1_time": timings["hfunc1"],
         "h2_time": timings["hfunc2"],
         "tau_time": tau_time,
         "surface_time": surface_time,
         "total_estimator_time": (
-          fit_time + pdf_time + tau_time + surface_time + sum(timings.values())
+          fit_time + tau_time + surface_time + sum(timings.values())
         ),
-        "gpu_peak_reserved_mb": gpu_peak_reserved_mb,
-        "gpu_peak_alloc_mb": gpu_peak_alloc_mb,
-        "rss_mb": rss_mb,
-        "mem_available_mb": mem_available_mb,
+        **memory,
       }
     )
 
     # Drop the fitted model (and its GPU tensors) before the next estimator.
     del model
-    _release_gpu()
+    release_gpu()
 
-  _release_gpu()
+  release_gpu()
   return metric_rows, quantity_rows, diagnostic_rows, runtime_rows
 
 
@@ -768,84 +562,28 @@ def run_study(
   """Sweep the full grid; return metric, quantity, diagnostic, runtime tables.
 
   Each cell's rows are checkpointed to ``run.out/cells/<key>/`` as they finish,
-  so an interruption loses at most the in-flight cell. With ``resume=True``,
-  cells already marked done are read back from their shards and skipped; the
-  grid signature is checked first so a changed grid cannot silently reuse them.
+  so an interruption loses at most the cells still running. With
+  ``resume=True``, cells already marked done are read back from their shards
+  and skipped; the grid signature is checked first so a changed grid cannot
+  silently reuse them.
   """
-  cells = grid.cells()
-  specs = grid.estimator_specs()
-  cells_root = run.out / "cells"
-  cells_root.mkdir(parents=True, exist_ok=True)
-  _guard_manifest(run.out, grid, run, resume)
-
-  if run.gpu_mem_fraction is not None and torch.cuda.is_available():
-    torch.cuda.set_per_process_memory_fraction(run.gpu_mem_fraction)
-    logger.info(
-      "Capped CUDA memory to %.2f of total (headroom for the display server)",
-      run.gpu_mem_fraction,
-    )
-
-  done_set = {c for c in cells if resume and _cell_done(cells_root, c)}
-  pending = [c for c in cells if c not in done_set]
   logger.info(
-    "Study: %d cells (%d pending, %d resumed) x %d estimators x %d normalize",
-    len(cells),
-    len(pending),
-    len(done_set),
-    len(specs),
+    "Bivariate study: %d estimators x %d normalize per cell",
+    len(grid.estimators),
     len(grid.normalize),
   )
-
-  metric_rows: list[dict[str, Any]] = []
-  quantity_rows: list[dict[str, Any]] = []
-  diagnostic_rows: list[dict[str, Any]] = []
-  runtime_rows: list[dict[str, Any]] = []
-
-  def _accumulate(rows: _CellRows) -> None:
-    metric_rows.extend(rows[0])
-    quantity_rows.extend(rows[1])
-    diagnostic_rows.extend(rows[2])
-    runtime_rows.extend(rows[3])
-
-  for cell in cells:
-    if cell in done_set:
-      _accumulate(_read_cell_shard(cells_root, cell, run.fmt))
-
-  t0_wall = perf_counter()
-
-  def _do(cell: Cell) -> _CellRows:
-    logger.debug("cell start: %s", cell)
-    out = summarize_one_cell(
-      cell,
-      specs,
-      grid.normalize,
-      base_seed=run.base_seed,
-      device=run.device,
-      projection_grid_size=grid.projection_grid_size,
-      batch_size=grid.batch_size,
-      conditional_uv_grid_n=grid.conditional_uv_grid_n,
-      conditional_x_grid_n=grid.conditional_x_grid_n,
-      surface_tau_levels=grid.surface_tau_levels,
-      surface_families=grid.surface_families,
-      enable_tau_diagnostics=grid.enable_tau_diagnostics,
-      tau_diagnostic_n=grid.tau_diagnostic_n,
-    )
-    _write_cell_shard(cells_root, cell, out, run.fmt)
-    logger.info("cell done: %s", cell)
-    return out
-
-  if run.workers <= 1:
-    for cell in pending:
-      _accumulate(_do(cell))
-  elif pending:
-    max_workers = min(run.workers, len(pending), os.cpu_count() or 1)
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-      futures = [pool.submit(_do, cell) for cell in pending]
-      for fut in as_completed(futures):
-        _accumulate(fut.result())
-
-  wall = perf_counter() - t0_wall
-  logger.info("Study finished in %.1fs", wall)
+  rows, wall = sweep(
+    grid.cells(),
+    lambda cell: summarize_one_cell(
+      cell, grid, base_seed=run.base_seed, device=run.device
+    ),
+    tables=TABLES,
+    run=run,
+    signature=_grid_signature(grid, run),
+    study="bivariate",
+    resume=resume,
+  )
+  metric_rows, quantity_rows, diagnostic_rows, runtime_rows = rows
 
   sort_axes = [
     "family",
@@ -857,34 +595,26 @@ def run_study(
     "rep",
   ]
   metric_df = (
-    _data_frame(metric_rows)
+    pd.DataFrame(metric_rows)
     .sort_values([*sort_axes, "normalize", "quantity", "x"])
     .reset_index(drop=True)
   )
-  quantity_df = _data_frame(quantity_rows)
+  quantity_df = pd.DataFrame(quantity_rows)
   if not quantity_df.empty:
     quantity_df = quantity_df.sort_values(
       [*sort_axes, "normalize", "quantity", "target_tau", "x", "u", "v"]
     ).reset_index(drop=True)
   diagnostic_df = (
-    _data_frame(diagnostic_rows)
+    pd.DataFrame(diagnostic_rows)
     .sort_values([*sort_axes, "normalize", "x"])
     .reset_index(drop=True)
   )
   runtime_df = (
-    _data_frame(runtime_rows).sort_values(sort_axes).reset_index(drop=True)
+    pd.DataFrame(runtime_rows).sort_values(sort_axes).reset_index(drop=True)
   )
   return metric_df, quantity_df, diagnostic_df, runtime_df, wall
 
 
-_SUMMARY_STATS: tuple[str, ...] = (
-  "rep_mean",
-  "rep_std",
-  "rep_median",
-  "rep_p05",
-  "rep_p95",
-  "rep_max",
-)
 _METRIC_NAMES: tuple[str, ...] = ("IAE", "ISE", "KL")
 _ESTIMATOR_AXES: tuple[str, ...] = (
   "family",
@@ -895,47 +625,6 @@ _ESTIMATOR_AXES: tuple[str, ...] = (
   "label",
   "estimator_id",
 )
-
-
-def _summary_stats(
-  df: pd.DataFrame, group: list[str], value_col: str
-) -> pd.DataFrame:
-  stats = df.groupby(group, as_index=False, dropna=False).agg(
-    rep_mean=(value_col, "mean"),
-    rep_std=(value_col, "std"),
-    rep_median=(value_col, "median"),
-    rep_p05=(value_col, lambda s: _nan_quantile(s, 0.05)),
-    rep_p95=(value_col, lambda s: _nan_quantile(s, 0.95)),
-    rep_max=(value_col, "max"),
-  )
-  return cast("pd.DataFrame", stats)
-
-
-def _metric_summary(metric_df: pd.DataFrame, group: list[str]) -> pd.DataFrame:
-  chunks: list[pd.DataFrame] = []
-  for metric in _METRIC_NAMES:
-    g = _summary_stats(metric_df, group, metric)
-    g["metric"] = metric
-    chunks.append(g)
-  return pd.concat(chunks, ignore_index=True)
-
-
-def _summary_over_x(metric_df: pd.DataFrame) -> pd.DataFrame:
-  group = [
-    *_ESTIMATOR_AXES,
-    "normalize",
-    "quantity",
-  ]
-  rep_group = [*group, "rep"]
-  chunks: list[pd.DataFrame] = []
-  for metric in _METRIC_NAMES:
-    averaged = metric_df.groupby(rep_group, as_index=False, dropna=False).agg(
-      value=(metric, "mean")
-    )
-    g = _summary_stats(averaged, group, "value")
-    g["metric"] = metric
-    chunks.append(g)
-  return pd.concat(chunks, ignore_index=True)
 
 
 def _runtime_summary(runtime_df: pd.DataFrame) -> pd.DataFrame:
@@ -968,8 +657,8 @@ def _selection_summary(summary_over_x: pd.DataFrame) -> pd.DataFrame:
 def _tau_summary(diagnostic_df: pd.DataFrame) -> pd.DataFrame:
   tau_df = diagnostic_df[diagnostic_df["normalize"] == "none"]
   group = [*_ESTIMATOR_AXES, "x", "tau_true"]
-  return _summary_stats(tau_df, group, "tau_abs_err").rename(
-    columns={name: f"tau_abs_err_{name}" for name in _SUMMARY_STATS}
+  return summary_stats(tau_df, group, "tau_abs_err").rename(
+    columns={name: f"tau_abs_err_{name}" for name in SUMMARY_STATS}
   )
 
 
@@ -986,7 +675,7 @@ def _projection_summary(
     dropna=False,
   )
   if "none" not in metric_wide.columns.get_level_values(1):
-    return _data_frame([])
+    return pd.DataFrame()
 
   diag_metrics = [
     "row_mean_abs_err",
@@ -1026,7 +715,7 @@ def _projection_summary(
         row[f"{metric}_delta"] = float(proj_val - none_val)
       rows.append(row)
 
-  paired = _data_frame(rows)
+  paired = pd.DataFrame(rows)
   if paired.empty:
     return paired
 
@@ -1040,28 +729,18 @@ def _projection_summary(
   return cast("pd.DataFrame", means)
 
 
-def aggregate_results(
-  metric_df: pd.DataFrame, runtime_df: pd.DataFrame
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-  """Aggregate fixed-x metrics over repetitions and summarize runtimes."""
-  group = [
-    *_ESTIMATOR_AXES,
-    "normalize",
-    "quantity",
-    "x",
-    "tau_true",
-  ]
-  return _metric_summary(metric_df, group), _runtime_summary(runtime_df)
-
-
 def aggregate_study_outputs(
   metric_df: pd.DataFrame,
   diagnostic_df: pd.DataFrame,
   runtime_df: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
   """Build paper-facing study summaries from raw result tables."""
-  summary_by_x, runtime_summary = aggregate_results(metric_df, runtime_df)
-  summary_over_x = _summary_over_x(metric_df)
+  summary_by_x, summary_over_x = summarize(
+    metric_df,
+    _METRIC_NAMES,
+    [*_ESTIMATOR_AXES, "normalize", "quantity"],
+    x_axes=("x", "tau_true"),
+  )
   return {
     "metrics_by_x": metric_df,
     "summary_by_x": summary_by_x,
@@ -1069,5 +748,5 @@ def aggregate_study_outputs(
     "selection_summary": _selection_summary(summary_over_x),
     "projection_summary": _projection_summary(metric_df, diagnostic_df),
     "tau_summary": _tau_summary(diagnostic_df),
-    "runtime_summary": runtime_summary,
+    "runtime_summary": _runtime_summary(runtime_df),
   }

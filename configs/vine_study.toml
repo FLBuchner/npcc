@@ -24,7 +24,7 @@ eval_m = 1000
 projection_grid_size = 30
 
 [[grid.estimators]]
-label = "tabpfn-criterion-v2.5-logit"
-backend = "tabpfn-criterion"
+label = "tabpfn-quantiles-v2.5-logit"
+backend = "tabpfn-quantiles"
 transform = "logit"
 backend_kwargs = { model_version = "v2.5" }

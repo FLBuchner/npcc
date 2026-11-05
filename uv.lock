@@ -439,39 +439,6 @@ css = [
 ]
 
 [[package]]
-name = "catboost"
-version = "1.2.10"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "graphviz" },
-    { name = "matplotlib" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "plotly" },
-    { name = "scipy" },
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e9/0e/09e8fa0858570fda88090bc3f441b69c18ea3d6f4a02fd41aa5426c157bf/catboost-1.2.10.tar.gz", hash = "sha256:26ae6d423acaf0e9d8160f2477a990431057ed04522d993c2f42dac62743b4f7", size = 39925863, upload-time = "2026-02-18T16:13:29.092Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/52/b961328a61a31a474c61fdcc1a19a086f7e672fd1becc0f70697a0ccccdb/catboost-1.2.10-cp311-cp311-macosx_11_0_universal2.whl", hash = "sha256:ab2e84237308d62bae236b1ecba2e3867697f96bdbaf0ca68dafc2c886946406", size = 28850304, upload-time = "2026-02-18T16:11:49.153Z" },
-    { url = "https://files.pythonhosted.org/packages/c4/5e/4cb6a2f896b34aaa4afe70491c595f77bef7f9b948d719eda99678847d3d/catboost-1.2.10-cp311-cp311-manylinux2014_aarch64.whl", hash = "sha256:5ffe85f53092219cf65c73c2946426a289ef6f62c119c2bfda52815250d9bcef", size = 96708112, upload-time = "2026-02-18T16:11:53.607Z" },
-    { url = "https://files.pythonhosted.org/packages/7c/62/5839abf95f9ee4bc2beb1be4a45f1a912859362477a4eb0f4c9d81298f53/catboost-1.2.10-cp311-cp311-manylinux2014_x86_64.whl", hash = "sha256:5819a880af6b314f4980e6c26ad0f7552eafcf247d521bc884fe726347fdd87d", size = 97159502, upload-time = "2026-02-18T16:11:59.55Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/af/36048fdd08eca7876716176c30acf0e7ff1dfb1f53d0b93a021537e26601/catboost-1.2.10-cp311-cp311-win_amd64.whl", hash = "sha256:41bbe16cab0695978c325a20fa300f92831ed78e9cc8c5fe8047538b4055e98e", size = 100244500, upload-time = "2026-02-18T16:12:04.065Z" },
-    { url = "https://files.pythonhosted.org/packages/bb/52/f5cd568800c87576012d715481730da93bcc34e609c5c204550a9ad0c067/catboost-1.2.10-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:b27115d5b443048f710001c8ac666892dfe03498492310b00466203c91cc30a5", size = 28884278, upload-time = "2026-02-18T16:12:07.659Z" },
-    { url = "https://files.pythonhosted.org/packages/33/ae/d33a8feba68fa810b30d70c660e4a2c62299472c2e1aa34406ccce306d13/catboost-1.2.10-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:39234b3692b6c9002b4a2ac529025fc210dd72feb9b621b27d17c65b7d3e9f92", size = 96704178, upload-time = "2026-02-18T16:12:11.229Z" },
-    { url = "https://files.pythonhosted.org/packages/15/6c/08eabe522ac5cefc605ef81f273d77602130739ec7bcdc0ef192aa0a1f07/catboost-1.2.10-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:b28f763776e62f50da90dddf73b36399583295032667a7e46fc5c1f2593eb80f", size = 97136498, upload-time = "2026-02-18T16:12:15.339Z" },
-    { url = "https://files.pythonhosted.org/packages/93/e2/f467a133b37eef2b3d8697d46a6e7f0da24bd3643f5475817c473ffc41dc/catboost-1.2.10-cp312-cp312-win_amd64.whl", hash = "sha256:6b8a7ef11d7a89fc547760cfafeee895011a4b92cc1f60d00235ef80a71158ed", size = 100214655, upload-time = "2026-02-18T16:12:20.046Z" },
-    { url = "https://files.pythonhosted.org/packages/2d/02/3c5f08a7c7969eaa2509d804461db26752fe1c7ecb8ad8510cab51a95fd2/catboost-1.2.10-cp313-cp313-macosx_11_0_universal2.whl", hash = "sha256:bd3d3b344894f61b5f70124658f302148bb9a51c41d0d5b6c453a72e9dfefc49", size = 28829400, upload-time = "2026-02-18T16:12:23.682Z" },
-    { url = "https://files.pythonhosted.org/packages/98/fd/63be2ff7aa9f6a7d63e342f42948259a028bfa50203d5ff687c84804ffb7/catboost-1.2.10-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:59aa166f075f0a5ea57b0ba46e5060bd6a22e849e91e4142f16c2df11295b184", size = 96680675, upload-time = "2026-02-18T16:12:28.407Z" },
-    { url = "https://files.pythonhosted.org/packages/fe/2c/fa0479bd79226f037b495a30696b70741beb198f65227c975005e213aa8e/catboost-1.2.10-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:42c1b6c7ae5c18cdbe00c8b9493987cc13338fe328baaf1a0b98ddaf58db96a2", size = 97111368, upload-time = "2026-02-18T16:12:32.456Z" },
-    { url = "https://files.pythonhosted.org/packages/69/71/a9e9a06418832fbea9d7cefda585d53395358d498537b6bdd3cf7364cd29/catboost-1.2.10-cp313-cp313-win_amd64.whl", hash = "sha256:5ede858e634d6d0f521bf6dd6fad9374f23d37049ee48e0779ccd2a372632cb1", size = 100201430, upload-time = "2026-02-18T16:12:36.731Z" },
-    { url = "https://files.pythonhosted.org/packages/56/58/f370f6c64db5e7da92e3b88ab62e2df72f113cf5a1eee35b48f69d54accd/catboost-1.2.10-cp314-cp314-macosx_11_0_universal2.whl", hash = "sha256:3efc5e4d414b7c13bff6dd0d6c938cf09bb1445097283c7790e54b8ee461820b", size = 28840256, upload-time = "2026-02-18T16:12:40.153Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/74/18597f0b2923e3660cd44f942fe9e7cddaa99afc252bc745c48f79566330/catboost-1.2.10-cp314-cp314-manylinux2014_aarch64.whl", hash = "sha256:bad9a70890cdc591080a908d54a3cd70002ab1e48b2017adff84726da0b3e16d", size = 96688527, upload-time = "2026-02-18T16:12:43.534Z" },
-    { url = "https://files.pythonhosted.org/packages/6b/ac/7effae0e47fd9586e46a796f5af61b730c572570cedee333ee9ba8db85a8/catboost-1.2.10-cp314-cp314-manylinux2014_x86_64.whl", hash = "sha256:7b8cc4ea3a6ac4a8d05f3a79c8ee5454360a0a710fa12444963865ad3f0ddfec", size = 97119495, upload-time = "2026-02-18T16:12:47.557Z" },
-    { url = "https://files.pythonhosted.org/packages/da/b7/8f9e284a9cdd034f01f017dc5dab0da03dc3eac171a2be205745da3becb6/catboost-1.2.10-cp314-cp314-win_amd64.whl", hash = "sha256:951c5bdf27b8edb6ca624f41134888c666ae68275488803d3c91ce83e154f0c5", size = 101749687, upload-time = "2026-02-18T16:12:51.736Z" },
-]
-
-[[package]]
 name = "certifi"
 version = "2026.4.22"
 source = { registry = "https://pypi.org/simple" }
@@ -1431,15 +1398,6 @@ wheels = [
 [package.optional-dependencies]
 http = [
     { name = "aiohttp" },
-]
-
-[[package]]
-name = "graphviz"
-version = "0.21"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f8/b3/3ac91e9be6b761a4b30d66ff165e54439dcd48b83f4e20d644867215f6ca/graphviz-0.21.tar.gz", hash = "sha256:20743e7183be82aaaa8ad6c93f8893c923bd6658a04c32ee115edb3c8a835f78", size = 200434, upload-time = "2025-06-15T09:35:05.824Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/91/4c/e0ce1ef95d4000ebc1c11801f9b944fa5910ecc15b5e351865763d8657f8/graphviz-0.21-py3-none-any.whl", hash = "sha256:54f33de9f4f911d7e84e4191749cac8cc5653f815b06738c54db9a15ab8b1e42", size = 47300, upload-time = "2025-06-15T09:35:04.433Z" },
 ]
 
 [[package]]
@@ -2890,17 +2848,11 @@ dependencies = [
 
 [package.optional-dependencies]
 backends = [
-    { name = "catboost" },
+    { name = "lightgbm" },
     { name = "ngboost" },
     { name = "pytabkit" },
-    { name = "scikit-learn" },
     { name = "synthefy-nori" },
     { name = "tabicl" },
-    { name = "xgboost", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-    { name = "xgboost", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-]
-catboost = [
-    { name = "catboost" },
 ]
 cpu = [
     { name = "torch", version = "2.11.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-4-npcc-cpu') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
@@ -2923,8 +2875,8 @@ experiments = [
     { name = "pandas" },
     { name = "pyarrow" },
 ]
-gbm = [
-    { name = "scikit-learn" },
+lightgbm = [
+    { name = "lightgbm" },
 ]
 ngboost = [
     { name = "ngboost" },
@@ -2937,10 +2889,6 @@ pytabkit = [
 ]
 tabicl = [
     { name = "tabicl" },
-]
-xgboost = [
-    { name = "xgboost", version = "3.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-    { name = "xgboost", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
 ]
 
 [package.dev-dependencies]
@@ -2971,8 +2919,8 @@ interactive = [
 
 [package.metadata]
 requires-dist = [
-    { name = "catboost", marker = "extra == 'backends'", specifier = ">=1.2" },
-    { name = "catboost", marker = "extra == 'catboost'", specifier = ">=1.2" },
+    { name = "lightgbm", marker = "extra == 'backends'", specifier = ">=4.0" },
+    { name = "lightgbm", marker = "extra == 'lightgbm'", specifier = ">=4.0" },
     { name = "matplotlib", marker = "extra == 'experiments'", specifier = ">=3.7" },
     { name = "ngboost", marker = "extra == 'backends'", specifier = ">=0.5.0" },
     { name = "ngboost", marker = "extra == 'ngboost'", specifier = ">=0.5.0" },
@@ -2981,8 +2929,6 @@ requires-dist = [
     { name = "pytabkit", marker = "extra == 'backends'", specifier = ">=1.5" },
     { name = "pytabkit", marker = "extra == 'pytabkit'", specifier = ">=1.5" },
     { name = "pyvinecopulib", specifier = ">=1.0.0" },
-    { name = "scikit-learn", marker = "extra == 'backends'", specifier = ">=1.3" },
-    { name = "scikit-learn", marker = "extra == 'gbm'", specifier = ">=1.3" },
     { name = "synthefy-nori", marker = "extra == 'backends'", git = "https://github.com/tvatter/synthefy-nori.git?branch=allow-newer-torch-cuda" },
     { name = "synthefy-nori", marker = "extra == 'nori'", git = "https://github.com/tvatter/synthefy-nori.git?branch=allow-newer-torch-cuda" },
     { name = "tabicl", marker = "extra == 'backends'", specifier = ">=2.0" },
@@ -2994,10 +2940,8 @@ requires-dist = [
     { name = "torch", marker = "extra == 'cu128'", specifier = ">=2.5", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "npcc", extra = "cu128" } },
     { name = "torch", marker = "extra == 'cu130'", specifier = ">=2.5", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "npcc", extra = "cu130" } },
     { name = "torch", marker = "extra == 'cu132'", specifier = ">=2.5", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "npcc", extra = "cu132" } },
-    { name = "xgboost", marker = "extra == 'backends'", specifier = ">=2.0" },
-    { name = "xgboost", marker = "extra == 'xgboost'", specifier = ">=2.0" },
 ]
-provides-extras = ["cpu", "cu126", "cu128", "cu130", "cu132", "experiments", "gbm", "ngboost", "tabicl", "catboost", "xgboost", "pytabkit", "nori", "backends"]
+provides-extras = ["cpu", "cu126", "cu128", "cu130", "cu132", "experiments", "ngboost", "tabicl", "lightgbm", "pytabkit", "nori", "backends"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3985,19 +3929,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9f/4a/0883b8e3802965322523f0b200ecf33d31f10991d0401162f4b23c698b42/platformdirs-4.9.6.tar.gz", hash = "sha256:3bfa75b0ad0db84096ae777218481852c0ebc6c727b3168c1b9e0118e458cf0a", size = 29400, upload-time = "2026-04-09T00:04:10.812Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/75/a6/a0a304dc33b49145b21f4808d763822111e67d1c3a32b524a1baf947b6e1/platformdirs-4.9.6-py3-none-any.whl", hash = "sha256:e61adb1d5e5cb3441b4b7710bea7e4c12250ca49439228cc1021c00dcfac0917", size = 21348, upload-time = "2026-04-09T00:04:09.463Z" },
-]
-
-[[package]]
-name = "plotly"
-version = "6.9.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "narwhals" },
-    { name = "packaging" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/96/07/795c79dbce40c39bece88e69d049babbd23ffa95b5d117f248db8ea03abb/plotly-6.9.0.tar.gz", hash = "sha256:967ad33e8c704fed051800d11d985eb206a9c795c14206b30a6f463ed9c67d0d", size = 6919903, upload-time = "2026-07-09T14:55:59.982Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/18/d8544811ab076f876c4892b3714f5b0dad335e1dc33aef826df431b8325d/plotly-6.9.0-py3-none-any.whl", hash = "sha256:36bebe2f1bb13884774fe61689c329071446f6ce4a8927fb1f0d6fb24f581236", size = 9909646, upload-time = "2026-07-09T14:55:55.421Z" },
 ]
 
 [[package]]
@@ -6434,122 +6365,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a0/4f/ac12fda57a55068a094ec42851fb0a40e8489d8941863d517452de62e507/wrapt-2.2.2-cp314-cp314t-win_amd64.whl", hash = "sha256:d09db0f7e8357060d3c38fc22a018aba683a796bf184360fd1a58f6fc180dc77", size = 82462, upload-time = "2026-06-20T23:49:21.631Z" },
     { url = "https://files.pythonhosted.org/packages/48/a7/df732dac86d9b2027c56bd163dbc883e037b16c3469614752e148d219c61/wrapt-2.2.2-cp314-cp314t-win_arm64.whl", hash = "sha256:f32fe639c39561ccc187bcae17e9271be0eb45f1c2952510d2f29b33ab577347", size = 81182, upload-time = "2026-06-20T23:49:23.199Z" },
     { url = "https://files.pythonhosted.org/packages/6e/d2/6317eb6d4554855bbf12d61857774af34747bf88a42c19bf306de67e2fa3/wrapt-2.2.2-py3-none-any.whl", hash = "sha256:5bad217350f19ce99ca5b5e71d406765ea86fe541628426772b657375ee1c048", size = 61460, upload-time = "2026-06-20T23:49:42.966Z" },
-]
-
-[[package]]
-name = "xgboost"
-version = "3.2.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'darwin' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-]
-dependencies = [
-    { name = "numpy", marker = "python_full_version < '3.12' or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-    { name = "nvidia-nccl-cu12", marker = "(python_full_version < '3.12' and sys_platform == 'linux') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (python_full_version >= '3.12' and extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-    { name = "scipy", marker = "python_full_version < '3.12' or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/91/bb/1eb0242409d22db725d7a88088e6cfd6556829fb0736f9ff69aa9f1e9455/xgboost-3.2.0.tar.gz", hash = "sha256:99b0e9a2a64896cdaf509c5e46372d336c692406646d20f2af505003c0c5d70d", size = 1263936, upload-time = "2026-02-10T11:03:05.542Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2d/49/6e4cdd877c24adf56cb3586bc96d93d4dcd780b5ea1efb32e1ee0de08bae/xgboost-3.2.0-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:2f661966d3e322536d9c448090a870fcba1e32ee5760c10b7c46bac7a342079a", size = 2507014, upload-time = "2026-02-10T10:50:57.44Z" },
-    { url = "https://files.pythonhosted.org/packages/93/f1/c09ef1add609453aa3ba5bafcd0d1c1a805c1263c0b60138ec968f8ec296/xgboost-3.2.0-py3-none-macosx_12_0_arm64.whl", hash = "sha256:eabbd40d474b8dbf6cb3536325f9150b9e6f0db32d18de9914fb3227d0bef5b7", size = 2328527, upload-time = "2026-02-10T10:51:17.502Z" },
-    { url = "https://files.pythonhosted.org/packages/96/9f/d9914a7b8df842832850b1a18e5f47aaa071c217cdd1da2ae9deb291018b/xgboost-3.2.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:852eabc6d3b3702a59bf78dbfdcd1cb9c4d3a3b6e5ed1f8781d8b9512354fdd2", size = 131100954, upload-time = "2026-02-10T11:02:42.704Z" },
-    { url = "https://files.pythonhosted.org/packages/79/98/679de17c2caa4fd3b0b4386ecf7377301702cb0afb22930a07c142fcb1d8/xgboost-3.2.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:99b4a6bbcb47212fec5cf5fbe12347215f073c08967431b0122cfbd1ee70312c", size = 131748579, upload-time = "2026-02-10T10:54:40.424Z" },
-    { url = "https://files.pythonhosted.org/packages/1f/3d/1661dd114a914a67e3f7ab66fa1382e7599c2a8c340f314ad30a3e2b4d08/xgboost-3.2.0-py3-none-win_amd64.whl", hash = "sha256:0d169736fd836fc13646c7ab787167b3a8110351c2c6bc770c755ee1618f0442", size = 101681668, upload-time = "2026-02-10T10:59:31.202Z" },
-]
-
-[[package]]
-name = "xgboost"
-version = "3.3.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'win32' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'darwin' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'darwin' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'darwin' and extra == 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-4-npcc-cpu' and extra != 'extra-4-npcc-cu126' and extra != 'extra-4-npcc-cu128' and extra != 'extra-4-npcc-cu130' and extra != 'extra-4-npcc-cu132'",
-]
-dependencies = [
-    { name = "numpy", marker = "python_full_version >= '3.12' or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-    { name = "nvidia-nccl-cu12", marker = "(python_full_version >= '3.12' and sys_platform == 'linux') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (python_full_version < '3.12' and extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (sys_platform != 'linux' and extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-    { name = "scipy", marker = "python_full_version >= '3.12' or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu126') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cpu' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu128') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu126' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu130') or (extra == 'extra-4-npcc-cu128' and extra == 'extra-4-npcc-cu132') or (extra == 'extra-4-npcc-cu130' and extra == 'extra-4-npcc-cu132')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/41/846d4de2b8fc694073fd3ac5052caf68caa1ea11cb7fa32d7ad9c049b232/xgboost-3.3.0.tar.gz", hash = "sha256:58bcb8a4cace648cdab7b94fa4f16d2c9ff26d90dd4d26907168106fa06d8746", size = 1224702, upload-time = "2026-06-17T21:26:50.846Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fc/72/3b68983c0215ef65d48e9eeb1f168c3c6e3d62a61ece605de3209c79cae1/xgboost-3.3.0-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:07688a377046b8640897b62421150bf73c6cc7101823474ec6ad08b93290f587", size = 2553505, upload-time = "2026-06-17T21:21:32.146Z" },
-    { url = "https://files.pythonhosted.org/packages/c9/62/b49e756822b29909d0c95ed334662dc6c7c81a99ec6bc10dc18e69f3d6e7/xgboost-3.3.0-py3-none-macosx_12_0_arm64.whl", hash = "sha256:af7cea10f418b7c251ddc8da440f57bdab2990b5fc9f74a35a92b0f150ea287d", size = 2376040, upload-time = "2026-06-17T21:22:01.981Z" },
-    { url = "https://files.pythonhosted.org/packages/47/3a/a0adcd1ee28f525bd5c9dc3ebe78a7599bf97c22866d6449f967b829e338/xgboost-3.3.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:624a83aeb1e7ba081719795db179f4ce6fff12e79de05cd9baf15ee48fd22f0e", size = 98180629, upload-time = "2026-06-17T21:24:00.804Z" },
-    { url = "https://files.pythonhosted.org/packages/47/1f/8b3e578cfd8e3bcdb4374e2bbe0b40b4e5320accb5cbdcf535ecc512eb5c/xgboost-3.3.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:f59edaf28eccd1c519788607c72ed907ee6cedfa933d706620bc1612d24b354e", size = 98716607, upload-time = "2026-06-17T21:26:21.058Z" },
-    { url = "https://files.pythonhosted.org/packages/07/6b/087fd5d28fdbb90d385c50ee9308a820241b82feebdf42e72e19a48e4b32/xgboost-3.3.0-py3-none-win_amd64.whl", hash = "sha256:b06057f6a018fc04e6b3e0c15568ca636b8151a5b5f333478e500fcaf4fc7594", size = 69522696, upload-time = "2026-06-17T21:20:53.707Z" },
 ]
 
 [[package]]

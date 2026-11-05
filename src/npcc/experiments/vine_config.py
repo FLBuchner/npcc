@@ -8,12 +8,19 @@ backend configuration in both studies.
 
 from __future__ import annotations
 
-import tomllib
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from npcc.core.errors import EstimatorConfigError
-from npcc.experiments.config import EstimatorSpec, _parse_estimator
+from npcc.experiments.config import (
+  EstimatorSpec,
+  _check_common,
+  _parse_estimator,
+  _present,
+  _read_grid,
+)
 
 # `oracle`: the true structure, a simplified context (pairs see `x` only).
 # `random`: a uniformly drawn structure, a non-simplified context, because a
@@ -32,6 +39,11 @@ class VineCell:
   n: int
   rep: int
 
+  @property
+  def key(self) -> str:
+    """The cell's checkpoint directory name."""
+    return f"d{self.d}__n{self.n}__rep{self.rep}"
+
 
 @dataclass
 class VineGridConfig:
@@ -41,7 +53,7 @@ class VineGridConfig:
   n: list[int]
   n_rep: int
   estimators: list[EstimatorSpec]
-  arms: list[str]
+  arms: list[str] = field(default_factory=lambda: list(ARMS))
   eval_x_n: int = 5
   eval_m: int = 1000
   projection_grid_size: int = 30
@@ -52,12 +64,13 @@ class VineGridConfig:
       raise ValueError(
         f"dims must be a non-empty list of ints >= 2; got {self.dims}"
       )
-    if not self.n or any(v <= 0 for v in self.n):
-      raise ValueError(
-        f"n must be a non-empty list of positive ints; got {self.n}"
-      )
-    if self.n_rep <= 0:
-      raise ValueError(f"n_rep must be a positive int; got {self.n_rep}")
+    _check_common(
+      n=self.n,
+      n_rep=self.n_rep,
+      estimators=self.estimators,
+      projection_grid_size=self.projection_grid_size,
+      batch_size=self.batch_size,
+    )
     if not self.arms:
       raise ValueError("arms must be non-empty")
     unknown = [a for a in self.arms if a not in ARMS]
@@ -69,25 +82,13 @@ class VineGridConfig:
       raise EstimatorConfigError(
         "estimators must be non-empty when an NPCC arm (oracle, random) runs"
       )
-    labels = [e.label for e in self.estimators]
-    if len(labels) != len(set(labels)):
-      raise EstimatorConfigError(
-        f"estimator labels must be unique; got {labels}"
-      )
     if self.eval_x_n < 1:
       raise ValueError(f"eval_x_n must be >= 1; got {self.eval_x_n}")
     if self.eval_m < 10:
       raise ValueError(f"eval_m must be >= 10; got {self.eval_m}")
-    if self.projection_grid_size < 2:
-      raise ValueError(
-        f"projection_grid_size must be >= 2; got {self.projection_grid_size}"
-      )
-    if self.batch_size is not None and self.batch_size <= 0:
-      raise ValueError(
-        f"batch_size must be a positive int or omitted; got {self.batch_size}"
-      )
 
   def cells(self) -> list[VineCell]:
+    """Every data cell of the grid, in sweep order."""
     return [
       VineCell(d=d, n=n, rep=rep)
       for d in self.dims
@@ -96,11 +97,18 @@ class VineGridConfig:
     ]
 
 
+_VINE_OPTIONAL: dict[str, Callable[[Any], object]] = {
+  "arms": lambda v: [str(a) for a in v],
+  "eval_x_n": int,
+  "eval_m": int,
+  "projection_grid_size": int,
+  "batch_size": int,
+}
+
+
 def load_vine_grid(path: str | Path) -> VineGridConfig:
   """Load a :class:`VineGridConfig` from the ``[grid]`` table of a TOML file."""
-  with Path(path).open("rb") as fh:
-    data = tomllib.load(fh)
-  grid = data.get("grid", data)
+  grid = _read_grid(path)
   raw_estimators = grid.get("estimators", [])
   if not isinstance(raw_estimators, list):
     raise EstimatorConfigError(
@@ -112,13 +120,7 @@ def load_vine_grid(path: str | Path) -> VineGridConfig:
       n=[int(v) for v in grid["n"]],
       n_rep=int(grid["n_rep"]),
       estimators=[_parse_estimator(e) for e in raw_estimators],
-      arms=[str(a) for a in grid.get("arms", list(ARMS))],
-      eval_x_n=int(grid.get("eval_x_n", 5)),
-      eval_m=int(grid.get("eval_m", 1000)),
-      projection_grid_size=int(grid.get("projection_grid_size", 30)),
-      batch_size=(
-        None if grid.get("batch_size") is None else int(grid["batch_size"])
-      ),
+      **_present(grid, _VINE_OPTIONAL),
     )
   except KeyError as exc:
     raise ValueError(f"[grid] must define {exc}") from exc

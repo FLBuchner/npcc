@@ -20,11 +20,7 @@ from npcc.core.errors import (
   NpccError,
   UnknownBackendError,
 )
-from npcc.core.margin import ConditionalMargin
-from npcc.core.margin_quantile_table import (
-  QuantileTableConfig,
-  QuantileTableDistribution1D,
-)
+from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 from npcc.core.registry import (
   BackendSpec,
   available_backends,
@@ -47,7 +43,6 @@ __all__ = [
   "MissingBackendDependencyError",
   "NpccError",
   "QuantileTableConfig",
-  "QuantileTableDistribution1D",
   "RosenblattBicop",
   "RosenblattVinecop",
   "RosenblattVinedist",

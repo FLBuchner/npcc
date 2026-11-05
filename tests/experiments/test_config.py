@@ -33,8 +33,8 @@ enable_tau_diagnostics = false
 tau_diagnostic_n = 100
 
 [[grid.estimators]]
-label = "crit-logit"
-backend = "tabpfn-criterion"
+label = "quant-logit"
+backend = "tabpfn-quantiles"
 transform = "logit"
 
 [[grid.estimators]]
@@ -61,47 +61,47 @@ def test_load_grid_parses_and_coerces_normalize(tmp_path: Path) -> None:
   assert grid.surface_families == ["clayton"]
   assert grid.enable_tau_diagnostics is False
   assert grid.tau_diagnostic_n == 100
-  assert [e.label for e in grid.estimators] == ["crit-logit", "quant-identity"]
+  assert [e.label for e in grid.estimators] == ["quant-logit", "quant-identity"]
   assert [e.backend for e in grid.estimators] == [
-    "tabpfn-criterion",
+    "tabpfn-quantiles",
     "tabpfn-quantiles",
   ]
 
 
-def test_cells_and_estimator_specs_are_explicit(tmp_path: Path) -> None:
+def test_cells_and_estimators_are_explicit(tmp_path: Path) -> None:
   grid = load_grid(_write(tmp_path, _TOML))
   # 2 families x 2 scenarios x 2 n x 3 rep
   assert len(grid.cells()) == 2 * 2 * 2 * 3
   # explicit list, not a product
-  assert len(grid.estimator_specs()) == 2
+  assert len(grid.estimators) == 2
 
 
 def test_estimator_backend_kwargs_flow_through(tmp_path: Path) -> None:
   text = _TOML + (
-    '\n[[grid.estimators]]\nlabel = "gbm-deep"\nbackend = "gbm"\n'
+    '\n[[grid.estimators]]\nlabel = "lightgbm-deep"\nbackend = "lightgbm"\n'
     'transform = "logit"\nbackend_kwargs = { max_depth = 8 }\n'
   )
   grid = load_grid(_write(tmp_path, text))
   est = grid.estimators[-1]
-  assert est.backend == "gbm"
+  assert est.backend == "lightgbm"
   assert dict(est.backend_kwargs) == {"max_depth": 8}
 
 
 def test_same_backend_different_kwargs_distinct_ids(tmp_path: Path) -> None:
   text = _TOML + (
-    '\n[[grid.estimators]]\nlabel = "gbm-shallow"\nbackend = "gbm"\n'
+    '\n[[grid.estimators]]\nlabel = "lightgbm-shallow"\nbackend = "lightgbm"\n'
     'transform = "logit"\nbackend_kwargs = { max_depth = 3 }\n'
-    '\n[[grid.estimators]]\nlabel = "gbm-deep"\nbackend = "gbm"\n'
+    '\n[[grid.estimators]]\nlabel = "lightgbm-deep"\nbackend = "lightgbm"\n'
     'transform = "logit"\nbackend_kwargs = { max_depth = 9 }\n'
   )
   grid = load_grid(_write(tmp_path, text))
   shallow, deep = grid.estimators[-2], grid.estimators[-1]
-  assert shallow.backend == deep.backend == "gbm"
+  assert shallow.backend == deep.backend == "lightgbm"
   assert shallow.estimator_id != deep.estimator_id
 
 
 def test_unknown_backend_rejected(tmp_path: Path) -> None:
-  text = _TOML.replace('backend = "tabpfn-criterion"', 'backend = "nope"')
+  text = _TOML.replace('backend = "tabpfn-quantiles"', 'backend = "nope"')
   with pytest.raises(UnknownBackendError, match="Unknown backend"):
     load_grid(_write(tmp_path, text))
 
@@ -114,7 +114,7 @@ def test_unknown_transform_rejected(tmp_path: Path) -> None:
 
 def test_bad_backend_kwargs_rejected(tmp_path: Path) -> None:
   text = _TOML + (
-    '\n[[grid.estimators]]\nlabel = "gbm-typo"\nbackend = "gbm"\n'
+    '\n[[grid.estimators]]\nlabel = "lightgbm-typo"\nbackend = "lightgbm"\n'
     'transform = "logit"\nbackend_kwargs = { max_dpeth = 3 }\n'
   )
   with pytest.raises(InvalidBackendKwargsError, match="unknown backend_kwargs"):
@@ -123,7 +123,7 @@ def test_bad_backend_kwargs_rejected(tmp_path: Path) -> None:
 
 def test_mistyped_backend_kwarg_rejected(tmp_path: Path) -> None:
   text = _TOML + (
-    '\n[[grid.estimators]]\nlabel = "gbm-bad"\nbackend = "gbm"\n'
+    '\n[[grid.estimators]]\nlabel = "lightgbm-bad"\nbackend = "lightgbm"\n'
     'transform = "logit"\nbackend_kwargs = { max_depth = 3.5 }\n'
   )
   with pytest.raises(InvalidBackendKwargsError, match="max_depth"):
@@ -132,7 +132,7 @@ def test_mistyped_backend_kwarg_rejected(tmp_path: Path) -> None:
 
 def test_duplicate_labels_rejected(tmp_path: Path) -> None:
   text = _TOML + (
-    '\n[[grid.estimators]]\nlabel = "crit-logit"\nbackend = "tabpfn-quantiles"\n'
+    '\n[[grid.estimators]]\nlabel = "quant-logit"\nbackend = "tabpfn-quantiles"\n'
     'transform = "probit"\n'
   )
   with pytest.raises(EstimatorConfigError, match="unique"):
@@ -197,15 +197,15 @@ def test_missing_key_raises(tmp_path: Path) -> None:
 
 
 def test_estimator_id_stable_and_label_independent() -> None:
-  a = EstimatorSpec(label="a", backend="tabpfn-criterion", transform="logit")
-  b = EstimatorSpec(label="b", backend="tabpfn-criterion", transform="logit")
+  a = EstimatorSpec(label="a", backend="tabpfn-quantiles", transform="logit")
+  b = EstimatorSpec(label="b", backend="tabpfn-quantiles", transform="logit")
   # Recomputing is stable and independent of the display label.
   assert a.estimator_id == a.estimator_id
   assert a.estimator_id == b.estimator_id
   # Golden hash locks the canonicalization (backend/transform/backend_kwargs).
   assert (
     a.estimator_id
-    == "18948e8a94a2031010fbe3e37b32c07f4346bd7d446b89bda1418f0eceeef123"
+    == "eaf54a98cc1b68d623481297d830f5c1c4f8fe9d373dc9f73d4c1e10f5d33999"
   )
 
 
@@ -218,18 +218,17 @@ def test_shipped_study_config_loads() -> None:
   assert grid.n == [200, 500, 1000, 2000]
   assert grid.n_rep == 10
   assert grid.normalize == [None]
-  assert len(grid.estimators) == 18
+  assert len(grid.estimators) == 16
   labels = [e.label for e in grid.estimators]
   assert len(labels) == len(set(labels))
   ids = [e.estimator_id for e in grid.estimators]
   assert len(ids) == len(set(ids))
-  # xgb-quantile is intentionally excluded (tree tail collapse; see registry.py).
   assert {e.backend for e in grid.estimators} == {
-    "tabpfn-criterion",
     "tabpfn-quantiles",
     "nori",
     "tabicl",
     "ngboost",
+    "lightgbm",
     "pytabkit-realmlp",
     "pytabkit-tabm",
   }
@@ -261,7 +260,7 @@ def test_gridconfig_rejects_empty_axis() -> None:
       tau_scenarios=["linear"],
       estimators=[
         EstimatorSpec(
-          label="crit", backend="tabpfn-criterion", transform="logit"
+          label="quant", backend="tabpfn-quantiles", transform="logit"
         )
       ],
       normalize=[None],

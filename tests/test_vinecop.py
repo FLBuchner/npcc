@@ -9,10 +9,11 @@ from pyvinecopulib.core import (
   VinecopBase,
 )
 
-from npcc import RosenblattBicop, RosenblattVinecop
-from npcc.core.controls import (
+from npcc import (
   FitControlsRosenblattBicop,
   FitControlsRosenblattVinecop,
+  RosenblattBicop,
+  RosenblattVinecop,
 )
 
 
@@ -46,7 +47,7 @@ def make_pairs() -> list[list[RosenblattBicop]]:
 
 def make_controls() -> FitControlsRosenblattVinecop:
   return FitControlsRosenblattVinecop(
-    backend="uniform-native",
+    backend="normal-quantile",
     device="cpu",
   )
 
@@ -65,7 +66,7 @@ def fit_vine(
 
 @pytest.fixture
 def fitted_vine(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> RosenblattVinecop:
   u = random_tensor((40, 3), low=0.1, high=0.9, seed=42)
   return fit_vine(u)
@@ -153,7 +154,7 @@ def test_constructor_rejects_explicit_device_mismatch() -> None:
 
 
 def test_fit_installs_pair_copulas(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   u = random_tensor((40, 3), low=0.1, high=0.9, seed=42)
 
@@ -178,8 +179,8 @@ def test_fit_installs_pair_copulas(
   ids=["default", "non-simplified", "simplified"],
 )
 def test_fit_assembles_the_requested_context(
-  register_uniform_backends: None,
-  monkeypatch: pytest.MonkeyPatch,
+  register_hermetic_backends: None,
+  pair_fit_widths: list[int | None],
   context: ConditioningContext[torch.Tensor] | None,
   expected_widths: list[int],
 ) -> None:
@@ -191,34 +192,10 @@ def test_fit_assembles_the_requested_context(
   """
   u = random_tensor((40, 3), low=0.1, high=0.9, seed=42)
   x = random_tensor((40, 2), low=-1.0, high=1.0, seed=43)
-  context_widths: list[int | None] = []
-
-  original_fit = RosenblattBicop.fit
-
-  def record_fit(
-    self: RosenblattBicop,
-    uv: torch.Tensor,
-    /,
-    controls: FitControlsRosenblattBicop | None = None,
-    *,
-    var_types: list[str] | None = None,
-    x: torch.Tensor | None = None,
-  ) -> RosenblattBicop:
-    width = None if x is None else int(x.shape[1])
-    context_widths.append(width)
-    return original_fit(
-      self,
-      uv,
-      controls,
-      var_types=var_types,
-      x=x,
-    )
-
-  monkeypatch.setattr(RosenblattBicop, "fit", record_fit)
 
   fit_vine(u, x=x, context=context)
 
-  assert context_widths == expected_widths
+  assert pair_fit_widths == expected_widths
 
 
 def test_sample_is_seeded_and_on_configured_device(
@@ -284,7 +261,7 @@ def test_loglik_matches_summed_log_pdf(
 
 
 def test_pdf_with_covariates(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   train_u = random_tensor((40, 3), low=0.1, high=0.9, seed=42)
   train_x = random_tensor((40, 2), low=-1.0, high=1.0, seed=43)
@@ -326,7 +303,7 @@ def test_sample_conditional_returns_torch_tensor(
 
 
 def test_fit_rejects_structure_dimension_mismatch(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   u = torch.full((10, 2), 0.5, dtype=torch.float64)
   vine = RosenblattVinecop(None, make_structure(), device="cpu")
@@ -336,7 +313,7 @@ def test_fit_rejects_structure_dimension_mismatch(
 
 
 def test_fit_rejects_covariate_row_mismatch(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   u = torch.full((10, 3), 0.5, dtype=torch.float64)
   x = torch.full((9, 1), 0.5, dtype=torch.float64)
@@ -373,7 +350,7 @@ def test_sample_conditional_rejects_reorientation(
 
 
 def test_sample_with_covariates_returns_torch_tensor(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   train_u = random_tensor((40, 3), low=0.1, high=0.9, seed=42)
   train_x = random_tensor((40, 2), low=-1.0, high=1.0, seed=43)

@@ -17,13 +17,13 @@ models with proper scoring rules); TabICL, arXiv:2502.05564.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Unpack
 
 import torch
 from pyvinecopulib.core.extend import to_numpy
 
 from npcc.core.backends.tabicl import TabICLBackend
-from npcc.core.margin_quantile_table import QuantileTableConfig
+from npcc.core.margin import MarginOptions
 
 
 class FinetunedTabICLBackend(TabICLBackend):
@@ -31,37 +31,29 @@ class FinetunedTabICLBackend(TabICLBackend):
 
   Parameters
   ----------
-  transform, quantile_table_config, eps, device, batch_size
-      Forwarded to :class:`TabICLBackend`.
-  epochs, learning_rate
+  epochs, learning_rate, early_stopping
       Fine-tuning schedule for ``FinetunedTabICLRegressor``.
-  **finetune_kwargs
+  finetune_kwargs : dict, optional
       Extra keyword arguments for ``FinetunedTabICLRegressor`` (e.g.
-      ``early_stopping``, ``patience``).
+      ``patience``).
+  **margin : MarginOptions
+      Forwarded to :class:`~npcc.core.margin.ConditionalMargin`.
   """
 
   def __init__(
     self,
     *,
-    transform: Literal["identity", "logit", "probit"] = "logit",
-    quantile_table_config: QuantileTableConfig | None = None,
-    eps: float = 1e-6,
-    device: str | torch.device | None = None,
-    batch_size: int | None = None,
     epochs: int = 30,
     learning_rate: float = 1e-5,
-    **finetune_kwargs: Any,  # noqa: ANN401 - passthrough to the finetuner
+    early_stopping: bool = True,
+    finetune_kwargs: dict[str, Any] | None = None,
+    **margin: Unpack[MarginOptions],
   ) -> None:
-    super().__init__(
-      transform=transform,
-      quantile_table_config=quantile_table_config,
-      eps=eps,
-      device=device,
-      batch_size=batch_size,
-    )
+    super().__init__(**margin)
     self.epochs = epochs
     self.learning_rate = learning_rate
-    self.finetune_kwargs = dict(finetune_kwargs)
+    self.early_stopping = early_stopping
+    self.finetune_kwargs = dict(finetune_kwargs or {})
 
   def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
     from tabicl import FinetunedTabICLRegressor
@@ -70,6 +62,7 @@ class FinetunedTabICLBackend(TabICLBackend):
       device=str(self._device),
       epochs=self.epochs,
       learning_rate=self.learning_rate,
+      early_stopping=self.early_stopping,
       **self.finetune_kwargs,
     )
     model.fit(to_numpy(x), to_numpy(z))

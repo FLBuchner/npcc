@@ -20,8 +20,8 @@
 # RTX 2080 Ti, workers=1, over a *smaller* grid than the one below: n_rep = 5,
 # n = [200,500,1000], 10 backends, giving ~2.06 h per seed and ~10.3 h total.
 # The grid below is larger on three axes at once -- n_rep = 10, n gains 2000
-# (the slowest point), and 18 estimators rather than 10 -- so that number is
-# not a budget for it. As configured this is 160 cells and 5760 fits (each
+# (the slowest point), and 16 estimators rather than 10 -- so that number is
+# not a budget for it. As configured this is 160 cells and 5120 fits (each
 # cell fits every estimator in both Rosenblatt directions).
 #
 # Time one cell on the target machine before committing to the full run:
@@ -30,15 +30,14 @@
 # `n_rep = 1`. Multiply by 160 and by the n-cost ratio.
 #
 # Backends intentionally EXCLUDED from this run (too slow for the full grid):
-#   - catboost   (~74 s/fit; ~1.5 h of grid) and gbm (101 sklearn models/dir) —
-#     redundant slow GBM-quantile variants; xgb-quantile is the representative.
 #   - tabpfn-finetune / tabicl-finetune — GPU training loops (minutes x 2
 #     directions x 72 fits = many hours); run those in a separate small study.
 
 # CONCURRENCY. `--workers` runs whole data cells in a *thread* pool, so it
 # overlaps well where the work releases the GIL (the TabPFN and other torch
-# backends) and poorly where it does not (the sklearn-style CPU backends:
-# ngboost, xgboost, pytabkit). All workers share one CUDA context and one
+# backends, and LightGBM's boosters) and poorly where it does not (the
+# sklearn-style CPU backends: ngboost, pytabkit). LightGBM already fits its
+# levels on every core, so it gains least from more workers. All workers share one CUDA context and one
 # device, so on a single accelerator raise `--workers` for occupancy rather
 # than expecting linear scaling, and watch memory: each concurrent cell holds
 # its own fitted backends.
@@ -98,30 +97,6 @@ tau_diagnostic_n = 1000
 # version (v2.5 / v3) is a hyperparameter, not a distinct backend. Non-TabPFN
 # backends need their optional extra installed (`uv sync --extra cu130 --extra
 # backends`; Nori via the fork, see pyproject.toml).
-
-[[grid.estimators]]
-label = "tabpfn-criterion-v2.5-logit"
-backend = "tabpfn-criterion"
-transform = "logit"
-backend_kwargs = { model_version = "v2.5" }
-
-[[grid.estimators]]
-label = "tabpfn-criterion-v2.5-probit"
-backend = "tabpfn-criterion"
-transform = "probit"
-backend_kwargs = { model_version = "v2.5" }
-
-[[grid.estimators]]
-label = "tabpfn-criterion-v3-logit"
-backend = "tabpfn-criterion"
-transform = "logit"
-backend_kwargs = { model_version = "v3" }
-
-[[grid.estimators]]
-label = "tabpfn-criterion-v3-probit"
-backend = "tabpfn-criterion"
-transform = "probit"
-backend_kwargs = { model_version = "v3" }
 
 [[grid.estimators]]
 label = "tabpfn-quantiles-v2.5-logit"
@@ -195,4 +170,14 @@ transform = "logit"
 [[grid.estimators]]
 label = "pytabkit-tabm-probit"
 backend = "pytabkit-tabm"
+transform = "probit"
+
+[[grid.estimators]]
+label = "lightgbm-logit"
+backend = "lightgbm"
+transform = "logit"
+
+[[grid.estimators]]
+label = "lightgbm-probit"
+backend = "lightgbm"
 transform = "probit"

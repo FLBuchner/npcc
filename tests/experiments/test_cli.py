@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -18,80 +19,50 @@ n = [30]
 n_rep = 1
 
 [[grid.estimators]]
-label = "crit-logit"
-backend = "tabpfn-criterion"
+label = "normal-logit"
+backend = "normal-quantile"
 transform = "logit"
 """
 
+_TABLES = (
+  "summary",
+  "metrics_by_x",
+  "summary_by_x",
+  "summary_over_x",
+  "selection_summary",
+  "projection_summary",
+  "tau_summary",
+  "diagnostics",
+  "quantities",
+  "runtime",
+  "runtime_summary",
+)
 
+
+@pytest.mark.parametrize("fmt", ["parquet", "csv"])
 def test_cli_end_to_end_writes_tables(
-  patch_uniform: None, tmp_path: Path
+  register_hermetic_backends: None, tmp_path: Path, fmt: str
 ) -> None:
-  if importlib.util.find_spec("pyarrow") is None:
+  """A table missing from either format would leave a run unanalyzable."""
+  if fmt == "parquet" and importlib.util.find_spec("pyarrow") is None:
     pytest.skip("pyarrow is required for parquet output")
   config = tmp_path / "study.toml"
   config.write_text(_TOML)
   out = tmp_path / "results"
 
-  rc = cli.main(["--config", str(config), "--out", str(out), "--workers", "1"])
-  assert rc == 0
-
-  for name in (
-    "summary",
-    "metrics_by_x",
-    "summary_by_x",
-    "summary_over_x",
-    "selection_summary",
-    "projection_summary",
-    "tau_summary",
-    "diagnostics",
-    "quantities",
-    "runtime",
-    "runtime_summary",
-  ):
-    path = out / f"{name}.parquet"
-    assert path.exists(), f"missing {name}.parquet"
-    assert path.stat().st_size > 0
-  assert (out / "config.json").exists()
-
-
-def test_cli_end_to_end_can_write_csv(
-  patch_uniform: None, tmp_path: Path
-) -> None:
-  config = tmp_path / "study.toml"
-  config.write_text(_TOML)
-  out = tmp_path / "results"
-
   rc = cli.main(
-    [
-      "--config",
-      str(config),
-      "--out",
-      str(out),
-      "--workers",
-      "1",
-      "--format",
-      "csv",
-    ]
+    ["--config", str(config), "--out", str(out), "--workers", "1"]
+    + ["--format", fmt]
   )
   assert rc == 0
 
-  for name in (
-    "summary",
-    "metrics_by_x",
-    "summary_by_x",
-    "summary_over_x",
-    "selection_summary",
-    "projection_summary",
-    "tau_summary",
-    "diagnostics",
-    "quantities",
-    "runtime",
-    "runtime_summary",
-  ):
-    path = out / f"{name}.csv"
-    assert path.exists(), f"missing {name}.csv"
+  for name in _TABLES:
+    path = out / f"{name}.{fmt}"
+    assert path.exists(), f"missing {name}.{fmt}"
     assert path.stat().st_size > 0
+  echo = json.loads((out / "config.json").read_text())
+  assert echo["grid"]["estimators"][0]["label"] == "normal-logit"
+  assert echo["run"]["fmt"] == fmt
 
 
 def test_cli_parser_requires_config_and_out() -> None:

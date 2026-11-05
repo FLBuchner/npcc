@@ -29,12 +29,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -47,22 +44,22 @@ from pyvinecopulib.core import (
 )
 
 from npcc.core.controls import FitControlsRosenblattVinecop
-from npcc.core.margin_quantile_table import QuantileTableConfig
+from npcc.core.margin import QuantileTableConfig
 from npcc.core.registry import create_backend
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.core.vinedist import RosenblattVinedist
 from npcc.experiments import scenarios, vine_scenarios
-from npcc.experiments.config import EstimatorSpec, RunConfig
-from npcc.experiments.runner import (
-  _data_frame,
-  _estimator_seed,
-  _read_table,
-  _release_gpu,
-  _summary_stats,
-  _system_mem_mb,
-  _write_table,
+from npcc.experiments._study import (
+  Rows,
+  derive_seed,
+  memory_usage,
+  release_gpu,
+  reset_gpu_peaks,
+  summarize,
+  sweep,
 )
-from npcc.experiments.vine_config import VineCell, VineGridConfig
+from npcc.experiments.config import EstimatorSpec, RunConfig
+from npcc.experiments.vine_config import NPCC_ARMS, VineCell, VineGridConfig
 from npcc.experiments.vine_scenarios import EvalPoints, VineTruth
 
 logger = logging.getLogger(__name__)
@@ -70,8 +67,7 @@ logger = logging.getLogger(__name__)
 _EPS: float = 1e-300
 
 METRIC_NAMES: tuple[str, ...] = ("KL", "L1", "ISE", "KL_copula", "L1_copula")
-_SHARD_TABLES: tuple[str, ...] = ("metrics", "runtime")
-_CellRows = tuple[list[dict[str, Any]], list[dict[str, Any]]]
+TABLES: tuple[str, ...] = ("metrics", "runtime")
 _GROUP_AXES: tuple[str, ...] = (
   "d",
   "n",
@@ -83,22 +79,16 @@ _GROUP_AXES: tuple[str, ...] = (
 )
 
 
-def _seed(base_seed: int, *parts: object) -> int:
-  """Deterministic 31-bit seed from ``base_seed`` and a salt."""
-  payload = ":".join(str(p) for p in (base_seed, *parts)).encode()
-  return (
-    int.from_bytes(hashlib.sha256(payload).digest()[:4], "big") & 0x7FFFFFFF
-  )
-
-
 def truth_for(base_seed: int, d: int, rep: int) -> VineTruth:
   """The true vine of repetition ``rep`` in dimension ``d``."""
-  return vine_scenarios.draw_truth(d, _seed(base_seed, "truth", d, rep))
+  return vine_scenarios.draw_truth(d, derive_seed(base_seed, "truth", d, rep))
 
 
 def random_structure_for(base_seed: int, d: int, rep: int) -> pv.RVineStructure:
   """The ``random`` arm's structure, drawn independently of the truth's."""
-  return pv.RVineStructure.sample(d, seeds=[_seed(base_seed, "random", d, rep)])
+  return pv.RVineStructure.sample(
+    d, seeds=[derive_seed(base_seed, "random", d, rep)]
+  )
 
 
 def regime_fingerprint() -> dict[str, list[float]]:
@@ -110,34 +100,6 @@ def regime_fingerprint() -> dict[str, list[float]]:
     assert tau_of_x is not None
     out[name] = [round(float(t), 12) for t in tau_of_x(x)]
   return out
-
-
-def _cell_key(cell: VineCell) -> str:
-  return f"d{cell.d}__n{cell.n}__rep{cell.rep}"
-
-
-def _cell_done(cells_root: Path, cell: VineCell) -> bool:
-  """True once a cell's shard is fully written (the ``DONE`` marker is last)."""
-  return (cells_root / _cell_key(cell) / "DONE").exists()
-
-
-def _write_cell_shard(
-  cells_root: Path, cell: VineCell, rows: _CellRows, fmt: str
-) -> None:
-  """Persist one cell's row-lists, then a ``DONE`` marker written last."""
-  cell_dir = cells_root / _cell_key(cell)
-  cell_dir.mkdir(parents=True, exist_ok=True)
-  for name, cell_rows in zip(_SHARD_TABLES, rows, strict=True):
-    if cell_rows:
-      _write_table(_data_frame(cell_rows), cell_dir / name, fmt)
-  (cell_dir / "DONE").write_text("")
-
-
-def _read_cell_shard(cells_root: Path, cell: VineCell, fmt: str) -> _CellRows:
-  cell_dir = cells_root / _cell_key(cell)
-  metrics = _read_table(cell_dir / "metrics", fmt).to_dict("records")
-  runtime = _read_table(cell_dir / "runtime", fmt).to_dict("records")
-  return metrics, runtime
 
 
 def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
@@ -168,22 +130,6 @@ def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
   return hashlib.sha256(encoded).hexdigest()
 
 
-def _guard_manifest(
-  out: Path, grid: VineGridConfig, run: RunConfig, resume: bool
-) -> None:
-  """Write (or, on resume, verify) the grid-signature manifest."""
-  path = out / "manifest.json"
-  signature = grid_signature(grid, run)
-  if resume and path.exists():
-    previous = json.loads(path.read_text()).get("signature")
-    if previous != signature:
-      raise ValueError(
-        "the vine grid must match the checkpoint in this output directory to "
-        "resume; use a fresh --out or drop --resume"
-      )
-  path.write_text(json.dumps({"signature": signature}, indent=2))
-
-
 def score(pdf_true: torch.Tensor, pdf_hat: torch.Tensor) -> dict[str, float]:
   """Monte-Carlo ``KL`` / ``L1`` / ``ISE`` from points drawn under the truth."""
   p = pdf_true.to(torch.float64).clamp_min(_EPS)
@@ -208,15 +154,6 @@ def _score_both(
   return {**joint, "KL_copula": copula["KL"], "L1_copula": copula["L1"]}
 
 
-def _gpu_peaks() -> tuple[float, float]:
-  if not torch.cuda.is_available():
-    return 0.0, 0.0
-  return (
-    torch.cuda.max_memory_reserved() / 1024**2,
-    torch.cuda.max_memory_allocated() / 1024**2,
-  )
-
-
 def _fit_npcc(
   arm: str,
   est: EstimatorSpec,
@@ -232,13 +169,11 @@ def _fit_npcc(
   context: ConditioningContext[torch.Tensor] = (
     SimplifiedContext() if arm == "oracle" else NonSimplifiedContext()
   )
-  controls = FitControlsRosenblattVinecop(
-    backend=est.backend,
-    transform=cast("Literal['identity', 'logit', 'probit']", est.transform),
+  controls = est.controls(
+    FitControlsRosenblattVinecop,
     device=device,
     projection_grid_size=projection_grid_size,
     batch_size=batch_size,
-    backend_kwargs=dict(est.backend_kwargs),
   )
   # The margins run the pairs' backend on the data scale, hence "identity";
   # the estimator's own transform is for copula-scale responses.
@@ -281,33 +216,32 @@ def summarize_one_cell(
   *,
   base_seed: int,
   device: str | None,
-) -> _CellRows:
+) -> tuple[Rows, Rows]:
   """Fit every arm on one cell's data and return its metric and runtime rows."""
   truth = truth_for(base_seed, cell.d, cell.rep)
   y, _, x = vine_scenarios.sample(
-    truth, cell.n, _seed(base_seed, "train", cell.d, cell.n, cell.rep)
+    truth, cell.n, derive_seed(base_seed, "train", cell.d, cell.n, cell.rep)
   )
   points = vine_scenarios.eval_points(
     truth,
     scenarios.conditional_x_axis(grid.eval_x_n),
     grid.eval_m,
-    _seed(base_seed, "eval", cell.d, cell.rep),
+    derive_seed(base_seed, "eval", cell.d, cell.rep),
   )
   structures = {
     "oracle": truth.structure,
     "random": random_structure_for(base_seed, cell.d, cell.rep),
   }
-  cell_seed = _seed(base_seed, "cell", cell.d, cell.n, cell.rep)
+  cell_seed = derive_seed(base_seed, "cell", cell.d, cell.n, cell.rep)
   cell_base = {"d": cell.d, "n": cell.n, "rep": cell.rep, "seed": cell_seed}
 
-  metric_rows: list[dict[str, Any]] = []
-  runtime_rows: list[dict[str, Any]] = []
+  metric_rows: Rows = []
+  runtime_rows: Rows = []
 
   def _record(
     base: Mapping[str, object], fit_time: float, pdf_time: float
   ) -> None:
-    reserved, alloc = _gpu_peaks()
-    rss_mb, mem_available_mb = _system_mem_mb()
+    memory = memory_usage()
     logger.info(
       "arm %s / %s [d=%d n=%d rep=%d]: fit %.1fs | GPU peak %.0f MiB | "
       "RSS %.0f MiB | MemAvailable %.0f MiB",
@@ -317,9 +251,9 @@ def summarize_one_cell(
       cell.n,
       cell.rep,
       fit_time,
-      reserved,
-      rss_mb,
-      mem_available_mb,
+      memory["gpu_peak_reserved_mb"],
+      memory["rss_mb"],
+      memory["mem_available_mb"],
     )
     runtime_rows.append(
       {
@@ -327,14 +261,11 @@ def summarize_one_cell(
         "fit_time": fit_time,
         "pdf_time": pdf_time,
         "total_time": fit_time + pdf_time,
-        "gpu_peak_reserved_mb": reserved,
-        "gpu_peak_alloc_mb": alloc,
-        "rss_mb": rss_mb,
-        "mem_available_mb": mem_available_mb,
+        **memory,
       }
     )
 
-  for arm in (a for a in grid.arms if a != "tll"):
+  for arm in (a for a in grid.arms if a in NPCC_ARMS):
     for est in grid.estimators:
       base = {
         **cell_base,
@@ -344,9 +275,8 @@ def summarize_one_cell(
         "backend": est.backend,
         "transform": est.transform,
       }
-      torch.manual_seed(_estimator_seed(cell_seed, f"{arm}:{est.estimator_id}"))
-      if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
+      torch.manual_seed(derive_seed(cell_seed, arm, est.estimator_id))
+      reset_gpu_peaks()
       t0 = perf_counter()
       dist, vine = _fit_npcc(
         arm,
@@ -374,7 +304,7 @@ def summarize_one_cell(
       metric_rows += _metric_rows(base, points, preds, copula_preds)
       _record(base, fit_time, pdf_time)
       del dist, vine
-      _release_gpu()
+      release_gpu()
 
   if "tll" in grid.arms:
     base = {
@@ -416,67 +346,31 @@ def run_vine_study(
   finish. With ``resume=True``, cells already marked done are read back and
   skipped, after the grid signature is checked against the manifest.
   """
-  cells = grid.cells()
-  cells_root = run.out / "cells"
-  cells_root.mkdir(parents=True, exist_ok=True)
-  _guard_manifest(run.out, grid, run, resume)
-
-  if run.gpu_mem_fraction is not None and torch.cuda.is_available():
-    torch.cuda.set_per_process_memory_fraction(run.gpu_mem_fraction)
-
-  done = {c for c in cells if resume and _cell_done(cells_root, c)}
-  pending = [c for c in cells if c not in done]
   logger.info(
-    "Vine study: %d cells (%d pending, %d resumed) x %d arms x %d estimators",
-    len(cells),
-    len(pending),
-    len(done),
+    "Vine study: %d arms x %d estimators per cell",
     len(grid.arms),
     len(grid.estimators),
   )
-
-  metric_rows: list[dict[str, Any]] = []
-  runtime_rows: list[dict[str, Any]] = []
-
-  def _accumulate(rows: _CellRows) -> None:
-    metric_rows.extend(rows[0])
-    runtime_rows.extend(rows[1])
-
-  for cell in cells:
-    if cell in done:
-      _accumulate(_read_cell_shard(cells_root, cell, run.fmt))
-
-  t0_wall = perf_counter()
-
-  def _do(cell: VineCell) -> _CellRows:
-    out = summarize_one_cell(
+  (metric_rows, runtime_rows), wall = sweep(
+    grid.cells(),
+    lambda cell: summarize_one_cell(
       cell, grid, base_seed=run.base_seed, device=run.device
-    )
-    _write_cell_shard(cells_root, cell, out, run.fmt)
-    logger.info("cell done: %s", cell)
-    return out
-
-  if run.workers <= 1:
-    for cell in pending:
-      _accumulate(_do(cell))
-  elif pending:
-    max_workers = min(run.workers, len(pending), os.cpu_count() or 1)
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-      futures = [pool.submit(_do, cell) for cell in pending]
-      for fut in as_completed(futures):
-        _accumulate(fut.result())
-
-  wall = perf_counter() - t0_wall
-  logger.info("Vine study finished in %.1fs", wall)
+    ),
+    tables=TABLES,
+    run=run,
+    signature=grid_signature(grid, run),
+    study="vine",
+    resume=resume,
+  )
 
   sort_axes = ["d", "n", "arm", "label", "rep"]
   metric_df = (
-    _data_frame(metric_rows)
+    pd.DataFrame(metric_rows)
     .sort_values([*sort_axes, "x"])
     .reset_index(drop=True)
   )
   runtime_df = (
-    _data_frame(runtime_rows).sort_values(sort_axes).reset_index(drop=True)
+    pd.DataFrame(runtime_rows).sort_values(sort_axes).reset_index(drop=True)
   )
   return metric_df, runtime_df, wall
 
@@ -499,19 +393,9 @@ def aggregate_vine_outputs(
   metric_df: pd.DataFrame, runtime_df: pd.DataFrame
 ) -> dict[str, pd.DataFrame]:
   """Summaries over repetitions, per ``x`` and averaged over ``x``."""
-  by_x_group = [*_GROUP_AXES, "x"]
-  by_x: list[pd.DataFrame] = []
-  over_x: list[pd.DataFrame] = []
-  for metric in METRIC_NAMES:
-    g = _summary_stats(metric_df, by_x_group, metric)
-    g["metric"] = metric
-    by_x.append(g)
-    averaged = metric_df.groupby(
-      [*_GROUP_AXES, "rep"], as_index=False, dropna=False
-    ).agg(value=(metric, "mean"))
-    g = _summary_stats(averaged, list(_GROUP_AXES), "value")
-    g["metric"] = metric
-    over_x.append(g)
+  summary_by_x, summary_over_x = summarize(
+    metric_df, METRIC_NAMES, _GROUP_AXES, x_axes=("x",)
+  )
   runtime_summary = runtime_df.groupby(
     list(_GROUP_AXES), as_index=False, dropna=False
   ).agg(
@@ -522,8 +406,8 @@ def aggregate_vine_outputs(
   )
   return {
     "metrics_by_x": metric_df,
-    "summary_by_x": pd.concat(by_x, ignore_index=True),
-    "summary_over_x": pd.concat(over_x, ignore_index=True),
+    "summary_by_x": summary_by_x,
+    "summary_over_x": summary_over_x,
     "runtime": runtime_df,
     "runtime_summary": cast("pd.DataFrame", runtime_summary),
   }

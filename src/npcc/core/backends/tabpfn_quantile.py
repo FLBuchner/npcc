@@ -4,7 +4,11 @@ Quantile-based TabPFN conditional margin.
 This backend reads TabPFN's ``output_type="quantiles"`` result into the
 quantile-table reconstruction machinery. It implements model fitting and
 quantile prediction; PDF, CDF, inverse CDF, and grid evaluation are inherited
-from :class:`QuantileTableDistribution1D`.
+from :class:`~npcc.core.margin.ConditionalMargin`.
+
+This module is the one place the concrete ``TabPFNRegressor`` is imported, and
+it is looked up as a module global when a model is built -- which makes this
+module the single monkeypatch target in the tests.
 
 TabPFN receives host-side input tensors. These conversions are isolated in this
 adapter, while all outputs are returned as torch tensors on the configured
@@ -13,42 +17,31 @@ model device.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Unpack
 
 import torch
+from tabpfn import TabPFNRegressor
+from tabpfn.constants import ModelVersion
 
-from npcc.core.backends.tabpfn_common import (
-  _DEFAULT_MODEL_VERSION,
-  ModelVersion,
-  make_tabpfn_regressor,
-)
-from npcc.core.margin_quantile_table import (
-  QuantileTableConfig,
-  QuantileTableDistribution1D,
-)
+from npcc.core.margin import ConditionalMargin, MarginOptions
+
+DEFAULT_MODEL_VERSION = ModelVersion.V3
+"""Default TabPFN model version, shared by both TabPFN backends."""
 
 
-class TabPFNQuantileBackend(QuantileTableDistribution1D):
+class TabPFNQuantileBackend(ConditionalMargin):
   """Conditional margin using TabPFN's predicted quantiles.
 
   Parameters
   ----------
-  transform
-    Response transformation inherited from
-    :class:`QuantileTableDistribution1D`.
-  quantile_table_config
-    Quantile-table reconstruction configuration.
-  eps
-    Distance used when clipping values away from the boundaries of
-    ``(0, 1)`` before the logit or probit transform.
-  device
-    Device used by the TabPFN model and returned tensors.
-  batch_size
-    Maximum number of conditioning rows evaluated in one prediction call.
-  model_kwargs
-    Additional arguments passed to ``TabPFNRegressor``.
-  model_version
-    TabPFN model version. The default is the shared current version.
+  model_kwargs : dict, optional
+      Additional arguments passed to ``TabPFNRegressor``.
+  model_version : ModelVersion, str, or None, default=ModelVersion.V3
+      TabPFN model version, as the enum or its value (``"v2.5"``, ``"v3"``).
+      ``None`` builds a bare ``TabPFNRegressor`` rather than a versioned
+      default.
+  **margin : MarginOptions
+      Forwarded to :class:`~npcc.core.margin.ConditionalMargin`.
   """
 
   model_: Any | None
@@ -56,39 +49,29 @@ class TabPFNQuantileBackend(QuantileTableDistribution1D):
   def __init__(
     self,
     *,
-    transform: Literal["identity", "logit", "probit"] = "logit",
-    quantile_table_config: QuantileTableConfig | None = None,
-    eps: float = 1e-6,
-    device: str | torch.device | None = None,
-    batch_size: int | None = None,
     model_kwargs: dict[str, Any] | None = None,
-    model_version: ModelVersion | None = _DEFAULT_MODEL_VERSION,
+    model_version: ModelVersion | str | None = DEFAULT_MODEL_VERSION,
+    **margin: Unpack[MarginOptions],
   ) -> None:
-    super().__init__(
-      transform=transform,
-      quantile_table_config=quantile_table_config,
-      eps=eps,
-      device=device,
-      batch_size=batch_size,
-    )
+    super().__init__(**margin)
     self.model_kwargs = dict(model_kwargs or {})
     self.model_kwargs.setdefault("device", str(self._device))
-    self.model_version = model_version
+    self.model_version = (
+      None if model_version is None else ModelVersion(model_version)
+    )
     self.model_ = None
 
   def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
     """Fit TabPFN."""
-    self.model_ = make_tabpfn_regressor(
-      self.model_version,
-      self.model_kwargs,
-    )
+    if self.model_version is None:
+      self.model_ = TabPFNRegressor(**self.model_kwargs)
+    else:
+      self.model_ = TabPFNRegressor.create_default_for_version(
+        self.model_version, **self.model_kwargs
+      )
 
-    # TabPFN converts inputs to NumPy internally
-    # CUDA inputs cannot be converted
-    self.model_.fit(
-      x.detach().cpu(),
-      z.detach().cpu(),
-    )
+    # TabPFN converts its inputs to NumPy itself, which a CUDA tensor refuses.
+    self.model_.fit(x.detach().cpu(), z.detach().cpu())
 
   def _predict_quantiles(
     self,
@@ -97,12 +80,7 @@ class TabPFNQuantileBackend(QuantileTableDistribution1D):
   ) -> torch.Tensor:
     """Predict one quantile table for a chunk of conditioning rows.
 
-    TabPFN receives host-side conditioning rows and a Python list of
-    probability levels. Its output is converted back to a torch tensor on the
-    configured device.
-
-    Depending on the TabPFN version, the output may have shape
-    ``(n_chunk, n_alphas)`` or ``(n_alphas, n_chunk)``.
+    TabPFN returns one array per level, so the levels lead.
     """
     assert self.model_ is not None
 
@@ -111,26 +89,4 @@ class TabPFNQuantileBackend(QuantileTableDistribution1D):
       output_type="quantiles",
       quantiles=alphas.tolist(),
     )
-
-    quantiles = torch.as_tensor(
-      predicted,
-      dtype=x.dtype,
-      device=x.device,
-    )
-
-    n_chunk = x.shape[0]
-    n_alphas = alphas.shape[0]
-    expected_shape = (n_chunk, n_alphas)
-    transposed_shape = (n_alphas, n_chunk)
-
-    if quantiles.shape == expected_shape:
-      return quantiles
-
-    if quantiles.shape == transposed_shape:
-      return quantiles.T
-
-    raise RuntimeError(
-      "Unexpected quantile output shape. "
-      f"Got {tuple(quantiles.shape)}, expected {expected_shape} "
-      f"or {transposed_shape}."
-    )
+    return self._quantile_rows(predicted, x, levels_first=True)

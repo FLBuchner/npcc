@@ -4,6 +4,9 @@ The grid is declared in a TOML file (loaded with the stdlib :mod:`tomllib`);
 run-level options come from the CLI.  TOML has no ``null`` literal, so the
 ``normalize`` axis accepts the string ``"none"`` (or ``"off"``/``0``) to mean
 "no Sinkhorn projection".
+
+A key the TOML leaves out takes the dataclass default, so each default is
+written once, on the field.
 """
 
 from __future__ import annotations
@@ -11,22 +14,28 @@ from __future__ import annotations
 import hashlib
 import json
 import tomllib
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeVar, cast, get_args
 
+from npcc.core.controls import FitControlsRosenblattBicop, Transform
 from npcc.core.errors import (
   EstimatorConfigError,
   InvalidBackendKwargsError,
   UnknownBackendError,
 )
 from npcc.core.registry import available_backends, validate_backend_kwargs
-from npcc.experiments.scenarios import FAMILIES, TAU_SCENARIOS
+from npcc.experiments.scenarios import (
+  CONDITIONAL_UV_GRID_N,
+  CONDITIONAL_X_GRID_N,
+  FAMILIES,
+  TAU_SCENARIOS,
+)
 
-TRANSFORMS: tuple[str, ...] = ("identity", "logit", "probit")
+ControlsT = TypeVar("ControlsT", bound=FitControlsRosenblattBicop)
 
 
 @dataclass(frozen=True)
@@ -41,7 +50,7 @@ class EstimatorSpec:
 
   label: str
   backend: str
-  transform: str
+  transform: Transform
   backend_kwargs: Mapping[str, object] = field(default_factory=dict)
 
   def __post_init__(self) -> None:
@@ -51,9 +60,10 @@ class EstimatorSpec:
       raise UnknownBackendError(
         f"Unknown backend {self.backend!r}. Available: {available_backends()}."
       )
-    if self.transform not in TRANSFORMS:
+    if self.transform not in get_args(Transform):
       raise EstimatorConfigError(
-        f"Unknown transform {self.transform!r}. Allowed: {list(TRANSFORMS)}."
+        f"Unknown transform {self.transform!r}. "
+        f"Allowed: {list(get_args(Transform))}."
       )
     frozen = MappingProxyType(deepcopy(dict(self.backend_kwargs)))
     validate_backend_kwargs(self.backend, frozen)
@@ -69,10 +79,46 @@ class EstimatorSpec:
 
   @property
   def estimator_id(self) -> str:
+    """Stable content hash of :meth:`canonical_dict`."""
     encoded = json.dumps(
       self.canonical_dict(), sort_keys=True, separators=(",", ":")
     ).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+  def controls(
+    self,
+    cls: type[ControlsT],
+    *,
+    device: str | None,
+    projection_grid_size: int,
+    batch_size: int | None,
+  ) -> ControlsT:
+    """Fit controls for this estimator, under a study's run settings.
+
+    Parameters
+    ----------
+    cls : type
+        :class:`~npcc.core.controls.FitControlsRosenblattBicop` or a subclass.
+    device : str or None
+        The run's device.
+    projection_grid_size : int
+        The grid's Sinkhorn projection size.
+    batch_size : int or None
+        The grid's inference batch size.
+
+    Returns
+    -------
+    FitControlsRosenblattBicop
+        An instance of ``cls``.
+    """
+    return cls(
+      backend=self.backend,
+      transform=self.transform,
+      device=device,
+      projection_grid_size=projection_grid_size,
+      batch_size=batch_size,
+      backend_kwargs=dict(self.backend_kwargs),
+    )
 
 
 @dataclass(frozen=True)
@@ -83,6 +129,11 @@ class Cell:
   tau_scenario: str
   n: int
   rep: int
+
+  @property
+  def key(self) -> str:
+    """The cell's checkpoint directory name."""
+    return f"{self.family}__{self.tau_scenario}__n{self.n}__rep{self.rep}"
 
 
 def _check_subset(name: str, values: list[Any], allowed: Iterable[str]) -> None:
@@ -96,22 +147,44 @@ def _check_subset(name: str, values: list[Any], allowed: Iterable[str]) -> None:
     )
 
 
-def _coerce_normalize(raw: list[Any]) -> list[int | None]:
-  out: list[int | None] = []
-  for x in raw:
-    if x is None or (isinstance(x, str) and x.lower() in {"none", "off"}):
-      out.append(None)
-    elif isinstance(x, bool):  # bool is an int subclass; reject explicitly.
-      raise ValueError(f"normalize entries must be int or 'none', got {x!r}.")
-    elif isinstance(x, int) and x == 0:
-      out.append(None)
-    elif isinstance(x, int) and x > 0:
-      out.append(x)
-    else:
-      raise ValueError(
-        f"normalize entries must be a positive int or 'none', got {x!r}."
-      )
-  return out
+def _check_common(
+  *,
+  n: list[int],
+  n_rep: int,
+  estimators: Sequence[EstimatorSpec],
+  projection_grid_size: int,
+  batch_size: int | None,
+) -> None:
+  """Validate the fields both studies' grids share."""
+  if not n or any(v <= 0 for v in n):
+    raise ValueError(f"n must be a non-empty list of positive ints; got {n}")
+  if n_rep <= 0:
+    raise ValueError(f"n_rep must be a positive int; got {n_rep}")
+  labels = [e.label for e in estimators]
+  if len(labels) != len(set(labels)):
+    raise EstimatorConfigError(f"estimator labels must be unique; got {labels}")
+  if projection_grid_size < 2:
+    raise ValueError(
+      f"projection_grid_size must be >= 2; got {projection_grid_size}"
+    )
+  if batch_size is not None and batch_size <= 0:
+    raise ValueError(
+      f"batch_size must be a positive int or omitted; got {batch_size}"
+    )
+
+
+def _coerce_normalize(raw: list[Any]) -> list[Any]:
+  """Map TOML's spellings of "no projection" to ``None``.
+
+  Everything else passes through to :class:`GridConfig`, which validates it.
+  """
+  return [
+    None
+    if (isinstance(x, str) and x.lower() in {"none", "off"})
+    or (type(x) is int and x == 0)
+    else x
+    for x in raw
+  ]
 
 
 @dataclass
@@ -126,8 +199,8 @@ class GridConfig:
   n_rep: int
   projection_grid_size: int = 30
   batch_size: int | None = None
-  conditional_uv_grid_n: int = 20
-  conditional_x_grid_n: int = 10
+  conditional_uv_grid_n: int = CONDITIONAL_UV_GRID_N
+  conditional_x_grid_n: int = CONDITIONAL_X_GRID_N
   surface_tau_levels: list[float] = field(
     default_factory=lambda: [0.1, 0.4, 0.7]
   )
@@ -140,9 +213,13 @@ class GridConfig:
     _check_subset("tau_scenarios", self.tau_scenarios, TAU_SCENARIOS)
     if not self.estimators:
       raise ValueError("estimators must be non-empty.")
-    labels = [e.label for e in self.estimators]
-    if len(labels) != len(set(labels)):
-      raise EstimatorConfigError("Estimator labels must be unique.")
+    _check_common(
+      n=self.n,
+      n_rep=self.n_rep,
+      estimators=self.estimators,
+      projection_grid_size=self.projection_grid_size,
+      batch_size=self.batch_size,
+    )
     if not self.normalize:
       raise ValueError("normalize must be non-empty (e.g. [None]).")
     for entry in self.normalize:
@@ -150,18 +227,9 @@ class GridConfig:
         isinstance(entry, bool) or not isinstance(entry, int) or entry <= 0
       ):
         raise ValueError(
-          "normalize entries must be None or a positive int "
-          f"(got {entry!r}); the string 'none' is only for TOML input."
+          "normalize entries must be None, 'none' or a positive int; "
+          f"got {entry!r}"
         )
-    if not self.n or any(v <= 0 for v in self.n):
-      raise ValueError("n must be a non-empty list of positive ints.")
-    if self.n_rep <= 0:
-      raise ValueError("n_rep must be a positive int.")
-    if self.projection_grid_size < 2:
-      raise ValueError("projection_grid_size must be >= 2.")
-
-    if self.batch_size is not None and self.batch_size <= 0:
-      raise ValueError("batch_size must be a positive int or omitted.")
     if self.conditional_uv_grid_n < 2:
       raise ValueError("conditional_uv_grid_n must be >= 2.")
     if self.conditional_x_grid_n < 1:
@@ -176,10 +244,8 @@ class GridConfig:
     if self.tau_diagnostic_n < 10:
       raise ValueError("tau_diagnostic_n must be >= 10.")
 
-  def estimator_specs(self) -> list[EstimatorSpec]:
-    return list(self.estimators)
-
   def cells(self) -> list[Cell]:
+    """Every data cell of the grid, in sweep order."""
     return [
       Cell(family=f, tau_scenario=s, n=n, rep=rep)
       for f in self.families
@@ -197,7 +263,6 @@ class RunConfig:
   device: str | None = None
   workers: int = 1
   base_seed: int = 317
-  log_level: str = "INFO"
   fmt: str = "parquet"
   gpu_mem_fraction: float | None = None
 
@@ -228,16 +293,41 @@ def _parse_estimator(entry: Mapping[str, object]) -> EstimatorSpec:
   return EstimatorSpec(
     label=label,
     backend=backend,
-    transform=transform,
+    # `__post_init__` refuses any string that is not a transform.
+    transform=cast("Transform", transform),
     backend_kwargs={str(k): v for k, v in raw.items()},
   )
 
 
-def load_grid(path: str | Path) -> GridConfig:
-  """Load a :class:`GridConfig` from the ``[grid]`` table of a TOML file."""
+def _read_grid(path: str | Path) -> dict[str, Any]:
+  """The ``[grid]`` table of a TOML file (or the file, if it has none)."""
   with Path(path).open("rb") as fh:
     data = tomllib.load(fh)
-  grid = data.get("grid", data)
+  return data.get("grid", data)
+
+
+def _present(
+  grid: Mapping[str, Any], converters: Mapping[str, Callable[[Any], object]]
+) -> dict[str, Any]:
+  """The optional keys ``grid`` sets, converted; the rest keep their default."""
+  return {k: conv(grid[k]) for k, conv in converters.items() if k in grid}
+
+
+_GRID_OPTIONAL: dict[str, Callable[[Any], object]] = {
+  "projection_grid_size": int,
+  "batch_size": int,
+  "conditional_uv_grid_n": int,
+  "conditional_x_grid_n": int,
+  "surface_tau_levels": lambda v: [float(t) for t in v],
+  "surface_families": lambda v: [str(f) for f in v],
+  "enable_tau_diagnostics": bool,
+  "tau_diagnostic_n": int,
+}
+
+
+def load_grid(path: str | Path) -> GridConfig:
+  """Load a :class:`GridConfig` from the ``[grid]`` table of a TOML file."""
+  grid = _read_grid(path)
   raw_estimators = grid.get("estimators")
   if not isinstance(raw_estimators, list) or not raw_estimators:
     raise EstimatorConfigError(
@@ -251,20 +341,7 @@ def load_grid(path: str | Path) -> GridConfig:
       normalize=_coerce_normalize(list(grid["normalize"])),
       n=[int(v) for v in grid["n"]],
       n_rep=int(grid["n_rep"]),
-      projection_grid_size=int(grid.get("projection_grid_size", 30)),
-      batch_size=(
-        None if grid.get("batch_size") is None else int(grid["batch_size"])
-      ),
-      conditional_uv_grid_n=int(grid.get("conditional_uv_grid_n", 20)),
-      conditional_x_grid_n=int(grid.get("conditional_x_grid_n", 10)),
-      surface_tau_levels=[
-        float(v) for v in grid.get("surface_tau_levels", [0.1, 0.4, 0.7])
-      ],
-      surface_families=[
-        str(v) for v in grid.get("surface_families", ["clayton"])
-      ],
-      enable_tau_diagnostics=bool(grid.get("enable_tau_diagnostics", True)),
-      tau_diagnostic_n=int(grid.get("tau_diagnostic_n", 1000)),
+      **_present(grid, _GRID_OPTIONAL),
     )
   except KeyError as exc:
     raise ValueError(f"Missing required [grid] key: {exc}.") from exc

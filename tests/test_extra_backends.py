@@ -1,10 +1,10 @@
-"""Smoke tests for the optional non-TabPFN backends (gbm / ngboost / tabicl).
+"""Smoke tests for the backends that need an extra, a GPU or a download.
 
 Each test ``importorskip``s its backend dependency, so the suite still
-passes in environments where the extra is not installed.  GBM and NGBoost
-fit locally and quickly; TabICL is a foundation model whose first fit
-downloads weights, so it is additionally guarded against download/runtime
-failures (skipped, like the real-TabPFN smoke).
+passes in environments where the extra is not installed.  LightGBM and NGBoost
+fit locally and quickly; TabICL and Nori are foundation models whose first fit
+downloads weights, so they are additionally guarded against download/runtime
+failures. The TabPFN fine-tune smoke is opt-in: it is a GPU training loop.
 """
 
 from __future__ import annotations
@@ -15,9 +15,11 @@ from typing import cast
 import pytest
 import torch
 
-from npcc.core.bicop import RosenblattBicop
-from npcc.core.controls import FitControlsRosenblattBicop
-from npcc.core.margin_quantile_table import QuantileTableConfig
+from npcc.core import (
+  FitControlsRosenblattBicop,
+  QuantileTableConfig,
+  RosenblattBicop,
+)
 
 
 def _gaussian_copula_sample(
@@ -53,17 +55,55 @@ def _check_fitted_model(m: RosenblattBicop) -> None:
   assert -1.0 <= tau <= 1.0
 
 
-def test_gbm_backend_smoke() -> None:
-  pytest.importorskip("sklearn")
-  u, v = _gaussian_copula_sample(80, rho=0.6, seed=0)
+def test_lightgbm_backend_smoke() -> None:
+  pytest.importorskip("lightgbm")
+  u, v = _gaussian_copula_sample(200, rho=0.6, seed=0)
   m = RosenblattBicop(
     FitControlsRosenblattBicop(
-      backend="gbm",
-      quantile_table_config=QuantileTableConfig(n_quantiles=11),
-      backend_kwargs={"n_estimators": 20, "max_depth": 2},
+      backend="lightgbm",
+      device="cpu",
+      backend_kwargs={"n_estimators": 20, "random_state": 0},
     )
   ).fit(torch.column_stack([u, v]))
   _check_fitted_model(m)
+
+
+def test_lightgbm_fits_one_booster_per_level() -> None:
+  """Every probability level the table reads has its own booster.
+
+  The table is read at ``config.alphas()``; a booster count that drifted from
+  it would hand the reconstruction a table of the wrong width.
+  """
+  pytest.importorskip("lightgbm")
+  from npcc.core.backends.lightgbm_quantile import LightGBMQuantileBackend
+
+  config = QuantileTableConfig(n_quantiles=9)
+  margin = LightGBMQuantileBackend(
+    quantile_table_config=config, device="cpu", n_estimators=5
+  )
+  u, v = _gaussian_copula_sample(120, rho=0.5, seed=1)
+  margin.fit(v.double(), x=u.double().reshape(-1, 1))
+
+  assert margin.boosters_ is not None
+  assert len(margin.boosters_) == config.n_quantiles
+  table = margin.cdf(
+    torch.tensor([0.2, 0.8], dtype=torch.float64),
+    x=torch.tensor([[0.5], [0.5]], dtype=torch.float64),
+  )
+  assert table[0] < table[1]
+
+
+def test_lightgbm_refuses_a_parameter_it_controls() -> None:
+  """A caller's ``objective`` or ``alpha`` would silently replace the level's.
+
+  Every booster's objective and level come from the quantile table, so letting
+  either through would fit every level to the same quantile.
+  """
+  pytest.importorskip("lightgbm")
+  from npcc.core.backends.lightgbm_quantile import LightGBMQuantileBackend
+
+  with pytest.raises(ValueError, match=r"must control \['alpha'\]"):
+    LightGBMQuantileBackend(alpha=0.5)
 
 
 def test_ngboost_backend_smoke() -> None:
@@ -73,19 +113,6 @@ def test_ngboost_backend_smoke() -> None:
     FitControlsRosenblattBicop(
       backend="ngboost",
       backend_kwargs={"n_estimators": 40},
-    )
-  ).fit(torch.column_stack([u, v]))
-  _check_fitted_model(m)
-
-
-def test_catboost_backend_smoke() -> None:
-  pytest.importorskip("catboost")
-  u, v = _gaussian_copula_sample(80, rho=0.6, seed=3)
-  m = RosenblattBicop(
-    FitControlsRosenblattBicop(
-      backend="catboost",
-      backend_kwargs={"iterations": 100},
-      quantile_table_config=QuantileTableConfig(n_quantiles=21),
     )
   ).fit(torch.column_stack([u, v]))
   _check_fitted_model(m)
