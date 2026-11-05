@@ -47,6 +47,12 @@ def main(argv: list[str] | None = None) -> int:
   grid = load_vine_grid(args.config)
 
   metric_df, runtime_df, wall = run_vine_study(grid, run, resume=args.resume)
+  if run.shard is not None:
+    logger.info(
+      "Shard %d/%d done; run again without --shard to write the tables",
+      *run.shard,
+    )
+    return 0
   write_tables(aggregate_vine_outputs(metric_df, runtime_df), run.out, run.fmt)
   (run.out / "truths.json").write_text(
     json.dumps(truths(grid, run.base_seed), indent=2)

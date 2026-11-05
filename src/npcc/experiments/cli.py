@@ -50,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
   metric_df, quantity_df, diagnostic_df, runtime_df, wall = run_study(
     grid, run, resume=args.resume
   )
+  if run.shard is not None:
+    logger.info(
+      "Shard %d/%d done; run again without --shard to write the tables",
+      *run.shard,
+    )
+    return 0
   outputs = aggregate_study_outputs(metric_df, diagnostic_df, runtime_df)
   write_tables(
     {

@@ -190,7 +190,9 @@ def read_table(base: Path, fmt: str) -> pd.DataFrame:
     return pd.DataFrame()
   if fmt == "parquet":
     return pd.read_parquet(path)
-  return pd.read_csv(path)
+  # The default parser is not exact for float64, so a resumed run would
+  # differ from a fresh one in the last digits of every metric.
+  return pd.read_csv(path, float_precision="round_trip")
 
 
 def write_tables(
@@ -317,6 +319,10 @@ def sweep(
       "Capped CUDA memory to %.2f of total (headroom for the display server)",
       run.gpu_mem_fraction,
     )
+
+  if run.shard is not None:
+    index, count = run.shard
+    cells = [c for position, c in enumerate(cells) if position % count == index]
 
   done = {c for c in cells if resume and (cells_root / c.key / "DONE").exists()}
   pending = [c for c in cells if c not in done]
@@ -448,6 +454,16 @@ def summarize(
 # ---------------------------------------------------------------------------
 
 
+def _shard(text: str) -> tuple[int, int]:
+  """Parse ``--shard I/K`` into ``(I, K)``."""
+  index, sep, count = text.partition("/")
+  if not sep or not index.isdigit() or not count.isdigit():
+    raise argparse.ArgumentTypeError(
+      f"shard must be I/K with whole numbers; got {text!r}"
+    )
+  return int(index), int(count)
+
+
 def study_parser(prog: str, description: str) -> argparse.ArgumentParser:
   """The argument parser both study commands share.
 
@@ -486,6 +502,19 @@ def study_parser(prog: str, description: str) -> argparse.ArgumentParser:
     type=int,
     default=1,
     help="Number of data cells to run concurrently (threads).",
+  )
+  p.add_argument(
+    "--shard",
+    type=_shard,
+    default=None,
+    metavar="I/K",
+    help=(
+      "Compute only every K-th cell, starting at the I-th, into --out, and "
+      "stop before aggregating. Run K of these as separate processes (with "
+      "--resume), then the same command once more without --shard to write "
+      "the tables. Processes run in parallel where threads cannot: the cells "
+      "hold the interpreter lock for much of their work."
+    ),
   )
   p.add_argument("--base-seed", type=int, default=317)
   p.add_argument(
@@ -549,6 +578,7 @@ def start(args: argparse.Namespace) -> RunConfig:
     base_seed=args.base_seed,
     fmt=args.fmt,
     gpu_mem_fraction=args.gpu_mem_fraction,
+    shard=args.shard,
   )
   run.out.mkdir(parents=True, exist_ok=True)
   return run

@@ -96,3 +96,55 @@ def test_cli_leaves_the_cuda_allocator_at_its_default(
   _study.start(args)
 
   assert "PYTORCH_CUDA_ALLOC_CONF" not in os.environ
+
+
+def test_sharded_runs_reproduce_the_unsharded_tables(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """Shards split the cells between processes without changing any result.
+
+  Each shard computes every K-th cell into the shared folder and writes no
+  tables; the pass without ``--shard`` then aggregates. A shard that skipped a
+  cell, computed one twice, or seeded a cell by its position in the shard
+  would leave tables that differ from a single process's.
+  """
+  config = tmp_path / "study.toml"
+  config.write_text(_TOML.replace("n_rep = 1", "n_rep = 3"))
+  common = ["--config", str(config), "--workers", "1", "--format", "csv"]
+
+  single = tmp_path / "single"
+  assert cli.main([*common, "--out", str(single)]) == 0
+
+  sharded = tmp_path / "sharded"
+  for index in range(2):
+    rc = cli.main(
+      [*common, "--out", str(sharded), "--resume", "--shard", f"{index}/2"]
+    )
+    assert rc == 0
+  assert not (sharded / "metrics_by_x.csv").exists()
+  assert len(list((sharded / "cells").glob("*/DONE"))) == 3
+
+  assert cli.main([*common, "--out", str(sharded), "--resume"]) == 0
+  for name in ("metrics_by_x", "summary_over_x", "diagnostics"):
+    expected = (single / f"{name}.csv").read_text()
+    assert (sharded / f"{name}.csv").read_text() == expected, name
+
+
+@pytest.mark.parametrize("bad", ["1", "a/2", "-1/2", "1/"])
+def test_a_malformed_shard_is_refused_by_the_parser(bad: str) -> None:
+  """``--shard`` takes ``I/K`` in whole numbers, and says so at parse time."""
+  with pytest.raises(SystemExit):
+    cli._build_parser().parse_args(
+      ["--config", "c.toml", "--out", "o", "--shard", bad]
+    )
+
+
+@pytest.mark.parametrize("shard", [(2, 2), (3, 2)])
+def test_a_shard_outside_its_count_is_refused(
+  tmp_path: Path, shard: tuple[int, int]
+) -> None:
+  """A shard index of ``K`` or more matches no cell, so it would run nothing."""
+  from npcc.experiments.config import RunConfig
+
+  with pytest.raises(ValueError, match="0 <= I < K"):
+    RunConfig(out=tmp_path, shard=shard)

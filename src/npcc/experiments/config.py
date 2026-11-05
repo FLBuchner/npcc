@@ -265,10 +265,19 @@ class RunConfig:
   base_seed: int = 317
   fmt: str = "parquet"
   gpu_mem_fraction: float | None = None
+  #: ``(index, count)``: compute only the cells whose position in the study's
+  #: fixed order is ``index`` modulo ``count``, and stop before aggregating.
+  shard: tuple[int, int] | None = None
 
   def __post_init__(self) -> None:
     if self.workers < 1:
       raise ValueError("workers must be >= 1.")
+    if self.shard is not None:
+      index, count = self.shard
+      if not 0 <= index < count:
+        raise ValueError(
+          f"shard must be I/K with 0 <= I < K; got {index}/{count}"
+        )
     if self.fmt not in {"csv", "parquet"}:
       raise ValueError("fmt must be 'csv' or 'parquet'.")
     if self.gpu_mem_fraction is not None and not (
