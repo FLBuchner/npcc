@@ -32,7 +32,12 @@ from npcc.experiments.scenarios import (
   CONDITIONAL_UV_GRID_N,
   CONDITIONAL_X_GRID_N,
   FAMILIES,
+  IMPLIED,
+  SHAPE_FAMILIES,
   TAU_SCENARIOS,
+  X_MAX,
+  X_MIN,
+  is_conditional,
 )
 
 ControlsT = TypeVar("ControlsT", bound=FitControlsRosenblattBicop)
@@ -264,7 +269,12 @@ def _coerce_normalize(raw: list[Any]) -> list[Any]:
 
 @dataclass
 class GridConfig:
-  """The cartesian grid of axes to sweep."""
+  """The cartesian grid of axes to sweep.
+
+  ``families`` are either one-parameter families, each crossed with every
+  regime in ``tau_scenarios``, or shape families, whose one regime is
+  ``"implied"``; a grid holds one kind or the other.
+  """
 
   families: list[str]
   tau_scenarios: list[str]
@@ -282,10 +292,18 @@ class GridConfig:
   surface_families: list[str] = field(default_factory=lambda: ["clayton"])
   enable_tau_diagnostics: bool = True
   tau_diagnostic_n: int = 1000
+  #: The ``x`` values to store surfaces at, in place of the ones
+  #: ``surface_tau_levels`` picks; empty keeps that choice by tau. A shape
+  #: family's tau need not pick out an ``x`` -- the Student family's is
+  #: constant -- so its surfaces need these.
+  surface_x: list[float] = field(default_factory=list)
 
   def __post_init__(self) -> None:
-    _check_subset("families", self.families, FAMILIES)
-    _check_subset("tau_scenarios", self.tau_scenarios, TAU_SCENARIOS)
+    _check_subset("families", self.families, [*FAMILIES, *SHAPE_FAMILIES])
+    _check_subset(
+      "tau_scenarios", self.tau_scenarios, [*TAU_SCENARIOS, IMPLIED]
+    )
+    self._check_shape()
     if not self.estimators:
       raise ValueError("estimators must be non-empty.")
     _check_common(
@@ -315,10 +333,47 @@ class GridConfig:
       if tau <= 0.0 or tau >= 1.0:
         raise ValueError("surface_tau_levels entries must be in (0, 1).")
     if self.surface_families:
-      _check_subset("surface_families", self.surface_families, FAMILIES)
+      _check_subset(
+        "surface_families",
+        self.surface_families,
+        [*FAMILIES, *SHAPE_FAMILIES],
+      )
+    self._check_surface_x()
     if self.tau_diagnostic_n < 10:
       raise ValueError("tau_diagnostic_n must be >= 10.")
     self._check_external()
+
+  def _check_shape(self) -> None:
+    """Refuse a cell that would pair a shape family with another regime."""
+    shape = [f for f in self.families if f in SHAPE_FAMILIES]
+    if shape and set(self.tau_scenarios) != {IMPLIED}:
+      raise ValueError(
+        f"tau_scenarios must be [{IMPLIED!r}] with the shape families "
+        f"{shape}, each of which implies its own tau(x); got "
+        f"{self.tau_scenarios}"
+      )
+    one_par = [f for f in self.families if f not in SHAPE_FAMILIES]
+    if IMPLIED in self.tau_scenarios and one_par:
+      raise ValueError(
+        f"families must all be shape families with tau_scenario "
+        f"{IMPLIED!r}, which only a shape family defines; got the "
+        f"one-parameter {one_par}. Sweep them in a grid of their own."
+      )
+
+  def _check_surface_x(self) -> None:
+    """Refuse a surface ``x`` off the covariate's support, or a missing one."""
+    outside = [x for x in self.surface_x if not X_MIN <= x <= X_MAX]
+    if outside:
+      raise ValueError(
+        f"surface_x entries must lie in [{X_MIN}, {X_MAX}], the covariate's "
+        f"support; got {outside}"
+      )
+    shape = [f for f in self.surface_families if f in SHAPE_FAMILIES]
+    if shape and not self.surface_x:
+      raise ValueError(
+        f"surface_x must be set to store surfaces of the shape families "
+        f"{shape}, whose tau(x) need not pick out an x; got none"
+      )
 
   def _check_external(self) -> None:
     """Refuse the grid axes an external estimator's script cannot honor."""
@@ -331,9 +386,7 @@ class GridConfig:
         f"{external}: a Sinkhorn projection needs the density on its own "
         f"grid, which a script does not return; got {self.normalize}"
       )
-    unconditional = [
-      s for s in self.tau_scenarios if not TAU_SCENARIOS[s].conditional
-    ]
+    unconditional = [s for s in self.tau_scenarios if not is_conditional(s)]
     if unconditional:
       raise EstimatorConfigError(
         f"tau_scenarios must all be conditional with the external_r "
@@ -431,12 +484,18 @@ _GRID_OPTIONAL: dict[str, Callable[[Any], object]] = {
   "surface_families": lambda v: [str(f) for f in v],
   "enable_tau_diagnostics": bool,
   "tau_diagnostic_n": int,
+  "surface_x": lambda v: [float(x) for x in v],
 }
 
 
 def load_grid(path: str | Path) -> GridConfig:
   """Load a :class:`GridConfig` from the ``[grid]`` table of a TOML file."""
   grid = _read_grid(path)
+  if "surface_x" in grid and "surface_tau_levels" in grid:
+    raise ValueError(
+      "surface_tau_levels must be omitted when surface_x is set, since the "
+      "surfaces are then stored at those x and no tau level is read; got both"
+    )
   raw_estimators = grid.get("estimators")
   if not isinstance(raw_estimators, list) or not raw_estimators:
     raise EstimatorConfigError(

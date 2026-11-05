@@ -47,19 +47,27 @@ def _norm_label(norm: int | None) -> str:
   return "none" if norm is None else str(norm)
 
 
+def _fingerprint_x() -> torch.Tensor:
+  """The fixed ``x`` grid every by-value fingerprint is taken on."""
+  return torch.linspace(
+    scenarios.X_MIN, scenarios.X_MAX, 11, dtype=torch.float64
+  )
+
+
 def _regime_fingerprint(grid: GridConfig) -> dict[str, list[float] | float]:
   """By-value fingerprint of each tau regime used in the grid.
 
   Evaluating each conditional regime on a fixed ``x`` grid (or reading a fixed
   tau) makes a change to a regime's bounds *or* shape invalidate a checkpoint;
   the band alone would miss a same-range redefinition, such as re-centering the
-  sinusoid.
+  sinusoid. :data:`~npcc.experiments.scenarios.IMPLIED` has no tau of its own:
+  :func:`_shape_fingerprint` covers each shape family's.
   """
-  fp_x = torch.linspace(
-    scenarios.X_MIN, scenarios.X_MAX, 11, dtype=torch.float64
-  )
+  fp_x = _fingerprint_x()
   fp: dict[str, list[float] | float] = {}
   for name in sorted(grid.tau_scenarios):
+    if name == scenarios.IMPLIED:
+      continue
     spec = scenarios.TAU_SCENARIOS[name]
     if spec.conditional:
       assert spec.tau_of_x is not None
@@ -70,9 +78,31 @@ def _regime_fingerprint(grid: GridConfig) -> dict[str, list[float] | float]:
   return fp
 
 
+def _shape_fingerprint(grid: GridConfig) -> dict[str, list[list[object]]]:
+  """By-value fingerprint of each shape family used in the grid.
+
+  A shape family's tau can stay put while its shape moves, as the Student
+  family's does at 0.5, so each ``x`` of the fixed grid records the family's
+  tau beside every component's weight, family, rotation and parameters.
+  """
+  fp_x = _fingerprint_x()
+  fp: dict[str, list[list[object]]] = {}
+  for name in sorted(set(grid.families) & set(scenarios.SHAPE_FAMILIES)):
+    family = scenarios.SHAPE_FAMILIES[name]
+    rows: list[list[object]] = []
+    for x_val, tau in zip(fp_x, family.tau_of_x(fp_x), strict=True):
+      row: list[object] = [round(float(tau), 8)]
+      for weight, cop in family.components(float(x_val)):
+        params = [round(float(p), 8) for p in cop.parameters.reshape(-1)]
+        row.extend([round(weight, 8), cop.family.name, cop.rotation, *params])
+      rows.append(row)
+    fp[name] = rows
+  return fp
+
+
 def _grid_signature(grid: GridConfig, run: RunConfig) -> str:
   """Stable hash of everything that changes cell outputs (resume guard)."""
-  payload = {
+  payload: dict[str, object] = {
     "families": sorted(grid.families),
     "tau_scenarios": sorted(grid.tau_scenarios),
     # A by-value fingerprint of each regime, so changing a regime's bounds or
@@ -96,15 +126,32 @@ def _grid_signature(grid: GridConfig, run: RunConfig) -> str:
     "base_seed": run.base_seed,
     "estimators": sorted(s.estimator_id for s in grid.estimators),
   }
+  # Hashed only when set: a grid that uses neither keeps the signature its
+  # checkpoints carry, which the existence of these keys must not change.
+  if grid.surface_x:
+    payload["surface_x"] = sorted(grid.surface_x)
+  shape = _shape_fingerprint(grid)
+  if shape:
+    payload["shape_families"] = shape
   encoded = json.dumps(payload, sort_keys=True).encode()
   return hashlib.sha256(encoded).hexdigest()
 
 
 def _cell_seed(base_seed: int, cell: Cell) -> int:
-  """Deterministic, axis-decorrelated seed for a data cell."""
-  fam_idx = list(scenarios.FAMILIES).index(cell.family)
-  scn_idx = list(scenarios.TAU_SCENARIOS).index(cell.tau_scenario)
-  payload = f"{base_seed}:{fam_idx}:{scn_idx}:{cell.n}:{cell.rep}".encode()
+  """Deterministic, axis-decorrelated seed for a data cell.
+
+  A one-parameter family's cell hashes the positions of its family and regime
+  in ``FAMILIES`` and ``TAU_SCENARIOS``. A shape family's cell hashes their
+  names instead, so that an entry appended to either registry re-seeds none
+  of its cells.
+  """
+  if cell.family in scenarios.SHAPE_FAMILIES:
+    axes = f"{cell.family}:{cell.tau_scenario}"
+  else:
+    fam_idx = list(scenarios.FAMILIES).index(cell.family)
+    scn_idx = list(scenarios.TAU_SCENARIOS).index(cell.tau_scenario)
+    axes = f"{fam_idx}:{scn_idx}"
+  payload = f"{base_seed}:{axes}:{cell.n}:{cell.rep}".encode()
   return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
 
 
@@ -122,8 +169,12 @@ def _base_row(cell: Cell, est: EstimatorSpec, seed: int) -> dict[str, object]:
   }
 
 
-def _tau_values(scenario: str, x_axis: torch.Tensor | None) -> torch.Tensor:
-  spec = scenarios.TAU_SCENARIOS[scenario]
+def _tau_values(cell: Cell, x_axis: torch.Tensor | None) -> torch.Tensor:
+  """The cell's true Kendall's tau at each ``x``, or its fixed tau."""
+  if cell.family in scenarios.SHAPE_FAMILIES:
+    assert x_axis is not None
+    return scenarios.SHAPE_FAMILIES[cell.family].tau_of_x(x_axis)
+  spec = scenarios.TAU_SCENARIOS[cell.tau_scenario]
   if spec.conditional:
     assert spec.tau_of_x is not None
     assert x_axis is not None
@@ -153,7 +204,7 @@ def _metric_rows_for_quantity(
 
   if grid.conditional:
     assert grid.x_axis is not None
-    tau_x = _tau_values(cell.tau_scenario, grid.x_axis)
+    tau_x = _tau_values(cell, grid.x_axis)
     truth_grid = truth.reshape(grid.shape)
     pred_grid = pred.reshape(grid.shape)
     return [
@@ -169,7 +220,7 @@ def _metric_rows_for_quantity(
     ]
 
   stats = metrics.grid_metrics(truth, pred, include_kl=include_kl)
-  tau = _tau_values(cell.tau_scenario, None)[0]
+  tau = _tau_values(cell, None)[0]
   return [{**base, "x": float("nan"), "tau_true": float(tau), **stats}]
 
 
@@ -291,7 +342,7 @@ def _diagnostic_rows(
     for norm, pdf_hat in pdf_by_norm.items():
       c = pdf_hat.reshape((grid.u_axis.shape[0], grid.v_axis.shape[0]))
       diag = metrics.marginal_diagnostics(c, grid.u_axis, grid.v_axis)
-      tau_true = float(_tau_values(cell.tau_scenario, None)[0])
+      tau_true = float(_tau_values(cell, None)[0])
       tau_hat = float("nan")
       if enable_tau_diagnostics:
         t0 = perf_counter()
@@ -344,7 +395,7 @@ def _conditional_diagnostic_rows(
   """
   assert grid.x_axis is not None
   base = _base_row(cell, est, seed)
-  tau_x = _tau_values(cell.tau_scenario, grid.x_axis)
+  tau_x = _tau_values(cell, grid.x_axis)
   rows: list[dict[str, object]] = []
   for norm, pdf_hat in pdf_by_norm.items():
     pdf_grid = pdf_hat.reshape(grid.shape)
@@ -379,28 +430,38 @@ class _Surface(NamedTuple):
 
 
 def _surface(cell: Cell, grid: GridConfig) -> _Surface | None:
-  """The cell's surface grid, if its family stores surfaces and it has an x."""
-  if (
-    cell.family not in grid.surface_families
-    or not scenarios.TAU_SCENARIOS[cell.tau_scenario].conditional
+  """The cell's surface grid, if its family stores surfaces and it has an x.
+
+  The slices are at ``grid.surface_x`` when it is set, each with a NaN
+  ``target_tau`` since no tau chose it; otherwise at the ``x`` values whose
+  true tau meets ``grid.surface_tau_levels``.
+  """
+  if cell.family not in grid.surface_families or not scenarios.is_conditional(
+    cell.tau_scenario
   ):
     return None
 
-  rows = _surface_x_rows(cell.tau_scenario, grid.surface_tau_levels)
+  if grid.surface_x:
+    x_axis = torch.tensor(grid.surface_x, dtype=torch.float64)
+    target_tau = torch.full_like(x_axis, float("nan"))
+    tau_true = _tau_values(cell, x_axis)
+  else:
+    rows = _surface_x_rows(cell.tau_scenario, grid.surface_tau_levels)
+    x_axis = torch.tensor([row["x"] for row in rows], dtype=torch.float64)
+    target_tau = torch.tensor(
+      [row["target_tau"] for row in rows], dtype=torch.float64
+    )
+    tau_true = torch.tensor(
+      [row["tau_true"] for row in rows], dtype=torch.float64
+    )
   surface_grid = scenarios.eval_grid_for_x(
-    cell.tau_scenario,
-    torch.tensor([row["x"] for row in rows], dtype=torch.float64),
-    conditional_uv_grid_n=grid.conditional_uv_grid_n,
+    cell.tau_scenario, x_axis, conditional_uv_grid_n=grid.conditional_uv_grid_n
   )
   return _Surface(
     grid=surface_grid,
     truth=scenarios.ground_truth(cell.family, cell.tau_scenario, surface_grid),
-    target_tau=torch.tensor(
-      [row["target_tau"] for row in rows], dtype=torch.float64
-    ),
-    tau_true=torch.tensor(
-      [row["tau_true"] for row in rows], dtype=torch.float64
-    ),
+    target_tau=target_tau,
+    tau_true=tau_true,
   )
 
 

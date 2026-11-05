@@ -1,0 +1,52 @@
+# E1c: the R competitors on the cells of `configs/study_misspec.toml`, whose
+# dependence changes shape with x. gamCopula fits one family, chosen by AIC,
+# with a smooth tau(x) -- the model those scenarios misspecify; boostCopula
+# fits its families on a cubic B-spline basis of x, stopped by 10-fold
+# cross-validation, the boostCopula arm the paper reports.
+#
+#   npcc-simstudy --config configs/study_misspec_r.toml --out results/<run> \
+#     --resume --shard I/K   # once per I in 0..K-1, then once without --shard
+#
+# Run from the repository root: each `script` resolves against the working
+# directory. Each needs R with gamCopula or boostCopula, and VineCopula, on the
+# library path; a cell runs each script once, which fits the method and
+# predicts the metric grid and the surface grid from that one fit. Each script
+# runs on one core unless R links a multithreaded BLAS, so K shard processes
+# use about K cores.
+#
+# The [grid] table below is `configs/study_misspec.toml`'s, key for key, so
+# every cell samples the data and truth that study scores;
+# `tests/experiments/test_config.py` checks that the two agree on everything
+# but the estimators. `projection_grid_size` and `tau_diagnostic_n` are kept
+# for that agreement and do not reach a script.
+
+[grid]
+families = ["clayton-gumbel-mix", "student-varying-nu"]
+tau_scenarios = ["implied"]
+normalize = ["none"]
+n = [200, 500, 1000, 2000]
+n_rep = 10
+projection_grid_size = 30
+conditional_uv_grid_n = 20
+conditional_x_grid_n = 10
+surface_x = [0.1, 0.5, 0.9]
+surface_families = ["clayton-gumbel-mix", "student-varying-nu"]
+enable_tau_diagnostics = true
+tau_diagnostic_n = 1000
+
+# `backend` names the R package in the result tables; `transform` is
+# "identity" because each script fits on the copula scale.
+
+[[grid.estimators]]
+label = "gamcopula"
+kind = "external_r"
+backend = "gamCopula"
+transform = "identity"
+script = "r_methods/fit_gamcopula.R"
+
+[[grid.estimators]]
+label = "boostcopula-smooth-cv"
+kind = "external_r"
+backend = "boostCopula"
+transform = "identity"
+script = "r_methods/fit_boostcopula_smooth_cv.R"

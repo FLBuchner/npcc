@@ -12,9 +12,15 @@ import torch
 
 from npcc.core import Transform, registry
 from npcc.core.margin import MarginOptions
-from npcc.experiments import _study
+from npcc.experiments import _study, scenarios
 from npcc.experiments import runner as runner_mod
-from npcc.experiments.config import Cell, EstimatorSpec, GridConfig, RunConfig
+from npcc.experiments.config import (
+  Cell,
+  EstimatorSpec,
+  GridConfig,
+  RunConfig,
+  load_grid,
+)
 from npcc.experiments.runner import aggregate_study_outputs, run_study
 from tests.conftest import (
   TABPFN_TARGET,
@@ -402,3 +408,126 @@ def test_run_study_forwards_backend_kwargs(tmp_path: Path) -> None:
   # Both Rosenblatt directions build the backend with the configured kwargs.
   assert captured
   assert all(kw == {"foo": 7} for kw in captured)
+
+
+_SHAPE = ["clayton-gumbel-mix", "student-varying-nu"]
+
+
+def _shape_grid(surface_x: list[float]) -> GridConfig:
+  return GridConfig(
+    families=list(_SHAPE),
+    tau_scenarios=[scenarios.IMPLIED],
+    estimators=[_normal()],
+    normalize=[None],
+    n=[20],
+    n_rep=1,
+    projection_grid_size=8,
+    conditional_uv_grid_n=3,
+    conditional_x_grid_n=2,
+    surface_families=list(_SHAPE),
+    surface_x=surface_x,
+  )
+
+
+def test_a_shape_family_study_scores_against_its_own_tau(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """Every row of a shape family's cell must carry the family's own tau.
+
+  ``implied`` names no tau of its own, so a runner that looked tau up by
+  regime would fail on it -- or, given a fallback, label the Student family's
+  rows with some regime's tau rather than 0.5. Its surfaces must sit at the
+  grid's ``surface_x``, with no target tau, and against the true quantities
+  there.
+  """
+  metric_df, quantity_df, diagnostic_df, _, _ = run_study(
+    _shape_grid([0.1, 0.9]), RunConfig(out=tmp_path, workers=1)
+  )
+  for family in _SHAPE:
+    tau_of_x = scenarios.SHAPE_FAMILIES[family].tau_of_x
+    for df in (metric_df, quantity_df, diagnostic_df):
+      rows = df[df["family"] == family]
+      assert not rows.empty
+      expected = tau_of_x(torch.tensor(rows["x"].to_numpy()))
+      assert rows["tau_true"].tolist() == pytest.approx(expected.tolist())
+
+  assert sorted(quantity_df["x"].unique()) == [0.1, 0.9]
+  assert quantity_df["target_tau"].isna().all()
+  surface = scenarios.eval_grid_for_x(
+    scenarios.IMPLIED,
+    torch.tensor([0.1, 0.9], dtype=torch.float64),
+    conditional_uv_grid_n=3,
+  )
+  truth = scenarios.ground_truth(
+    "clayton-gumbel-mix", scenarios.IMPLIED, surface
+  )
+  pdf = quantity_df[
+    (quantity_df["family"] == "clayton-gumbel-mix")
+    & (quantity_df["quantity"] == "pdf")
+  ].sort_values(["x", "u", "v"])
+  assert pdf["truth"].tolist() == pytest.approx(
+    truth["pdf"].T.reshape(-1).tolist()
+  )
+
+
+def test_cell_seeds_hold_as_the_registries_grow(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """A cell's seed must not move when a family or a regime is appended.
+
+  A one-parameter cell is seeded by the positions of its family and regime,
+  which appending leaves alone; the bivariate study's cells keep the seeds
+  pinned here. A shape cell is seeded by its names: its family and
+  ``implied`` sit outside both registries, so any position given them would
+  shift as either grew.
+  """
+  one_par = {
+    Cell("clayton", "linear", 200, 0): 1393628405,
+    Cell("gaussian", "sin", 2000, 9): 2949676040,
+  }
+  shape = [
+    Cell(f, scenarios.IMPLIED, n, rep)
+    for f in _SHAPE
+    for n, rep in ((200, 0), (2000, 9))
+  ]
+  before = {c: runner_mod._cell_seed(317, c) for c in shape}
+  assert {c: runner_mod._cell_seed(317, c) for c in one_par} == one_par
+
+  monkeypatch.setitem(
+    scenarios.FAMILIES, "frank-again", scenarios.FAMILIES["frank"]
+  )
+  monkeypatch.setitem(
+    scenarios.TAU_SCENARIOS,
+    "step",
+    scenarios.ScenarioSpec("step", True, lambda x: (x > 0.5).double()),
+  )
+  assert {c: runner_mod._cell_seed(317, c) for c in one_par} == one_par
+  assert {c: runner_mod._cell_seed(317, c) for c in shape} == before
+  seeds = [*before.values(), *one_par.values()]
+  assert len(set(seeds)) == len(seeds)
+
+
+def test_the_signature_hashes_shape_settings_only_where_a_grid_has_them(
+  register_hermetic_backends: None,
+  monkeypatch: pytest.MonkeyPatch,
+  tmp_path: Path,
+) -> None:
+  """A grid without shape families or ``surface_x`` must keep its signature.
+
+  The bivariate study's checkpoints resume only under the signature they were
+  written with, which is pinned here: a key added to every grid's payload
+  would refuse that resume. Where a grid does have them, both must count --
+  including a change to a shape family that leaves its tau alone, as moving
+  the Student family's degrees of freedom does.
+  """
+  run = RunConfig(out=tmp_path)
+  e1 = load_grid(Path(__file__).resolve().parents[2] / "configs" / "study.toml")
+  assert (
+    runner_mod._grid_signature(e1, run)
+    == "640cf74836793eccc93c7ed834afb0d028cad013818b7b1b5596659ef0910d04"
+  )
+
+  base = runner_mod._grid_signature(_shape_grid([0.1, 0.9]), run)
+  assert runner_mod._grid_signature(_shape_grid([0.1, 0.5]), run) != base
+  monkeypatch.setattr(scenarios, "STUDENT_NU_RANGE", (3.0, 30.0))
+  assert runner_mod._grid_signature(_shape_grid([0.1, 0.9]), run) != base
