@@ -69,6 +69,11 @@ class FitResult:
   fit_s: float
   inference_s: float
   n_nan: int
+  #: ``pdf_grid`` on the requested midpoints, ``(m, m)``, ``u`` major.
+  grid_pdf: np.ndarray | None = None
+  grid_s: float | None = None
+  #: Pointwise ``pdf`` at the spot-check points.
+  spot_pdf: np.ndarray | None = None
 
 
 def _sync(device: str) -> None:
@@ -86,6 +91,8 @@ def fit_and_score(
   x_train: np.ndarray | None = None,
   x_test: np.ndarray | None = None,
   log_floor: float = 1e-300,
+  grid: np.ndarray | None = None,
+  spot: np.ndarray | None = None,
 ) -> FitResult:
   """Fit ``est`` on ``train`` and return its floored log-density at ``test``.
 
@@ -104,6 +111,12 @@ def fit_and_score(
       Covariates; ``None`` fits the pair unconditionally.
   log_floor : float
       Density floor before the log, VDC's runner's 1e-300 by default.
+  grid : ndarray, shape (m,), optional
+      Midpoints at which to evaluate ``pdf_grid`` on ``grid x grid``
+      (unconditional fits only), timed separately as ``grid_s``.
+  spot : ndarray, shape (k, 2), optional
+      Points at which to evaluate pointwise ``pdf`` too, to check the grid
+      path against it.
 
   Returns
   -------
@@ -131,6 +144,17 @@ def fit_and_score(
     density = model.pdf(as_t(test), x=as_t(x_test))
     _sync(device)
     inference_s = time.perf_counter() - t0
+    grid_pdf = spot_pdf = grid_s = None
+    if grid is not None:
+      if x_train is not None:
+        raise ValueError("grid must be None for a conditional fit; pdf_grid takes one x row")
+      t0 = time.perf_counter()
+      g_t = as_t(grid)
+      grid_pdf = model.pdf_grid(g_t, g_t).detach().cpu().numpy().astype(np.float64)
+      _sync(device)
+      grid_s = time.perf_counter() - t0
+    if spot is not None:
+      spot_pdf = model.pdf(as_t(spot)).detach().cpu().numpy().astype(np.float64)
   c = density.detach().cpu().numpy().astype(np.float64)
   n_nan = int(np.sum(~np.isfinite(c)))
   del model
@@ -141,4 +165,7 @@ def fit_and_score(
     fit_s=fit_s,
     inference_s=inference_s,
     n_nan=n_nan,
+    grid_pdf=grid_pdf,
+    grid_s=grid_s,
+    spot_pdf=spot_pdf,
   )

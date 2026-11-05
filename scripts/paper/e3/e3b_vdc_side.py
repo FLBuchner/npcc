@@ -33,19 +33,22 @@ TLL and BIC parametric selection with rotations, one thread):
 - ``oracle``: the true conditional density ``c(u2, u3 | u1)``;
 - ``pooled_oracle``: the true pooled density ``(C_low + C_high) / 2``, the
   lowest NLL any estimator that ignores ``U1`` can reach;
-- ``vdc``, ``tll``, ``parametric``: pooled over ``U1``, as in the appendix;
-- ``tll_bic``: the Table 1 runner's TLL call, ``fit_bicop(mode=
-  "nonparametric")``, which selects between independence and TLL by BIC.
-  On the pooled sign-flip sample TLL's effective degrees of freedom are
-  about 130, so BIC picks independence on every seed, whereas the appendix
-  reports a fitted TLL for this arm. ``tll`` therefore fits TLL alone, with
-  the runner's TLL settings otherwise (constant method, multiplier 1, a
-  30-point grid, one thread); both are written;
-- ``regime_gaussian``: a Gaussian copula fitted in each regime (the
-  appendix's conditional reference);
-- ``vdc_regime``, ``tll_regime``, ``parametric_regime``: each method fitted
-  separately in each regime. They are told the split point, which no
-  estimator of the comparison is; they bound what pooling costs each method.
+- ``vdc``, ``tll``, ``parametric``: the arms, pooled over ``U1`` as in the
+  appendix. ``tll`` is TLL itself, with no family selection
+  (``e3a_vdc_side.fit_tll_plain``: TLL as the only family, the runner's TLL
+  settings otherwise); ``parametric`` is family selection by BIC;
+- ``tll_runner_bic`` (role ``excluded``, kept for the record only): the
+  Table 1 runner's TLL call, ``fit_bicop(mode="nonparametric")``, a BIC
+  choice between independence and TLL. On the pooled sign-flip sample TLL's
+  effective degrees of freedom are about 130, so BIC picks independence on
+  every seed;
+- ``regime_gaussian``, ``vdc_regime``, ``tll_regime``,
+  ``parametric_regime`` (role ``reference``): separate copulas on each side
+  of the known split, which no arm is told; they bound what pooling costs
+  each method. ``regime_gaussian`` is the appendix's "Regime Gaussian".
+
+Every row carries a ``role``: ``oracle``, ``reference``, ``arm`` or
+``excluded``.
 
 **Metric.** Test NLL = ``-mean log max(c_hat, 1e-300)`` over the test points
 and excess NLL = test NLL - oracle NLL, in nats per test pair.
@@ -100,7 +103,7 @@ def main() -> None:
   )
 
   sys.path.insert(0, str(Path(__file__).resolve().parent))
-  from e3a_vdc_side import ProjectionTimer
+  from e3a_vdc_side import ProjectionTimer, fit_tll_plain, save_or_verify_samples
 
   assert Path(vdc.__file__).resolve().is_relative_to(common.VDC_REPO)
   assert common.sha256_file(a.checkpoint) == common.CHECKPOINT_SHA256
@@ -151,14 +154,6 @@ def main() -> None:
     controls = pv.FitControlsBicop(family_set=[pv.BicopFamily.gaussian], num_threads=1)
     return pv.Bicop.from_data(uv, controls=controls)
 
-  def fit_tll_only(uv: np.ndarray):  # noqa: ANN202 - a pv.Bicop
-    # fit_bicop's TLL controls, without the independence alternative.
-    controls = pv.FitControlsBicop(
-      family_set=[pv.BicopFamily.tll], selection_criterion="bic",
-      allow_rotations=True, num_threads=1, nonparametric_method="constant",
-      nonparametric_mult=1.0, nonparametric_grid_size=30)
-    return pv.Bicop.from_data(uv, controls=controls)
-
   def bicop_logpdf(model, uv: np.ndarray) -> np.ndarray:  # noqa: ANN001
     return np.log(np.maximum(model.pdf(uv), common.LOG_FLOOR))
 
@@ -171,8 +166,8 @@ def main() -> None:
 
   methods = {
     "vdc": (fit_vdc, vdc_logpdf, lambda m: "pooled grid"),
-    "tll": (fit_tll_only, bicop_logpdf, describe),
-    "tll_bic": (lambda uv: fit_pv(uv, "nonparametric"), pv_logpdf, lambda m: describe(m.model)),
+    "tll": (fit_tll_plain, bicop_logpdf, describe),
+    "tll_runner_bic": (lambda uv: fit_pv(uv, "nonparametric"), pv_logpdf, lambda m: describe(m.model)),
     "parametric": (lambda uv: fit_pv(uv, "parametric"), pv_logpdf, lambda m: describe(m.model)),
   }
   regime_methods = {
@@ -213,12 +208,12 @@ def main() -> None:
         "oracle_nll": oracle_nll,
       }
 
-      def row(method: str, group: str, uses_u1: str, logc: np.ndarray, *,  # noqa: PLR0913
+      def row(method: str, group: str, role: str, uses_u1: str, logc: np.ndarray, *,  # noqa: PLR0913
               fit_s=None, projection_s=None, inference_s=None, note=None,  # noqa: ANN001
               load_before=None) -> dict:  # noqa: ANN001
         ratio = logtrue - logc
         return {
-          **base, "method": method, "method_group": group,
+          **base, "method": method, "method_group": group, "role": role,
           "conditions_on_u1": uses_u1, "env": "vdc",
           "backend": None, "transform": None, "model_version": None,
           "test_nll": -float(np.mean(logc)),
@@ -231,8 +226,8 @@ def main() -> None:
           "note": note, "load_avg_1m": load_before, **prov,
         }
 
-      rows.append(row("oracle", "oracle", "yes", logtrue, note="true conditional"))
-      rows.append(row("pooled_oracle", "oracle", "no", logpool,
+      rows.append(row("oracle", "oracle", "oracle", "yes", logtrue, note="true conditional"))
+      rows.append(row("pooled_oracle", "oracle", "reference", "no", logpool,
                       note="true pooled density (best possible without U1)"))
 
       for name, (fit, logpdf, note) in methods.items():
@@ -245,7 +240,9 @@ def main() -> None:
         t0 = time.perf_counter()
         logc = logpdf(model, uv_te)
         inference_s = time.perf_counter() - t0
-        rows.append(row(name, "simplified_pooled", "no", logc, fit_s=fit_s,
+        excluded = name == "tll_runner_bic"
+        rows.append(row(name, "not_an_arm_bic_selection" if excluded else "simplified_pooled",
+                        "excluded" if excluded else "arm", "no", logc, fit_s=fit_s,
                         projection_s=projection_s, inference_s=inference_s,
                         note=note(model), load_before=load_before))
 
@@ -264,7 +261,7 @@ def main() -> None:
           inference_s += time.perf_counter() - t0
           notes.append(note(model))
         projection_s = timer.take() if name == "vdc_regime" else None
-        rows.append(row(name, "split_known", "split known", logc, fit_s=fit_s,
+        rows.append(row(name, "split_known", "reference", "split known", logc, fit_s=fit_s,
                         projection_s=projection_s, inference_s=inference_s,
                         note=" / ".join(notes), load_before=load_before))
 
@@ -283,11 +280,11 @@ def main() -> None:
       print(f"done {case} seed {seed}", flush=True)
 
   samples = a.out / "samples.npz"
-  np.savez_compressed(samples, **{k: np.asarray(v) for k, v in arrays.items()})
+  save_or_verify_samples(samples, {k: np.asarray(v) for k, v in arrays.items()})
   common.write_csv(rows, a.out / "vdc_side.csv")
   summary = {}
   for case in CASES:
-    for method in dict.fromkeys(r["method"] for r in rows):
+    for method in dict.fromkeys(r["method"] for r in rows if r["role"] != "excluded"):
       vals = [r["excess_nll"] for r in rows if r["case"] == case and r["method"] == method]
       summary[f"{case}/{method}"] = {
         "mean": float(np.mean(vals)), "se": float(np.std(vals, ddof=1) / np.sqrt(len(vals)))}
@@ -305,6 +302,9 @@ def main() -> None:
       "clayton_gumbel_tail_switch": {"vdc": 0.0759, "parametric": 0.0883, "tll": 0.0895, "regime_gaussian": 0.1173}},
     "vdc_settings": {"m": 64, "projection_iters": 30, "lookup": "HFuncLookup(use_spline=False).pdf",
                      "torch_threads": 1, "dtype": "float32"},
+    "tll_settings": "e3a_vdc_side.TLL_SETTINGS with TLL as the only family (TLL itself, no selection)",
+    "excluded_rows": {"tll_runner_bic": "the runner's BIC choice between independence and TLL; "
+                      "kept in vdc_side.csv for the record, not an arm, not summarized"},
     "log_floor": common.LOG_FLOOR,
     "wall_s": time.perf_counter() - started,
     "summary_excess_nll": summary,
