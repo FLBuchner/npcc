@@ -604,10 +604,8 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     u, v = uv[:, 0], uv[:, 1]
 
     with torch.inference_mode():
-      unprojected = 0.5 * (
-        self.v_given_ux_.pdf(v, x=self._features(u, x))
-        + self.u_given_vx_.pdf(u, x=self._features(v, x))
-      )
+      v_given_u, u_given_v = self._directional_pdfs(uv, x)
+      unprojected = 0.5 * (v_given_u + u_given_v)
 
       out: dict[int | None, torch.Tensor] = {}
       grids: _ProjectionGrids | None = None
@@ -622,6 +620,48 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
         )
 
     return out
+
+  def pdf_by_direction(
+    self,
+    u: torch.Tensor,
+    *,
+    x: torch.Tensor | None = None,
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    """The two Rosenblatt directions' densities, whose average is :meth:`pdf`.
+
+    Each direction alone is a valid estimate of ``c(u, v | x)``; the pair
+    copula averages them, unprojected unless :attr:`sinkhorn_iters` is set.
+    How far they disagree is the finite-sample incoherence the average hides,
+    which is what this exposes for diagnostics.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, 2)
+        Pair pseudo-observations.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Exogenous covariates, one row per observation.
+
+    Returns
+    -------
+    v_given_u : torch.Tensor, shape (n,)
+        ``f_{V | U, X}(v | u, x)``.
+    u_given_v : torch.Tensor, shape (n,)
+        ``f_{U | V, X}(u | v, x)``.
+    """
+    uv_t = self._prep_args(u)
+    x_t = self._covariates(x, uv_t.shape[0])
+    with torch.inference_mode():
+      return self._directional_pdfs(uv_t, x_t)
+
+  def _directional_pdfs(
+    self, uv: torch.Tensor, x: torch.Tensor
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Both directions' densities at prepared ``uv`` and covariates."""
+    u, v = uv[:, 0], uv[:, 1]
+    return (
+      self.v_given_ux_.pdf(v, x=self._features(u, x)),
+      self.u_given_vx_.pdf(u, x=self._features(v, x)),
+    )
 
   def _projection_grids(self, x: torch.Tensor) -> _ProjectionGrids:
     """Evaluate the density grid the Sinkhorn projection normalizes.
