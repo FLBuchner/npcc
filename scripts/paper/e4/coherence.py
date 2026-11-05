@@ -91,6 +91,63 @@ def projection_rows(
   return rows
 
 
+def _timed(
+  model: RosenblattBicop,
+  uv: torch.Tensor,
+  x: torch.Tensor,
+  iters: list[int | None],
+) -> float:
+  """Wall time of one evaluation, moved to the host so a GPU finishes."""
+  t0 = perf_counter()
+  out = model.pdf_by_projection(uv, x=x, sinkhorn_iters=iters)
+  for value in out.values():
+    value.cpu()
+  return perf_counter() - t0
+
+
+def projection_cost_rows(
+  model: RosenblattBicop, iters: list[int], ks: list[int], *, repeats: int
+) -> list[dict[str, object]]:
+  """Projection overhead against the number of distinct conditioning values.
+
+  Every query has its own covariate, as every observation does in a vine, so
+  each needs its own projection grid: ``k`` queries cost ``k`` grid
+  evaluations of both directions plus ``k`` Sinkhorn solves. The median over
+  ``repeats`` timings follows a warm-up call.
+  """
+  generator = torch.Generator().manual_seed(0)
+  rows = []
+  for k in ks:
+    uv = 0.1 + 0.8 * torch.rand(
+      (k, 2), generator=generator, dtype=torch.float64
+    )
+    x = torch.linspace(0.01, 0.99, k, dtype=torch.float64).reshape(-1, 1)
+    for count in iters:
+      settings: tuple[list[int | None], list[int | None]] = (
+        [None],
+        [None, count],
+      )
+      for iters_ in settings:
+        _timed(model, uv, x, iters_)
+      t_base, t_proj = (
+        sorted(_timed(model, uv, x, iters_) for _ in range(repeats))[
+          repeats // 2
+        ]
+        for iters_ in settings
+      )
+      rows.append(
+        {
+          "k_distinct_x": k,
+          "sinkhorn_iters": count,
+          "time_unprojected_s": t_base,
+          "time_projected_s": t_proj,
+          "overhead_s": t_proj - t_base,
+          "overhead_per_x_s": (t_proj - t_base) / k,
+        }
+      )
+  return rows
+
+
 def main() -> None:
   p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   p.add_argument("--config", type=Path, default=Path("configs/study.toml"))
@@ -103,6 +160,16 @@ def main() -> None:
   p.add_argument("--device", default=None)
   p.add_argument("--part", type=_part, default=(0, 1), metavar="I/K")
   p.add_argument("--out", type=Path, required=True)
+  p.add_argument(
+    "--cost-only",
+    action="store_true",
+    help=(
+      "Only time the projection against the number of distinct x, on the "
+      "first cell; run it on an otherwise idle device."
+    ),
+  )
+  p.add_argument("--cost-k", type=int, nargs="+", default=[1, 10, 100, 1000])
+  p.add_argument("--cost-repeats", type=int, default=5)
   a = p.parse_args()
 
   grid_cfg = load_grid(a.config)
@@ -118,6 +185,8 @@ def main() -> None:
   ]
   index, count = a.part
   cells = [c for i, c in enumerate(cells) if i % count == index]
+  if a.cost_only:
+    cells = cells[:1]
   commit = subprocess.run(
     ["git", "rev-parse", "--short", "HEAD"],
     capture_output=True,
@@ -161,6 +230,12 @@ def main() -> None:
         "device": str(model._device),
         "npcc_commit": commit,
       }
+      if a.cost_only:
+        cost = projection_cost_rows(
+          model, a.sinkhorn, a.cost_k, repeats=a.cost_repeats
+        )
+        rows += [{**base, "diagnostic": "projection_cost", **r} for r in cost]
+        continue
       for diag, part_rows in (
         (
           "directional",
@@ -179,9 +254,8 @@ def main() -> None:
     )
 
   a.out.mkdir(parents=True, exist_ok=True)
-  pd.DataFrame(rows).to_csv(
-    a.out / f"coherence_{index}of{count}.csv", index=False
-  )
+  stem = "projection_cost" if a.cost_only else "coherence"
+  pd.DataFrame(rows).to_csv(a.out / f"{stem}_{index}of{count}.csv", index=False)
 
 
 if __name__ == "__main__":
