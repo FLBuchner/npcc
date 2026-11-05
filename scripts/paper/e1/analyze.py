@@ -77,13 +77,36 @@ BACKENDS: dict[str, dict[str, str]] = {
     "color": "#D55E00",
     "marker": "P",
   },
+  # The established competitors (E1b), run as R scripts on the same cells:
+  # greys and dotted, so the Okabe-Ito colors stay with the six backends.
+  "gamcopula": {
+    "name": "gamCopula",
+    "group": "R",
+    "color": "#333333",
+    "marker": "X",
+  },
+  "boostcopula-smooth": {
+    "name": "boostCopula",
+    "group": "R",
+    "color": "#777777",
+    "marker": "*",
+  },
+  "boostcopula": {
+    "name": "boostCopula (linear in x)",
+    "group": "R",
+    "color": "#AAAAAA",
+    "marker": "h",
+  },
 }
-LINESTYLE = {"ICL": "-", "GB": "--"}
+LINESTYLE = {"ICL": "-", "GB": "--", "R": ":"}
 
 _LABEL = re.compile(
   r"^(?:(?P<tabpfn>tabpfn)-quantiles-(?P<version>v[\d.]+)|(?P<other>[a-z]+))"
   r"-(?P<transform>logit|probit|identity)$"
 )
+#: An R competitor's label is its key alone: its script fits on the copula
+#: scale, so it has no transform to name.
+_R_LABELS = {k for k, v in BACKENDS.items() if v["group"] == "R"}
 
 QUANTITIES = (
   ("pdf", "IAE"),
@@ -93,31 +116,44 @@ QUANTITIES = (
 )
 
 
-def load(run: Path) -> dict[str, pd.DataFrame]:
-  """Concatenate one table over every finished cell of a run."""
+def load(runs: list[Path]) -> dict[str, pd.DataFrame]:
+  """Concatenate one table over every finished cell of one or more runs.
+
+  Runs on the same grid share cell keys and data seeds, so their rows join on
+  the cell: E1b's R competitors fit exactly E1's data.
+  """
   done = sorted(
-    Path(p).parent for p in glob.glob(str(run / "cells" / "*" / "DONE"))
+    Path(p).parent
+    for run in runs
+    for p in glob.glob(str(run / "cells" / "*" / "DONE"))
   )
   if not done:
-    raise SystemExit(f"{run} has no finished cells yet")
+    raise SystemExit(f"{runs} have no finished cells yet")
   tables = {}
   for name in ("metrics", "diagnostics", "quantities", "runtime"):
     parts = [pd.read_parquet(d / f"{name}.parquet") for d in done]
     tables[name] = annotate(pd.concat(parts, ignore_index=True))
-  tables["cells"] = pd.DataFrame({"cell": [d.name for d in done]})
+  tables["cells"] = pd.DataFrame({"cell": sorted({d.name for d in done})})
   return tables
 
 
 def annotate(df: pd.DataFrame) -> pd.DataFrame:
   """Split each label into backend, TabPFN version and transform."""
   parsed = df["label"].str.extract(_LABEL)
-  if parsed["transform"].isna().any():
-    bad = sorted(df.loc[parsed["transform"].isna(), "label"].unique())
+  r_method = df["label"].isin(_R_LABELS)
+  if (parsed["transform"].isna() & ~r_method).any():
+    bad = sorted(
+      df.loc[parsed["transform"].isna() & ~r_method, "label"].unique()
+    )
     raise SystemExit(f"labels the analysis cannot parse: {bad}")
   df = df.copy()
-  df["key"] = np.where(parsed["tabpfn"].notna(), "tabpfn", parsed["other"])
+  df["key"] = np.where(
+    r_method,
+    df["label"],
+    np.where(parsed["tabpfn"].notna(), "tabpfn", parsed["other"]),
+  )
   df["version"] = parsed["version"].fillna("")
-  df["transform_"] = parsed["transform"]
+  df["transform_"] = parsed["transform"].fillna("identity")
   df["backend_name"] = df["key"].map(lambda k: BACKENDS[k]["name"])
   df["group"] = df["key"].map(lambda k: BACKENDS[k]["group"])
   df["display"] = np.where(
@@ -320,7 +356,10 @@ def fig_accuracy_by_n(
     _log_ticks(ax, (1, 2, 3, 5) if metric == "IAE" else (1, 2, 5))
   handles, names = axes[0].get_legend_handles_labels()
   fig.legend(
-    handles, names, loc="outside upper center", ncol=min(len(names), 6)
+    handles,
+    names,
+    loc="outside upper center",
+    ncol=len(names) if len(names) <= 6 else math.ceil(len(names) / 2),
   )
   save(fig, path)
 
@@ -380,7 +419,10 @@ def fig_conditional_tau(
     print(f"no estimator has n = {n} yet; skipped {path.name}")
     return
   fig.legend(
-    handles, names, loc="outside upper center", ncol=min(len(names), 7)
+    handles,
+    names,
+    loc="outside upper center",
+    ncol=len(names) if len(names) <= 7 else math.ceil(len(names) / 2),
   )
   save(fig, path)
 
@@ -388,6 +430,14 @@ def fig_conditional_tau(
 def main() -> None:
   p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   p.add_argument("run", type=Path, help="The study's output folder.")
+  p.add_argument(
+    "--with",
+    dest="extra",
+    type=Path,
+    nargs="*",
+    default=[],
+    help="Further runs on the same grid, e.g. E1b's R competitors.",
+  )
   p.add_argument("--tabpfn", default="v3", help="Main-text TabPFN version.")
   p.add_argument("--transform", default="logit", help="Main-text transform.")
   p.add_argument(
@@ -400,7 +450,7 @@ def main() -> None:
   out = a.out or a.run / "analysis"
   out.mkdir(parents=True, exist_ok=True)
 
-  t = load(a.run)
+  t = load([a.run, *a.extra])
   overall = summarize(t["metrics"], [])
   by_n = summarize(t["metrics"], ["n"])
   ranks, agreement = ranking(t["metrics"])
@@ -427,6 +477,21 @@ def main() -> None:
   fig_conditional_tau(
     t["diagnostics"], main_labels, out / "conditional_tau_full.pdf", n=a.tau_n
   )
+  competitors = [
+    k for k in BACKENDS if k in _R_LABELS and k in set(by_n["label"])
+  ]
+  if competitors:
+    fig_accuracy_by_n(
+      by_n,
+      main_labels + competitors,
+      out / "accuracy_by_n_with_competitors.pdf",
+    )
+    fig_conditional_tau(
+      t["diagnostics"],
+      subset + competitors,
+      out / "conditional_tau_with_competitors.pdf",
+      n=a.tau_n,
+    )
 
   print(f"{len(t['cells'])} cells -> {out}")
   print("main-text estimators:", main_labels)
