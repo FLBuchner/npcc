@@ -326,17 +326,20 @@ def _probe(script: Path) -> _external.ExternalFit:
   )
 
 
-def test_a_failing_script_reports_its_stderr(stand_in: Path) -> None:
+def test_a_failing_script_reports_what_it_printed(stand_in: Path) -> None:
   """A script that fails must stop the cell and say why.
 
-  Its stderr is the only record of an R error, so a bare non-zero status would
-  leave a shard's log naming no cause.
+  Its stderr is the only record of an R error, and its stdout of the model it
+  fitted before failing, so a bare non-zero status would leave a shard's log
+  naming no cause.
   """
   stand_in.write_text(
-    "import sys\nsys.stderr.write('fit diverged\\n')\nsys.exit(3)\n"
+    "import sys\nprint('selected family 2')\n"
+    "sys.stderr.write('fit diverged\\n')\nsys.exit(3)\n"
   )
   with pytest.raises(RuntimeError, match=r"status 0 for probe; got 3") as info:
     _probe(stand_in)
+  assert "selected family 2" in str(info.value)
   assert "fit diverged" in str(info.value)
 
 

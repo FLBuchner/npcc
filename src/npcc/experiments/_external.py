@@ -107,7 +107,8 @@ def _run(command: list[str], *, name: str) -> None:
   if done.returncode != 0:
     raise RuntimeError(
       f"{command[1]} must exit with status 0 for {name}; got "
-      f"{done.returncode}, with stderr:\n{_tail(done.stderr)}"
+      f"{done.returncode}, with stdout:\n{_tail(done.stdout)}\n"
+      f"and stderr:\n{_tail(done.stderr)}"
     )
   if done.stdout.strip():
     logger.info("%s: %s", name, _tail(done.stdout))
