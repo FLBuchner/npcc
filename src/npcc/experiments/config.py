@@ -19,7 +19,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, TypeVar, cast, get_args
+from typing import Any, Literal, TypeVar, cast, get_args
 
 from npcc.core.controls import FitControlsRosenblattBicop, Transform
 from npcc.core.errors import (
@@ -37,6 +37,11 @@ from npcc.experiments.scenarios import (
 
 ControlsT = TypeVar("ControlsT", bound=FitControlsRosenblattBicop)
 
+#: How an estimator is fitted: ``"backend"`` is a ``RosenblattBicop`` on a
+#: registry backend, ``"external_r"`` a script run by
+#: :mod:`npcc.experiments._external`.
+EstimatorKind = Literal["backend", "external_r"]
+
 
 @dataclass(frozen=True)
 class EstimatorSpec:
@@ -46,16 +51,40 @@ class EstimatorSpec:
   construction; ``estimator_id`` is a stable content hash of the *effective*
   config (``backend``/``transform``/``backend_kwargs``, not the display
   ``label``), used to seed per-estimator RNG and join result rows.
+
+  An ``external_r`` estimator is instead a ``script`` that fits and predicts
+  on its own; ``backend`` names the method in the result tables, and its
+  ``transform`` is ``"identity"`` because the script fits on the copula
+  scale. Its ``estimator_id`` also hashes the script's content, so an edited
+  script is a new estimator, and a ``--resume`` refuses to mix the two.
   """
 
   label: str
   backend: str
   transform: Transform
   backend_kwargs: Mapping[str, object] = field(default_factory=dict)
+  kind: EstimatorKind = "backend"
+  #: The method's script, relative to the working directory unless absolute.
+  script: str | None = None
+  #: SHA-256 of the script's content, read at construction.
+  script_sha256: str | None = field(default=None, init=False)
 
   def __post_init__(self) -> None:
     if not self.label:
       raise EstimatorConfigError("Estimator label must be non-empty.")
+    if self.kind not in get_args(EstimatorKind):
+      raise EstimatorConfigError(
+        f"kind must be one of {list(get_args(EstimatorKind))}; "
+        f"got {self.kind!r} for {self.label!r}"
+      )
+    if self.kind == "external_r":
+      self._check_external()
+      return
+    if self.script is not None:
+      raise EstimatorConfigError(
+        f"script must be omitted for kind='backend'; got {self.script!r} for "
+        f"{self.label!r}. Set kind = 'external_r' to run a script."
+      )
     if self.backend not in available_backends():
       raise UnknownBackendError(
         f"Unknown backend {self.backend!r}. Available: {available_backends()}."
@@ -69,8 +98,44 @@ class EstimatorSpec:
     validate_backend_kwargs(self.backend, frozen)
     object.__setattr__(self, "backend_kwargs", frozen)
 
+  def _check_external(self) -> None:
+    """Refuse what a script cannot honor, then fingerprint the script."""
+    if not self.backend:
+      raise EstimatorConfigError(
+        f"backend must name the method of the external_r estimator "
+        f"{self.label!r}; got an empty string"
+      )
+    if self.transform != "identity":
+      raise EstimatorConfigError(
+        f"transform must be 'identity' for the external_r estimator "
+        f"{self.label!r}, whose script fits on the copula scale; "
+        f"got {self.transform!r}"
+      )
+    if self.backend_kwargs:
+      raise EstimatorConfigError(
+        f"backend_kwargs must be empty for the external_r estimator "
+        f"{self.label!r}, since nothing forwards them to its script; got "
+        f"{dict(self.backend_kwargs)}. Set the method's options in the script."
+      )
+    if self.script is None or not Path(self.script).is_file():
+      raise EstimatorConfigError(
+        f"script must name an existing file for the external_r estimator "
+        f"{self.label!r}; got {self.script!r}, resolved against {Path.cwd()}"
+      )
+    digest = hashlib.sha256(Path(self.script).read_bytes()).hexdigest()
+    object.__setattr__(self, "backend_kwargs", MappingProxyType({}))
+    object.__setattr__(self, "script_sha256", digest)
+
   def canonical_dict(self) -> dict[str, object]:
     """The effective config, exactly as forwarded at runtime (for hashing)."""
+    if self.kind == "external_r":
+      return {
+        "kind": self.kind,
+        "backend": self.backend,
+        "transform": self.transform,
+        "script": self.script,
+        "script_sha256": self.script_sha256,
+      }
     return {
       "backend": self.backend,
       "transform": self.transform,
@@ -110,7 +175,17 @@ class EstimatorSpec:
     -------
     FitControlsRosenblattBicop
         An instance of ``cls``.
+
+    Raises
+    ------
+    EstimatorConfigError
+        If the estimator is not a registry backend.
     """
+    if self.kind != "backend":
+      raise EstimatorConfigError(
+        f"controls must be built for a kind='backend' estimator; got "
+        f"kind={self.kind!r} for {self.label!r}, which runs its own script"
+      )
     return cls(
       backend=self.backend,
       transform=self.transform,
@@ -243,6 +318,28 @@ class GridConfig:
       _check_subset("surface_families", self.surface_families, FAMILIES)
     if self.tau_diagnostic_n < 10:
       raise ValueError("tau_diagnostic_n must be >= 10.")
+    self._check_external()
+
+  def _check_external(self) -> None:
+    """Refuse the grid axes an external estimator's script cannot honor."""
+    external = [e.label for e in self.estimators if e.kind == "external_r"]
+    if not external:
+      return
+    if any(norm is not None for norm in self.normalize):
+      raise EstimatorConfigError(
+        f"normalize must be ['none'] with the external_r estimators "
+        f"{external}: a Sinkhorn projection needs the density on its own "
+        f"grid, which a script does not return; got {self.normalize}"
+      )
+    unconditional = [
+      s for s in self.tau_scenarios if not TAU_SCENARIOS[s].conditional
+    ]
+    if unconditional:
+      raise EstimatorConfigError(
+        f"tau_scenarios must all be conditional with the external_r "
+        f"estimators {external}, whose scripts are fitted on a covariate; "
+        f"got the unconditional {unconditional}"
+      )
 
   def cells(self) -> list[Cell]:
     """Every data cell of the grid, in sweep order."""
@@ -299,12 +396,15 @@ def _parse_estimator(entry: Mapping[str, object]) -> EstimatorSpec:
   raw = entry.get("backend_kwargs", {})
   if not isinstance(raw, dict):
     raise InvalidBackendKwargsError("backend_kwargs must be a TOML table.")
+  script = entry.get("script")
   return EstimatorSpec(
     label=label,
     backend=backend,
-    # `__post_init__` refuses any string that is not a transform.
+    # `__post_init__` refuses any string that is not a transform or a kind.
     transform=cast("Transform", transform),
     backend_kwargs={str(k): v for k, v in raw.items()},
+    kind=cast("EstimatorKind", str(entry.get("kind", "backend"))),
+    script=None if script is None else str(script),
   )
 
 

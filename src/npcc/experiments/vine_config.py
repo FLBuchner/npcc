@@ -82,6 +82,12 @@ class VineGridConfig:
       raise EstimatorConfigError(
         "estimators must be non-empty when an NPCC arm (oracle, random) runs"
       )
+    external = [e.label for e in self.estimators if e.kind != "backend"]
+    if external:
+      raise EstimatorConfigError(
+        f"vine-study estimators must be kind='backend', since every vine pair "
+        f"is a RosenblattBicop; got the external {external}"
+      )
     if self.eval_x_n < 1:
       raise ValueError(f"eval_x_n must be >= 1; got {self.eval_x_n}")
     if self.eval_m < 10:

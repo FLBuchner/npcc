@@ -1,7 +1,9 @@
 """Run the simulation study: sweep the grid, score, diagnose, aggregate.
 
 Each data cell ``(family, tau_scenario, n, rep)`` samples its own training set
-and ground truth once.  Estimator configs are fitted on that shared data.
+and ground truth once.  Estimator configs are fitted on that shared data: a
+registry backend as a :class:`~npcc.core.bicop.RosenblattBicop`, an external
+method by one run of its script (:mod:`npcc.experiments._external`).
 
 Conditional scenarios are scored at fixed ``x`` values: errors are averaged over
 the uv grid first, and only then summarized over Monte-Carlo repetitions or
@@ -21,7 +23,7 @@ import torch
 
 from npcc.core.bicop import RosenblattBicop
 from npcc.core.controls import FitControlsRosenblattBicop
-from npcc.experiments import metrics, scenarios
+from npcc.experiments import _external, metrics, scenarios
 from npcc.experiments._study import (
   SUMMARY_STATS,
   Rows,
@@ -309,16 +311,41 @@ def _diagnostic_rows(
     return rows, tau_time
 
   assert grid.x_axis is not None
-  tau_x = _tau_values(cell.tau_scenario, grid.x_axis)
-  tau_hat_by_x: dict[int, float] = {}
+  tau_hat_by_x: list[float] = []
   if enable_tau_diagnostics:
-    for idx, x_val in enumerate(grid.x_axis):
+    for x_val in grid.x_axis:
       t0 = perf_counter()
-      tau_hat_by_x[idx] = model.tau(
-        x_row=torch.tensor([[float(x_val)]], dtype=grid.x_axis.dtype),
-        n=tau_diagnostic_n,
+      tau_hat_by_x.append(
+        model.tau(
+          x_row=torch.tensor([[float(x_val)]], dtype=grid.x_axis.dtype),
+          n=tau_diagnostic_n,
+        )
       )
       tau_time += perf_counter() - t0
+  tau_hat = tau_hat_by_x if enable_tau_diagnostics else None
+  return (
+    _conditional_diagnostic_rows(cell, est, seed, pdf_by_norm, grid, tau_hat),
+    tau_time,
+  )
+
+
+def _conditional_diagnostic_rows(
+  cell: Cell,
+  est: EstimatorSpec,
+  seed: int,
+  pdf_by_norm: dict[str, torch.Tensor],
+  grid: EvalGrid,
+  tau_hat_by_x: list[float] | None,
+) -> list[dict[str, object]]:
+  """Marginal-density diagnostics at each fixed x, beside its tau estimate.
+
+  ``tau_hat_by_x`` holds one estimate per entry of ``grid.x_axis``, or is
+  ``None`` when the tau diagnostics are off.
+  """
+  assert grid.x_axis is not None
+  base = _base_row(cell, est, seed)
+  tau_x = _tau_values(cell.tau_scenario, grid.x_axis)
+  rows: list[dict[str, object]] = []
   for norm, pdf_hat in pdf_by_norm.items():
     pdf_grid = pdf_hat.reshape(grid.shape)
     for x_idx, x_val in enumerate(grid.x_axis):
@@ -326,7 +353,7 @@ def _diagnostic_rows(
         (grid.u_axis.shape[0], grid.v_axis.shape[0])
       )
       diag = metrics.marginal_diagnostics(c, grid.u_axis, grid.v_axis)
-      tau_hat = tau_hat_by_x[x_idx] if enable_tau_diagnostics else float("nan")
+      tau_hat = float("nan") if tau_hat_by_x is None else tau_hat_by_x[x_idx]
       tau_true = float(tau_x[x_idx])
       rows.append(
         {
@@ -339,7 +366,7 @@ def _diagnostic_rows(
           **diag,
         }
       )
-  return rows, tau_time
+  return rows
 
 
 class _Surface(NamedTuple):
@@ -412,6 +439,247 @@ def _predict(
   return hfuncs, pdfs, timings
 
 
+class _CellData(NamedTuple):
+  """One cell's sample, scoring grid and truth, shared by its estimators."""
+
+  seed: int
+  u: torch.Tensor
+  v: torch.Tensor
+  x: torch.Tensor | None
+  metric_grid: EvalGrid
+  truth: dict[str, torch.Tensor]
+  surface: _Surface | None
+
+
+def _backend_rows(
+  cell: Cell,
+  est: EstimatorSpec,
+  data: _CellData,
+  grid: GridConfig,
+  *,
+  device: str | None,
+) -> tuple[Rows, Rows, Rows, Rows]:
+  """Fit one registry-backend estimator on a cell's data and score it."""
+  seed, u, v, x, metric_grid, truth, surface = data
+  metric_rows: Rows = []
+  quantity_rows: Rows = []
+
+  t0 = perf_counter()
+  torch.manual_seed(derive_seed(seed, est.estimator_id))
+  reset_gpu_peaks()
+  model = RosenblattBicop(
+    est.controls(
+      FitControlsRosenblattBicop,
+      device=device,
+      projection_grid_size=grid.projection_grid_size,
+      batch_size=grid.batch_size,
+    )
+  )
+  model.fit(torch.column_stack([u, v]), x=x)
+  fit_time = perf_counter() - t0
+
+  with torch.inference_mode():
+    hfuncs, pdf_by_norm, timings = _predict(model, metric_grid, grid.normalize)
+    for q, pred in hfuncs.items():
+      metric_rows += _metric_rows_for_quantity(
+        cell,
+        est,
+        seed,
+        q,
+        truth[q],
+        pred,
+        metric_grid,
+        normalize="none",
+        include_kl=False,
+      )
+    for norm_label, pdf_hat in pdf_by_norm.items():
+      metric_rows += _metric_rows_for_quantity(
+        cell,
+        est,
+        seed,
+        "pdf",
+        truth["pdf"],
+        pdf_hat,
+        metric_grid,
+        normalize=norm_label,
+        include_kl=True,
+      )
+
+    diagnostic_rows, tau_time = _diagnostic_rows(
+      cell,
+      est,
+      seed,
+      model,
+      pdf_by_norm,
+      metric_grid,
+      enable_tau_diagnostics=grid.enable_tau_diagnostics,
+      tau_diagnostic_n=grid.tau_diagnostic_n,
+    )
+
+    surface_time = 0.0
+    if surface is not None:
+      s_hfuncs, s_pdfs, s_timings = _predict(
+        model, surface.grid, grid.normalize
+      )
+      surface_time = sum(s_timings.values())
+      surface_preds = [
+        *((q, "none", pred) for q, pred in s_hfuncs.items()),
+        *(("pdf", label, pdf_hat) for label, pdf_hat in s_pdfs.items()),
+      ]
+      for q, norm_label, pred in surface_preds:
+        quantity_rows += _quantity_rows(
+          cell,
+          est,
+          seed,
+          q,
+          surface.truth[q],
+          pred,
+          surface.grid,
+          normalize=norm_label,
+          target_tau=surface.target_tau,
+          tau_true=surface.tau_true,
+        )
+
+  memory = memory_usage()
+  # Flushed per line, so this survives a hard machine crash and names the
+  # last (culprit) estimator with its peak VRAM and the system-RAM headroom.
+  logger.info(
+    "estimator %s [%s/%s n=%d]: GPU peak %.0f MiB (alloc %.0f) | "
+    "RSS %.0f MiB | MemAvailable %.0f MiB",
+    est.label,
+    cell.family,
+    cell.tau_scenario,
+    cell.n,
+    memory["gpu_peak_reserved_mb"],
+    memory["gpu_peak_alloc_mb"],
+    memory["rss_mb"],
+    memory["mem_available_mb"],
+  )
+
+  runtime_row = {
+    **_base_row(cell, est, seed),
+    "fit_time": fit_time,
+    "pdf_time": timings["pdf"],
+    "h1_time": timings["hfunc1"],
+    "h2_time": timings["hfunc2"],
+    "tau_time": tau_time,
+    "surface_time": surface_time,
+    "total_estimator_time": (
+      fit_time + tau_time + surface_time + sum(timings.values())
+    ),
+    **memory,
+  }
+
+  # Drop the fitted model (and its GPU tensors) before the next estimator.
+  del model
+  release_gpu()
+  return metric_rows, quantity_rows, diagnostic_rows, [runtime_row]
+
+
+def _external_rows(
+  cell: Cell, est: EstimatorSpec, data: _CellData, grid: GridConfig
+) -> tuple[Rows, Rows, Rows, Rows]:
+  """Fit one external estimator with a single script run, and score it.
+
+  The script is handed the metric grid and the surface grid together, so the
+  stored surfaces come from the same fit the metrics score. Its timings are
+  the script's own; ``tau`` is the fitted model's at each ``x``, rather than
+  a sample estimate.
+  """
+  # `GridConfig` refuses an external estimator on an unconditional scenario.
+  assert est.script is not None and data.x is not None
+  grids = {"metric": data.metric_grid}
+  if data.surface is not None:
+    grids["surface"] = data.surface.grid
+  fit = _external.fit_and_predict(
+    est.script,
+    (data.u, data.v, data.x),
+    grids,
+    seed=derive_seed(data.seed, est.estimator_id),
+    name=f"{est.label} on {cell.key}",
+  )
+
+  metric = fit.predictions["metric"]
+  metric_rows: Rows = []
+  for q in ("hfunc1", "hfunc2", "pdf"):
+    metric_rows += _metric_rows_for_quantity(
+      cell,
+      est,
+      data.seed,
+      q,
+      data.truth[q],
+      metric[q],
+      data.metric_grid,
+      normalize="none",
+      include_kl=q == "pdf",
+    )
+
+  tau_hat = None
+  if grid.enable_tau_diagnostics:
+    tau_hat = metric["tau"].reshape(data.metric_grid.shape)[0].tolist()
+  diagnostic_rows = _conditional_diagnostic_rows(
+    cell, est, data.seed, {"none": metric["pdf"]}, data.metric_grid, tau_hat
+  )
+
+  quantity_rows: Rows = []
+  surface_time = 0.0
+  if data.surface is not None:
+    surface = fit.predictions["surface"]
+    surface_time = sum(
+      fit.timings["surface"][q] for q in ("pdf", "hfunc1", "hfunc2")
+    )
+    for q in ("hfunc1", "hfunc2", "pdf"):
+      quantity_rows += _quantity_rows(
+        cell,
+        est,
+        data.seed,
+        q,
+        data.surface.truth[q],
+        surface[q],
+        data.surface.grid,
+        normalize="none",
+        target_tau=data.surface.target_tau,
+        tau_true=data.surface.tau_true,
+      )
+
+  # The script runs on the host, so its GPU peaks are zero. The process's
+  # peaks belong to the last backend, and resetting them would initialize CUDA
+  # in a study with no use for a device.
+  memory = {
+    **memory_usage(),
+    "gpu_peak_reserved_mb": 0.0,
+    "gpu_peak_alloc_mb": 0.0,
+  }
+  logger.info(
+    "estimator %s [%s/%s n=%d]: script run %.1f s (fit %.1f s) | "
+    "RSS %.0f MiB | MemAvailable %.0f MiB",
+    est.label,
+    cell.family,
+    cell.tau_scenario,
+    cell.n,
+    fit.wall_time,
+    fit.fit_time,
+    memory["rss_mb"],
+    memory["mem_available_mb"],
+  )
+
+  timings = fit.timings["metric"]
+  tau_time = timings["tau"] if grid.enable_tau_diagnostics else 0.0
+  scored = timings["pdf"] + timings["hfunc1"] + timings["hfunc2"]
+  runtime_row = {
+    **_base_row(cell, est, data.seed),
+    "fit_time": fit.fit_time,
+    "pdf_time": timings["pdf"],
+    "h1_time": timings["hfunc1"],
+    "h2_time": timings["hfunc2"],
+    "tau_time": tau_time,
+    "surface_time": surface_time,
+    "total_estimator_time": fit.fit_time + tau_time + surface_time + scored,
+    **memory,
+  }
+  return metric_rows, quantity_rows, diagnostic_rows, [runtime_row]
+
+
 def summarize_one_cell(
   cell: Cell,
   grid: GridConfig,
@@ -429,131 +697,19 @@ def summarize_one_cell(
     conditional_x_grid_n=grid.conditional_x_grid_n,
   )
   truth = scenarios.ground_truth(cell.family, cell.tau_scenario, metric_grid)
-  surface = _surface(cell, grid)
+  data = _CellData(seed, u, v, x, metric_grid, truth, _surface(cell, grid))
 
-  metric_rows: Rows = []
-  quantity_rows: Rows = []
-  diagnostic_rows: Rows = []
-  runtime_rows: Rows = []
-
+  tables: tuple[Rows, Rows, Rows, Rows] = ([], [], [], [])
   for est in grid.estimators:
-    t0 = perf_counter()
-    torch.manual_seed(derive_seed(seed, est.estimator_id))
-    reset_gpu_peaks()
-    model = RosenblattBicop(
-      est.controls(
-        FitControlsRosenblattBicop,
-        device=device,
-        projection_grid_size=grid.projection_grid_size,
-        batch_size=grid.batch_size,
-      )
-    )
-    model.fit(torch.column_stack([u, v]), x=x)
-    fit_time = perf_counter() - t0
-
-    with torch.inference_mode():
-      hfuncs, pdf_by_norm, timings = _predict(
-        model, metric_grid, grid.normalize
-      )
-      for q, pred in hfuncs.items():
-        metric_rows += _metric_rows_for_quantity(
-          cell,
-          est,
-          seed,
-          q,
-          truth[q],
-          pred,
-          metric_grid,
-          normalize="none",
-          include_kl=False,
-        )
-      for norm_label, pdf_hat in pdf_by_norm.items():
-        metric_rows += _metric_rows_for_quantity(
-          cell,
-          est,
-          seed,
-          "pdf",
-          truth["pdf"],
-          pdf_hat,
-          metric_grid,
-          normalize=norm_label,
-          include_kl=True,
-        )
-
-      diag_rows, tau_time = _diagnostic_rows(
-        cell,
-        est,
-        seed,
-        model,
-        pdf_by_norm,
-        metric_grid,
-        enable_tau_diagnostics=grid.enable_tau_diagnostics,
-        tau_diagnostic_n=grid.tau_diagnostic_n,
-      )
-      diagnostic_rows += diag_rows
-
-      surface_time = 0.0
-      if surface is not None:
-        s_hfuncs, s_pdfs, s_timings = _predict(
-          model, surface.grid, grid.normalize
-        )
-        surface_time = sum(s_timings.values())
-        surface_preds = [
-          *((q, "none", pred) for q, pred in s_hfuncs.items()),
-          *(("pdf", label, pdf_hat) for label, pdf_hat in s_pdfs.items()),
-        ]
-        for q, norm_label, pred in surface_preds:
-          quantity_rows += _quantity_rows(
-            cell,
-            est,
-            seed,
-            q,
-            surface.truth[q],
-            pred,
-            surface.grid,
-            normalize=norm_label,
-            target_tau=surface.target_tau,
-            tau_true=surface.tau_true,
-          )
-
-    memory = memory_usage()
-    # Flushed per line, so this survives a hard machine crash and names the
-    # last (culprit) estimator with its peak VRAM and the system-RAM headroom.
-    logger.info(
-      "estimator %s [%s/%s n=%d]: GPU peak %.0f MiB (alloc %.0f) | "
-      "RSS %.0f MiB | MemAvailable %.0f MiB",
-      est.label,
-      cell.family,
-      cell.tau_scenario,
-      cell.n,
-      memory["gpu_peak_reserved_mb"],
-      memory["gpu_peak_alloc_mb"],
-      memory["rss_mb"],
-      memory["mem_available_mb"],
-    )
-
-    runtime_rows.append(
-      {
-        **_base_row(cell, est, seed),
-        "fit_time": fit_time,
-        "pdf_time": timings["pdf"],
-        "h1_time": timings["hfunc1"],
-        "h2_time": timings["hfunc2"],
-        "tau_time": tau_time,
-        "surface_time": surface_time,
-        "total_estimator_time": (
-          fit_time + tau_time + surface_time + sum(timings.values())
-        ),
-        **memory,
-      }
-    )
-
-    # Drop the fitted model (and its GPU tensors) before the next estimator.
-    del model
-    release_gpu()
+    if est.kind == "external_r":
+      rows = _external_rows(cell, est, data, grid)
+    else:
+      rows = _backend_rows(cell, est, data, grid, device=device)
+    for table, new in zip(tables, rows, strict=True):
+      table.extend(new)
 
   release_gpu()
-  return metric_rows, quantity_rows, diagnostic_rows, runtime_rows
+  return tables
 
 
 def run_study(
