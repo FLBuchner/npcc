@@ -182,7 +182,7 @@ def plot(a: argparse.Namespace) -> None:
       len(PANELS),
       figsize=(7.0, 1.35 * nrows + 0.6),
       sharex=True,
-      sharey="row",
+      sharey=False,
       constrained_layout=True,
     )
     for r, (target, u1) in enumerate((t, u) for t in levels for u in u1s):
@@ -201,6 +201,9 @@ def plot(a: argparse.Namespace) -> None:
         if panel.empty:
           continue
         truth = panel.groupby("u2")["pdf_true"].first()
+        # Each panel is read against its own truth, so its scale is the
+        # truth's: curves above 1.5 times its maximum are clipped.
+        ax.set_ylim(0.0, 1.5 * float(truth.max()))
         ax.plot(
           truth.index,
           truth.to_numpy(),

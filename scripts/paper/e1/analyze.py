@@ -260,13 +260,13 @@ def _plot_style(meta: pd.Series) -> dict[str, object]:
   }
 
 
-def _log_ticks(ax: plt.Axes) -> None:
-  """Label a log y axis at 1-2-5 steps within its range."""
+def _log_ticks(ax: plt.Axes, steps: tuple[int, ...] = (1, 2, 5)) -> None:
+  """Label a log y axis at ``steps`` times each power of ten in its range."""
   lo, hi = ax.get_ylim()
   ticks = [
     m * 10.0**e
     for e in range(math.floor(math.log10(lo)), math.ceil(math.log10(hi)) + 1)
-    for m in (1, 2, 5)
+    for m in steps
     if lo <= m * 10.0**e <= hi
   ]
   ax.set_yticks(ticks, [f"{v:g}" for v in ticks])
@@ -286,6 +286,10 @@ def fig_accuracy_by_n(
   """pdf IAE and KL against n, one line per estimator, +-2 SE."""
   _style()
   fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.7), constrained_layout=True)
+  # Each estimator sits a few percent off its n, so the error bars of
+  # neighbors do not overlap; on a log axis a factor is the same shift at
+  # every n.
+  dodge = dict(zip(labels, np.linspace(-0.03, 0.03, len(labels)), strict=True))
   for ax, metric in zip(axes, ("IAE", "KL"), strict=True):
     part = by_n[(by_n["quantity"] == "pdf") & (by_n["metric"] == metric)]
     for label in labels:
@@ -294,7 +298,7 @@ def fig_accuracy_by_n(
         continue
       style = _plot_style(rows.iloc[0])
       ax.errorbar(
-        rows["n"],
+        rows["n"] * (1.0 + dodge[label]),
         rows["mean"],
         yerr=2 * rows["se"],
         capsize=2,
@@ -309,7 +313,11 @@ def fig_accuracy_by_n(
     ax.set_ylabel(f"pdf {metric}")
     # Both axes on log scales, so a slope reads as a convergence rate.
     ax.set_yscale("log")
-    _log_ticks(ax)
+    if metric == "IAE":
+      # Always span the labeled 0.1-0.5, so the range between labels reads.
+      lo, hi = ax.get_ylim()
+      ax.set_ylim(min(lo, 0.095), max(hi, 0.52))
+    _log_ticks(ax, (1, 2, 3, 5) if metric == "IAE" else (1, 2, 5))
   handles, names = axes[0].get_legend_handles_labels()
   fig.legend(
     handles, names, loc="outside upper center", ncol=min(len(names), 6)
@@ -347,9 +355,21 @@ def fig_conditional_tau(
       rows = sub[sub["label"] == label]
       if rows.empty:
         continue
-      mean = rows.groupby("x")["tau_hat"].mean()
-      ax.plot(mean.index, mean.to_numpy(), **_plot_style(rows.iloc[0]))
-    ax.set_ylim(0.0, 1.0)
+      by_x = rows.groupby("x")["tau_hat"]
+      mean = by_x.mean()
+      se = by_x.std(ddof=1) / np.sqrt(by_x.count())
+      style = _plot_style(rows.iloc[0])
+      ax.fill_between(
+        mean.index,
+        (mean - 2 * se).to_numpy(),
+        (mean + 2 * se).to_numpy(),
+        color=style["color"],
+        alpha=0.15,
+        linewidth=0,
+      )
+      ax.plot(mean.index, mean.to_numpy(), **style)
+    # The target stays within [0.05, 0.70].
+    ax.set_ylim(0.0, 0.8)
   for ax in axes[-1]:
     ax.set_xlabel("$x$")
   for ax in axes[:, 0]:
