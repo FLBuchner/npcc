@@ -35,8 +35,8 @@ always fits both directions and averages them::
       + 0.5 * f_{U | V, X}(u | v, x).
 
 Averaging still does not impose exact uniform copula margins. Where those are
-required, the optional Sinkhorn projection does, on a uniform copula-scale grid
-of ``projection_grid_size`` points per axis: :meth:`RosenblattBicop.pdf_grid`
+required, the optional Sinkhorn projection does, on a copula-scale midpoint grid
+of ``projection_grid_size`` cells per axis: :meth:`RosenblattBicop.pdf_grid`
 applies it to the evaluated grid directly, while pointwise
 :meth:`RosenblattBicop.pdf` computes the correction on the internal projection
 grid and interpolates it back to the queried points.
@@ -200,8 +200,8 @@ def _sinkhorn_project(
 
   Performs iterative proportional fitting (IPF) to project the density
   matrix onto the space of densities with marginal constraints
-  ``int c(u, v) dv = 1`` and ``int c(u, v) du = 1`` under the trapezoidal
-  rule with weights ``wu`` and ``wv``.
+  ``int c(u, v) dv = 1`` and ``int c(u, v) du = 1`` under the quadrature
+  with weights ``wu`` and ``wv``.
 
   The output scalings ``r`` and ``s`` satisfy:
   - Row constraint: ``(density * s[j] * wv[j]).sum() ~ 1 / wu[i]`` for row i.
@@ -212,9 +212,9 @@ def _sinkhorn_project(
   density
       Shape ``(m, n)`` — raw density matrix at grid points.
   wu
-      Shape ``(m,)`` — trapezoidal weights for u-axis (row dimension).
+      Shape ``(m,)`` — quadrature weights for the u axis (rows).
   wv
-      Shape ``(n,)`` — trapezoidal weights for v-axis (column dimension).
+      Shape ``(n,)`` — quadrature weights for the v axis (columns).
   n_iters
       Number of alternating normalization iterations.
 
@@ -325,19 +325,20 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     )
 
   def _projection_axis(self) -> torch.Tensor:
-    """The uniform copula-scale axis the Sinkhorn projection is laid on.
+    """The copula-scale axis the Sinkhorn projection is laid on.
 
-    ``projection_grid_size`` points on ``[eps, 1 - eps]``, shared by both
-    axes; the inner backends' ``pdf_grid`` evaluates the density on it in
-    one forward pass per grid row.
+    The midpoints of ``projection_grid_size`` equal cells of ``(0, 1)``,
+    shared by both axes; the inner backends' ``pdf_grid`` evaluates the
+    density on it in one forward pass per grid row.
+
+    Midpoints, not the ends of the interval: a fitted backend extrapolates
+    beyond its data, so its density on a row at ``u = eps`` sits in the far
+    tail of its table and is orders of magnitude off. The scaling that row
+    then receives is as large, and interpolating the scalings carries it to
+    every query in the first cell.
     """
-    return torch.linspace(
-      self.eps,
-      1 - self.eps,
-      steps=self.projection_grid_size,
-      dtype=torch.float64,
-      device=self._device,
-    )
+    m = self.projection_grid_size
+    return (torch.arange(m, dtype=torch.float64, device=self._device) + 0.5) / m
 
   def _features(
     self, first_coord: torch.Tensor, x: torch.Tensor
@@ -445,27 +446,17 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     )
 
   @staticmethod
-  def _trapezoidal_weights(grid: torch.Tensor) -> torch.Tensor:
-    """Compute trapezoidal rule weights for a sorted 1-D grid.
+  def _cell_weights(grid: torch.Tensor) -> torch.Tensor:
+    """Quadrature weights for a sorted grid of ``(0, 1)``, one cell per node.
 
-    For a grid ``g`` of length ``m``, the weight at position ``i`` is the
-    average distance to neighbors:
-
-        w[i] = (g[min(i+1, m-1)] - g[max(i-1, 0)]) / 2
-
-    This is the standard weight in the composite trapezoidal rule.
+    Each node stands for the cell between the midpoints to its neighbors, the
+    first reaching down to 0 and the last up to 1, so the weights sum to one:
+    a density integrates over the whole unit interval rather than over the
+    span of the grid. On a midpoint grid every weight is ``1 / m``.
     """
-    m = grid.shape[0]
-    if m == 1:
-      return torch.ones(1, dtype=grid.dtype, device=grid.device)
-
-    weights = torch.zeros(m, dtype=grid.dtype, device=grid.device)
-    weights[0] = (grid[1] - grid[0]) / 2.0
-    weights[-1] = (grid[-1] - grid[-2]) / 2.0
-    if m > 2:
-      weights[1:-1] = (grid[2:] - grid[:-2]) / 2.0
-
-    return weights
+    inner = 0.5 * (grid[1:] + grid[:-1])
+    edges = torch.cat([grid.new_zeros(1), inner, grid.new_ones(1)])
+    return torch.diff(edges)
 
   def fit(
     self,
@@ -647,7 +638,7 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     else:
       x_unique, x_inverse = torch.unique(x, dim=0, return_inverse=True)
 
-    weights = self._trapezoidal_weights(axis)
+    weights = self._cell_weights(axis)
     return _ProjectionGrids(
       u_grid=axis,
       v_grid=axis,
@@ -776,8 +767,8 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
 
       r, s = _sinkhorn_project(
         density,
-        self._trapezoidal_weights(u_t),
-        self._trapezoidal_weights(v_t),
+        self._cell_weights(u_t),
+        self._cell_weights(v_t),
         self.sinkhorn_iters,
       )
       return r[:, None] * density * s[None, :]

@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy
 import pytest
 import torch
 from pyvinecopulib.core import BicopBase, BicopLike
 
 from npcc import (
+  ConditionalMargin,
   FitControlsRosenblattBicop,
   FitControlsRosenblattVinecop,
   RosenblattBicop,
   TabPFNQuantileBackend,
 )
+from npcc.core import registry
 from npcc.core.bicop import _sinkhorn_project
+from npcc.core.margin import MarginOptions
 from tests.conftest import normal_density_y
 
 
@@ -228,15 +233,83 @@ def test_sinkhorn_project_rejects_nonpositive_iterations() -> None:
     _sinkhorn_project(density, weights, weights, 0)
 
 
-def test_trapezoidal_weights_singleton_grid() -> None:
-  grid = torch.tensor([0.25], dtype=torch.float64)
+@pytest.mark.parametrize(
+  "grid",
+  [
+    torch.tensor([0.25], dtype=torch.float64),
+    (torch.arange(7, dtype=torch.float64) + 0.5) / 7,
+    torch.tensor([0.1, 0.15, 0.6, 0.95], dtype=torch.float64),
+  ],
+)
+def test_cell_weights_cover_the_unit_interval(grid: torch.Tensor) -> None:
+  """The projection integrates over ``(0, 1)``, not over the grid's span.
 
-  result = RosenblattBicop._trapezoidal_weights(grid)
+  Trapezoidal weights stop at the outermost nodes, so a grid that does not
+  reach the boundary would leave its end cells out of every margin. On a
+  midpoint grid each node is its own cell, of width ``1 / m``.
+  """
+  weights = RosenblattBicop._cell_weights(grid)
 
-  torch.testing.assert_close(
-    result,
-    torch.tensor([1.0], dtype=torch.float64),
+  assert float(weights.sum()) == pytest.approx(1.0)
+  assert bool((weights > 0).all())
+  if grid.shape[0] == 7:
+    torch.testing.assert_close(weights, torch.full_like(grid, 1 / 7))
+
+
+class _FlatDiagonalBackend(ConditionalMargin):
+  """Strong dependence, extrapolated flat beyond the data like a tree.
+
+  ``V | U = u`` is logit-normal around ``logit(u)``, but ``u`` is clamped to
+  ``[0.01, 0.99]`` first, as a fitted tree's prediction freezes past its last
+  split. The density on a row at ``u`` near 0 then sits in the far tail.
+  """
+
+  def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
+    return None
+
+  def _predict_quantiles(
+    self, x: torch.Tensor, alphas: torch.Tensor
+  ) -> torch.Tensor:
+    centre = torch.logit(x[:, :1].clamp(0.01, 0.99))
+    scores = cast("torch.Tensor", torch.special.ndtri(alphas))
+    return centre + 0.5 * scores.unsqueeze(0)
+
+
+def test_projection_keeps_the_mass_of_a_flat_extrapolating_backend() -> None:
+  """The projection must not inflate a density it is meant to normalize.
+
+  It was laid on ``[eps, 1 - eps]``, so its outer rows sat at the boundary,
+  where a fitted backend extrapolates flat and its density is orders of
+  magnitude off. Those rows were scaled up as much, and the interpolated
+  scalings carried that to every query near the edge: the projected density
+  integrated to about 3.6 here, and E1's CatBoost fits to up to 4.8.
+  """
+  margin_keys = MarginOptions.__annotations__
+  registry.register_backend(
+    "flat-diagonal",
+    lambda **kw: _FlatDiagonalBackend(
+      **cast("MarginOptions", {k: v for k, v in kw.items() if k in margin_keys})
+    ),
   )
+  try:
+    model = RosenblattBicop(
+      FitControlsRosenblattBicop(
+        backend="flat-diagonal", device="cpu", projection_grid_size=30
+      )
+    )
+    model.fit(random_uv(50))
+  finally:
+    registry._REGISTRY.pop("flat-diagonal", None)
+  axis = (torch.arange(20, dtype=torch.float64) + 0.5) / 20
+
+  out = model.pdf_by_projection(
+    torch.cartesian_prod(axis, axis), sinkhorn_iters=[None, 20]
+  )
+
+  raw, projected = (out[k].reshape(20, 20) for k in (None, 20))
+  assert float(projected.mean()) == pytest.approx(1.0, abs=0.05)
+  row_error = (projected.mean(dim=1) - 1.0).abs().max()
+  assert row_error < (raw.mean(dim=1) - 1.0).abs().max()
 
 
 class TestRosenblattBicopEvaluation:
