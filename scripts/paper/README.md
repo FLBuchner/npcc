@@ -51,6 +51,13 @@ contaminated by the concurrency and are not reported (see E6).
   `... density_slices.py plot --out ...`. The refits use E1's cell and
   estimator seeds, so the models equal E1's up to GPU nondeterminism.
 
+- TabPFN temperature ablation (supplement): `configs/study_tabpfn_temperature.toml`
+  (v3 at temperature 1.0 and v3.5 at 0.9, logit; E1's cells for n in
+  {500, 2000}, reps 0-4) with the sharded commands above and
+  `OUT=results/study_2026-11-06_tabpfn_temperature`; its fits pair with E1's
+  on identical data, so `analyze.py results/study_2026-11-05 --with
+  results/study_2026-11-06_tabpfn_temperature` puts both in one table.
+
 ## E3 — comparison with VDC (§3.3)
 
 See `scripts/paper/e3/README.md` for VDC's environment, the weight check and

@@ -101,7 +101,8 @@ BACKENDS: dict[str, dict[str, str]] = {
 LINESTYLE = {"ICL": "-", "GB": "--", "R": ":"}
 
 _LABEL = re.compile(
-  r"^(?:(?P<tabpfn>tabpfn)-quantiles-(?P<version>v[\d.]+)|(?P<other>[a-z]+))"
+  r"^(?:(?P<tabpfn>tabpfn)-quantiles-(?P<version>v[\d.]+)"
+  r"(?:-temp(?P<temp>[\d.]+))?|(?P<other>[a-z]+))"
   r"-(?P<transform>logit|probit|identity)$"
 )
 #: An R competitor's label is its key alone: its script fits on the copula
@@ -152,7 +153,11 @@ def annotate(df: pd.DataFrame) -> pd.DataFrame:
     df["label"],
     np.where(parsed["tabpfn"].notna(), "tabpfn", parsed["other"]),
   )
-  df["version"] = parsed["version"].fillna("")
+  # A TabPFN temperature other than the checkpoint's default is part of the
+  # version's name, so the ablation's fits stay apart from E1's.
+  df["version"] = parsed["version"].fillna("") + np.where(
+    parsed["temp"].notna(), " (T=" + parsed["temp"].fillna("") + ")", ""
+  )
   df["transform_"] = parsed["transform"].fillna("identity")
   df["backend_name"] = df["key"].map(lambda k: BACKENDS[k]["name"])
   df["group"] = df["key"].map(lambda k: BACKENDS[k]["group"])
