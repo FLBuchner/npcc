@@ -103,6 +103,24 @@ the sharded commands above with `--device cpu`.
   competitor's, cell by cell, as mean, SE and wins over repetitions (overall,
   by family and by n) into `<run>/analysis/paired.csv`.
 
+## E1c — misspecified scenarios (§3.2)
+
+Two shape families with a closed-form tau(x) of their own, under the
+`implied` regime: a Clayton-to-Gumbel mixture with Gumbel weight x (M1) and a
+Student t whose degrees of freedom run from 2 to 50 (M2); 80 cells. Both runs
+are from a clean worktree at 7567717.
+
+- npcc arms (TabPFN v3, TabICL, Nori, LightGBM, XGBoost, CatBoost):
+  `configs/study_misspec.toml` into `results/study_misspec_2026-11-06`, as 2
+  GPU shards and the aggregation pass.
+- R competitors (gamCopula, boostCopula with CV stopping):
+  `configs/study_misspec_r.toml` into `results/study_misspec_2026-11-06_r`, as
+  8 single-threaded CPU shards (`--shard I/8 --device cpu`, with
+  `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` at 1).
+- Analysis: `analyze.py results/study_misspec_2026-11-06 --with
+  results/study_misspec_2026-11-06_r`, and `paired.py` with the same runs as
+  in E1b.
+
 ## E2 — vine study (§3.4)
 
 - Config: `configs/vine_study.toml`: TabPFN v3 with the logit transform;
@@ -140,6 +158,15 @@ the command behind every file in `results/e3_vdc/`.
     and `--out results/e4_coherence/tabpfn`. E1c's scenario code (2b319b7)
     was in the working tree but uncommitted; it reproduces 7000ae3's seeds,
     draws and truths for these cells bit for bit.
+- Projection-grid ablation: the same script with `--projection-grid 30 60`
+  scores the projection on both grid sizes from one fit per cell, at n = 2000
+  on E4's 20 cells. `--sinkhorn 20` into `results/e4_projection_grid/` was
+  run for LightGBM on CPU (from 4b83733) and TabPFN v3 on the GPU (from
+  7567717); `--sinkhorn 20 50 100` into `results/e4_projection_grid_converge/`
+  for TabPFN (from 7a3150a) and LightGBM (from 2cc08f7). Each folder's
+  summary adds `projection_grid.csv`, `projection_grid_change.csv` (the
+  paired change from unprojected) and `projection_grid_cost.csv`; the
+  `proj_*` columns are the margin errors on the projection grid itself.
 - Projection cost per distinct conditioning value, on an otherwise idle
   device: the same script with `--cost-only`.
 - Summary: `uv run --no-sync python scripts/paper/e4/summarize.py
@@ -158,7 +185,4 @@ cell. Every row records the device, where the estimator computes, the thread
 settings and the commit. The projection cost per distinct conditioning value
 (E4, `--cost-only`) runs in the same idle window.
 
-## Still to be filled in
 
-E1c (the misspecified scenarios) and the projection-grid ablation are added
-here when their runs are final.
