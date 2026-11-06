@@ -232,9 +232,13 @@ taskset -c 11 nice -n 10 uv run --no-sync python $E \
 for v in random-ns tll-ns random-s true-s; do
   taskset -c 12 nice -n 10 uv run --no-sync python $E --arms npcc-catboost-logit-$v
 done
-# GPU, main-text TabPFN (v3), once allowed:
-for v in random-ns tll-ns random-s true-s; do
-  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-logit-$v --device cuda --gpu-is-free
+# GPU, main-text TabPFN (v3), arms (a) and (b) only (the paper lead's scope):
+# d = 5 on both designs, d = 10 on the decay design and five seeds.
+for v in random-ns tll-ns; do
+  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-logit-$v --dims 5 \
+      --device cuda --gpu-is-free >> results/e3d_unknown_structure_gpu.log 2>&1
+  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-logit-$v --designs decay --dims 10 \
+      --seeds 101 202 303 404 505 --device cuda --gpu-is-free >> results/e3d_unknown_structure_gpu.log 2>&1
 done
 ```
 

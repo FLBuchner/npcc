@@ -9,8 +9,10 @@ Run in the NPCC environment, from the repository root, after ``e3d_truth.py``:
         --arms parametric tll parametric_true tll_true vdc_true --vdc-core 11
     ... e3d_npcc_fit.py --arms npcc-catboost-logit-random-ns npcc-catboost-logit-tll-ns \
         npcc-catboost-logit-random-s npcc-catboost-logit-true-s
-    # GPU (main-text TabPFN v3), once allowed:
-    ... e3d_npcc_fit.py --arms npcc-tabpfn-quantiles-v3-logit-random-ns ... --device cuda --gpu-is-free
+    # GPU (main-text TabPFN v3), once allowed; d = 10 on the decay design and
+    # five seeds only (the paper lead's scope):
+    ... e3d_npcc_fit.py --arms npcc-tabpfn-quantiles-v3-logit-random-ns ... --dims 5 --device cuda --gpu-is-free
+    ... e3d_npcc_fit.py --arms ... --designs decay --dims 10 --seeds 101 202 303 404 505 --device cuda --gpu-is-free
 
 **Competitors**, each with its own default structure selection, as a user
 would run them (``vdc``, VDC's own greedy D-vine, is ``e3d_vdc_side.py``):
@@ -112,6 +114,8 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
   p.add_argument("--arms", nargs="+", required=True)
   p.add_argument("--designs", nargs="+", default=["decay", "strong"], choices=["decay", "strong"])
   p.add_argument("--dims", type=int, nargs="+", default=[5, 10])
+  p.add_argument("--seeds", type=int, nargs="+", default=None,
+                 help="seeds to run (default: all ten); the d = 10 TabPFN arms use five")
   p.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
   p.add_argument("--gpu-is-free", action="store_true")
   p.add_argument("--vdc-core", type=int, default=None)
@@ -150,7 +154,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
       warmed = parsed is None
       for design, d, seed in zip(data["design"], data["d"], data["seed"]):
         design, d, seed = str(design), int(d), int(seed)
-        if design not in a.designs or d not in a.dims:
+        if design not in a.designs or d not in a.dims or (a.seeds and seed not in a.seeds):
           continue
         key = f"{design}_d{d}_s{seed}"
         path = out_dir / f"{key}.json"
