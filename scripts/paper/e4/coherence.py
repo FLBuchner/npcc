@@ -17,7 +17,9 @@ diagnostic into ``--out``:
 
 ``--projection-grid`` replaces all three with the projection alone, scored on
 each given grid size from one fit per cell, into
-``projection_grid_<I>of<K>.csv``. ``--part I/K`` takes every K-th cell, so the
+``projection_grid_<I>of<K>.csv``; its ``proj_*`` columns are the projected
+density's margin errors on the projection grid itself, which is how far the
+Sinkhorn iteration got. ``--part I/K`` takes every K-th cell, so the
 run can be split across processes; every part writes
 ``coherence_<I>of<K>.csv``.
 
@@ -34,6 +36,7 @@ import argparse
 import subprocess
 from pathlib import Path
 from time import perf_counter
+from typing import cast
 
 import pandas as pd
 import torch
@@ -94,6 +97,35 @@ def projection_rows(
   return rows
 
 
+def projection_convergence(
+  model: RosenblattBicop, x_axis: torch.Tensor, iters: list[int]
+) -> dict[tuple[float, object], dict[str, float]]:
+  """Each projection's margins on its own grid: how far Sinkhorn got.
+
+  At the grid's midpoints the interpolated scalings are the grid's own, so
+  the projected density there is the scaled grid whose margins the iteration
+  drives to one. Keyed by x and iteration count, as :func:`projection_rows`.
+  """
+  axis = model._projection_axis().cpu()
+  m = axis.shape[0]
+  uu, vv = torch.meshgrid(axis, axis, indexing="ij")
+  uv = torch.column_stack([uu.ravel(), vv.ravel()])
+  xs = x_axis.cpu()
+  out = model.pdf_by_projection(
+    uv.repeat(xs.shape[0], 1),
+    x=xs.repeat_interleave(m * m).reshape(-1, 1),
+    sinkhorn_iters=[None, *iters],
+  )
+  result: dict[tuple[float, object], dict[str, float]] = {}
+  for key, dens in out.items():
+    d = dens.cpu().reshape(xs.shape[0], m, m)
+    for j, xv in enumerate(xs.tolist()):
+      margins = metrics.marginal_diagnostics(d[j], axis, axis)
+      label = "none" if key is None else int(key)
+      result[(xv, label)] = {f"proj_{k}": v for k, v in margins.items()}
+  return result
+
+
 def projection_grid_rows(
   model: RosenblattBicop,
   grid: scenarios.EvalGrid,
@@ -105,13 +137,20 @@ def projection_grid_rows(
 
   The grid size is read when the projection is laid out, not when the margins
   are fitted, so every size scores the same fitted model and the comparison
-  is paired.
+  is paired. Each row also carries :func:`projection_convergence`.
   """
+  if grid.x_axis is None:
+    raise ValueError("projection_grid_rows needs a conditional grid")
   rows: list[dict[str, object]] = []
   for size in sizes:
     model.projection_grid_size = size
+    on_grid = projection_convergence(model, grid.x_axis, iters)
     rows += [
-      {"projection_grid_size": size, **r}
+      {
+        "projection_grid_size": size,
+        **r,
+        **on_grid[(cast("float", r["x"]), r["sinkhorn_iters"])],
+      }
       for r in projection_rows(model, grid, truth, iters)
     ]
   return rows

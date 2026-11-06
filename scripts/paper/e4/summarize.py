@@ -62,13 +62,33 @@ def read_parts(run: Path, parts: list[Path], extra: list[str]) -> pd.DataFrame:
 
 
 def projection_grid(run: Path, parts: list[Path]) -> None:
-  """Each grid size's projected density, and its change from none."""
+  """Each grid size's projected density, and its change from none.
+
+  Parts that record it also give the margin errors on the projection grid
+  itself (``proj_*``), and ``projection_grid_cost.csv`` the overhead per
+  cell and per distinct x.
+  """
   df = read_parts(run, parts, ["projection_grid_size", "sinkhorn_iters"])
   df["sinkhorn_iters"] = df["sinkhorn_iters"].astype(str)
   by = ["label", "n", "projection_grid_size", "sinkhorn_iters"]
-  mean_se(df, by, PROJECTION_COLS).to_csv(
+  on_grid = [c for c in df.columns if c.startswith("proj_")]
+  mean_se(df, by, PROJECTION_COLS + on_grid).to_csv(
     run / "projection_grid.csv", index=False
   )
+  # One overhead per cell and grid size, covering every iteration count.
+  cell_keys = ["label", "family", "tau_scenario", "n", "rep"]
+  cells = df.drop_duplicates([*cell_keys, "projection_grid_size"])
+  n_x = df.groupby(cell_keys)["x"].nunique().max()
+  cost = (
+    cells.groupby(["label", "n", "projection_grid_size"])[
+      "projection_overhead_s"
+    ]
+    .agg(["mean", "median"])
+    .add_prefix("overhead_per_cell_s_")
+    .reset_index()
+  )
+  cost["overhead_per_x_s_median"] = cost["overhead_per_cell_s_median"] / n_x
+  cost.to_csv(run / "projection_grid_cost.csv", index=False)
   # Every grid size scores one fit, so each projected (cell, x) is compared
   # with that fit's own unprojected density before anything is averaged.
   cell = ["label", "family", "tau_scenario", "n", "rep", "x"]
