@@ -184,5 +184,3 @@ and evaluation times at d in {3, 5}, n in {500, 1000}, after one untimed
 cell. Every row records the device, where the estimator computes, the thread
 settings and the commit. The projection cost per distinct conditioning value
 (E4, `--cost-only`) runs in the same idle window.
-
-
