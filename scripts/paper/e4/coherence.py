@@ -15,8 +15,11 @@ diagnostic into ``--out``:
   requested iteration count, with the wall time of the projected evaluation
   over the unprojected one.
 
-``--part I/K`` takes every K-th cell, so the run can be split across
-processes; every part writes ``coherence_<I>of<K>.csv``.
+``--projection-grid`` replaces all three with the projection alone, scored on
+each given grid size from one fit per cell, into
+``projection_grid_<I>of<K>.csv``. ``--part I/K`` takes every K-th cell, so the
+run can be split across processes; every part writes
+``coherence_<I>of<K>.csv``.
 
 Usage (from the npcc repository root)::
 
@@ -88,6 +91,29 @@ def projection_rows(
           "projection_overhead_s": all_time - base_time,
         }
       )
+  return rows
+
+
+def projection_grid_rows(
+  model: RosenblattBicop,
+  grid: scenarios.EvalGrid,
+  truth: torch.Tensor,
+  iters: list[int],
+  sizes: list[int],
+) -> list[dict[str, object]]:
+  """:func:`projection_rows` on each projection grid size, from one fit.
+
+  The grid size is read when the projection is laid out, not when the margins
+  are fitted, so every size scores the same fitted model and the comparison
+  is paired.
+  """
+  rows: list[dict[str, object]] = []
+  for size in sizes:
+    model.projection_grid_size = size
+    rows += [
+      {"projection_grid_size": size, **r}
+      for r in projection_rows(model, grid, truth, iters)
+    ]
   return rows
 
 
@@ -168,9 +194,22 @@ def main() -> None:
       "first cell; run it on an otherwise idle device."
     ),
   )
+  p.add_argument(
+    "--projection-grid",
+    type=int,
+    nargs="+",
+    default=None,
+    metavar="SIZE",
+    help=(
+      "Only score the projection, on each of these grid sizes per axis, "
+      "from one fit per cell."
+    ),
+  )
   p.add_argument("--cost-k", type=int, nargs="+", default=[1, 10, 100, 1000])
   p.add_argument("--cost-repeats", type=int, default=5)
   a = p.parse_args()
+  if a.cost_only and a.projection_grid:
+    p.error("--cost-only and --projection-grid are separate runs")
 
   grid_cfg = load_grid(a.config)
   by_label = {e.label: e for e in grid_cfg.estimators}
@@ -236,6 +275,12 @@ def main() -> None:
         )
         rows += [{**base, "diagnostic": "projection_cost", **r} for r in cost]
         continue
+      if a.projection_grid:
+        sized = projection_grid_rows(
+          model, eval_grid, truth["pdf"], a.sinkhorn, a.projection_grid
+        )
+        rows += [{**base, "diagnostic": "projection_grid", **r} for r in sized]
+        continue
       for diag, part_rows in (
         (
           "directional",
@@ -254,7 +299,13 @@ def main() -> None:
     )
 
   a.out.mkdir(parents=True, exist_ok=True)
-  stem = "projection_cost" if a.cost_only else "coherence"
+  stem = (
+    "projection_cost"
+    if a.cost_only
+    else "projection_grid"
+    if a.projection_grid
+    else "coherence"
+  )
   pd.DataFrame(rows).to_csv(a.out / f"{stem}_{index}of{count}.csv", index=False)
 
 

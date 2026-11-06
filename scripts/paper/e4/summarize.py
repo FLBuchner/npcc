@@ -6,8 +6,11 @@ every part under the run folder, subfolders included, so estimators run
 separately (on another device, say) each keep their own ``--out``. Writes
 ``directional.csv``, ``hfunc.csv``, ``projection.csv`` and ``mass_tail.csv``
 (the share of (cell, x) whose mass on the evaluation grid exceeds 1.1 and 2,
-with its median and maximum) into the run folder, and from a ``--cost-only``
-run ``projection_cost.csv`` with the projected-over-unprojected multiplier.
+with its median and maximum) into the run folder; from a ``--cost-only``
+run ``projection_cost.csv`` with the projected-over-unprojected multiplier;
+and from a ``--projection-grid`` run ``projection_grid.csv``, each grid size's
+accuracy and margins, with ``projection_grid_change.csv``, their change from
+the same fit's unprojected density, paired per (cell, x).
 
 Usage::
 
@@ -33,15 +36,75 @@ def mean_se(df: pd.DataFrame, by: list[str], cols: list[str]) -> pd.DataFrame:
   return out[sorted(out.columns)].reset_index()
 
 
+#: Accuracy, mass and margin errors of a projected (or unprojected) density.
+PROJECTION_COLS = [
+  "pdf_IAE",
+  "pdf_KL",
+  "mass",
+  "row_max_abs_err",
+  "col_max_abs_err",
+  "row_mean_abs_err",
+  "col_mean_abs_err",
+]
+
+
+def read_parts(run: Path, parts: list[Path], extra: list[str]) -> pd.DataFrame:
+  """Concatenate the parts, refusing a row that two of them both hold.
+
+  A part copied or rerun into a second folder would be averaged in twice.
+  """
+  df = pd.concat((pd.read_csv(p) for p in parts), ignore_index=True)
+  key = ["label", "family", "tau_scenario", "n", "rep", "diagnostic", "x"]
+  dup = df.duplicated([*key, *extra]).sum()
+  if dup:
+    raise SystemExit(f"{dup} rows of {run} appear in more than one part")
+  return df
+
+
+def projection_grid(run: Path, parts: list[Path]) -> None:
+  """Each grid size's projected density, and its change from none."""
+  df = read_parts(run, parts, ["projection_grid_size", "sinkhorn_iters"])
+  df["sinkhorn_iters"] = df["sinkhorn_iters"].astype(str)
+  by = ["label", "n", "projection_grid_size", "sinkhorn_iters"]
+  mean_se(df, by, PROJECTION_COLS).to_csv(
+    run / "projection_grid.csv", index=False
+  )
+  # Every grid size scores one fit, so each projected (cell, x) is compared
+  # with that fit's own unprojected density before anything is averaged.
+  cell = ["label", "family", "tau_scenario", "n", "rep", "x"]
+  cell.append("projection_grid_size")
+  none = df[df["sinkhorn_iters"] == "none"][[*cell, *PROJECTION_COLS]]
+  change = df[df["sinkhorn_iters"] != "none"].merge(
+    none, on=cell, suffixes=("", "_none"), validate="many_to_one"
+  )
+  for col in PROJECTION_COLS:
+    change[col] = change[col] - change[f"{col}_none"]
+  mean_se(change, by, PROJECTION_COLS).to_csv(
+    run / "projection_grid_change.csv", index=False
+  )
+
+
 def main() -> None:
   run = Path(sys.argv[1])
   parts = sorted(run.rglob("coherence_*.csv"))
-  df = pd.concat((pd.read_csv(p) for p in parts), ignore_index=True)
-  # A part copied or rerun into a second folder would be averaged in twice.
-  key = ["label", "family", "tau_scenario", "n", "rep", "diagnostic", "x"]
-  dup = df.duplicated([*key, "sinkhorn_iters"]).sum()
-  if dup:
-    raise SystemExit(f"{dup} rows of {run} appear in more than one part")
+  grids = sorted(run.rglob("projection_grid_*.csv"))
+  costs = sorted(run.rglob("projection_cost_*.csv"))
+  if not (parts or grids or costs):
+    raise SystemExit(f"no E4 parts under {run}")
+  if grids:
+    projection_grid(run, grids)
+  if costs:
+    cost = pd.concat((pd.read_csv(p) for p in costs), ignore_index=True)
+    cost["multiplier"] = cost["time_projected_s"] / cost["time_unprojected_s"]
+    cost.to_csv(run / "projection_cost.csv", index=False)
+  if parts:
+    coherence(run, parts)
+  print(f"{len(parts) + len(grids) + len(costs)} part(s) -> {run}")
+
+
+def coherence(run: Path, parts: list[Path]) -> None:
+  """The directional, h-function, projection and mass tables."""
+  df = read_parts(run, parts, ["sinkhorn_iters"])
   dirn = df[df["diagnostic"] == "directional"]
   cols = [
     "iae_between_directions",
@@ -61,16 +124,7 @@ def main() -> None:
   )
   proj = df[df["diagnostic"] == "projection"].copy()
   proj["sinkhorn_iters"] = proj["sinkhorn_iters"].astype(str)
-  cols = [
-    "pdf_IAE",
-    "pdf_KL",
-    "mass",
-    "row_max_abs_err",
-    "col_max_abs_err",
-    "row_mean_abs_err",
-    "col_mean_abs_err",
-  ]
-  table = mean_se(proj, ["label", "n", "sinkhorn_iters"], cols)
+  table = mean_se(proj, ["label", "n", "sinkhorn_iters"], PROJECTION_COLS)
   # One overhead per cell (it covers the whole sweep), so average per cell.
   cells = proj.drop_duplicates(["family", "tau_scenario", "n", "rep", "label"])
   overhead = cells.groupby(["label", "n"])["projection_overhead_s"].mean()
@@ -89,13 +143,6 @@ def main() -> None:
     }
   )
   tail.reset_index().to_csv(run / "mass_tail.csv", index=False)
-
-  costs = sorted(run.rglob("projection_cost_*.csv"))
-  if costs:
-    cost = pd.concat((pd.read_csv(p) for p in costs), ignore_index=True)
-    cost["multiplier"] = cost["time_projected_s"] / cost["time_unprojected_s"]
-    cost.to_csv(run / "projection_cost.csv", index=False)
-  print(f"{len(parts)} part(s), {df['label'].nunique()} estimators -> {run}")
 
 
 if __name__ == "__main__":
