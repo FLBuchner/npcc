@@ -85,11 +85,17 @@ BACKENDS: dict[str, dict[str, str]] = {
     "color": "#333333",
     "marker": "X",
   },
-  "boostcopula-smooth": {
+  "boostcopula-smooth-cv": {
     "name": "boostCopula",
     "group": "R",
     "color": "#777777",
     "marker": "*",
+  },
+  "boostcopula-smooth": {
+    "name": "boostCopula (AIC stop)",
+    "group": "R",
+    "color": "#999999",
+    "marker": "p",
   },
   "boostcopula": {
     "name": "boostCopula (linear in x)",

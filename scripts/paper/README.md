@@ -12,8 +12,10 @@ uv sync --frozen --extra cu130 --extra backends --extra experiments
 ```
 
 (pick the CUDA flavor that matches the driver). Results are written under
-`results/`, which is not tracked; each output records the npcc commit it was
-produced from.
+`results/`, which is not tracked. This file names the commit behind each
+reported run. The E3 and E4 scripts also write it into every row, and from
+22e0da2 on, every process of a study run appends its commit, uncommitted
+files and options to `provenance.jsonl` in the run's folder.
 
 ## Running a study on several processes
 
@@ -49,14 +51,57 @@ contaminated by the concurrency and are not reported (see E6).
   --tabpfn <version> --transform <transform> --out
   results/study_2026-11-05/analysis/slices` (add `--part I/K` to split), then
   `... density_slices.py plot --out ...`. The refits use E1's cell and
-  estimator seeds, so the models equal E1's up to GPU nondeterminism.
-
+  estimator seeds, so the models equal E1's up to GPU nondeterminism. Every
+  row records its commit: 7000ae3 for parts 0–2, d18480b for part 3, rerun
+  after a CUDA launch failure (nothing E1 runs changed in between).
+- Code: the four shards ran once each from 2f8fa94, and the aggregation pass
+  from 7000ae3 only read their checkpoints. The density metrics are
+  unprojected. `projection_summary` predates the midpoint Sinkhorn projection
+  (a26262c), so the projection results reported come from E4.
 - TabPFN temperature ablation (supplement): `configs/study_tabpfn_temperature.toml`
   (v3 at temperature 1.0 and v3.5 at 0.9, logit; E1's cells for n in
   {500, 2000}, reps 0-4) with the sharded commands above and
   `OUT=results/study_2026-11-06_tabpfn_temperature`; its fits pair with E1's
   on identical data, so `analyze.py results/study_2026-11-05 --with
   results/study_2026-11-06_tabpfn_temperature` puts both in one table.
+
+## E1b — established competitors on E1's cells (§3.2)
+
+R 4.6.2 with VineCopula 2.6.1 and mgcv 1.9-4; boostCopula 0.1.0 at commit
+746b191 of jobstdavid/boostCopula; gamCopula 0.0-8 built from commit e5561a8
+of tvatter/gamCopula (PR #20, which passes a fitted t copula's second
+parameter to its density and distribution). Each config's `[grid]` table is
+E1's, so cells, seeds and truths are E1's, and each script's SHA-256 enters
+its estimator id, so a run's signature pins the script it ran. All runs use
+the sharded commands above with `--device cpu`.
+
+- `configs/study_r.toml` into `results/study_2026-11-05_r`, from 349ec08:
+  gamCopula, and boostCopula linear in x.
+- `configs/study_r_smooth_cv.toml` into `results/study_2026-11-05_r_smooth_cv`,
+  from d10182b: boostCopula on a cubic B-spline basis of x, stopped by
+  10-fold cross-validation. This is the boostCopula arm reported. It ran as
+  8 single-threaded shards (`--shard I/8`, with `OMP_NUM_THREADS`,
+  `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` at 1).
+- `configs/study_r_smooth.toml` into `results/study_2026-11-05_r_smooth`,
+  from b8f26dd: the same basis stopped by AIC, kept for the record. It stops
+  at maxit = 500 in 63 of 160 fits.
+- Analysis: `analyze.py results/study_2026-11-05 --with
+  results/study_2026-11-05_r results/study_2026-11-05_r_smooth_cv` adds the
+  `*_with_competitors` figures, and `scripts/paper/e1/r_selection.py <run>`
+  joins each R fit's family, formula and EDF with its accuracy into
+  `<run>/analysis/r_selection.csv`.
+
+## E2 — vine study
+
+- Config: `configs/vine_study.toml`: TabPFN v3 with the logit transform;
+  oracle, random and TLL arms; d in {3, 5}, n in {500, 1000}, 20 reps; 80
+  cells.
+- Run from a clean worktree at d10182b into `results/vine_2026-11-06`, as 4
+  shards of `npcc-vinestudy` with the flags above on two GPU slots, then the
+  aggregation pass; `logs/provenance.txt` has the exact commands. A shard
+  that ran out of GPU memory was resumed, which reuses its finished cells: a
+  cell's seeds depend on the cell alone. A d = 5 shard peaks at about 7 GB,
+  since every fitted margin holds its own TabPFN model on the GPU.
 
 ## E3 — comparison with VDC (§3.3)
 
@@ -83,5 +128,5 @@ the command behind every file in `results/e3_vdc/`.
 
 ## Still to be filled in
 
-E1b (gamCopula and boostCopula on E1's cells), E2 (the vine rerun) and E6
-(clean timings) are added here when their runs are final.
+E1c (the misspecified scenarios), the projection-grid ablation and E6 (clean
+timings) are added here when their runs are final.
