@@ -8,12 +8,7 @@ import pytest
 import torch
 
 from npcc.core import QuantileTableConfig
-from npcc.core._quantile_table import (
-  QuantileTable,
-  Smoother,
-  smoothing_window,
-  weighted_smoother,
-)
+from npcc.core._quantile_table import QuantileTable, smoother
 from npcc.core._transform import normal_cdf, resolve_transform
 from tests.conftest import TAIL_MASS, NormalQuantileBackend
 
@@ -46,7 +41,6 @@ def make_table(
   *,
   smoothing: float = 1.0,
   min_slope: float = 0.2,
-  smoother: Smoother = "moving-average",
 ) -> QuantileTable:
   return QuantileTable(
     quantiles,
@@ -55,7 +49,6 @@ def make_table(
     eps=1e-12,
     smoothing=smoothing,
     min_slope=min_slope,
-    smoother=smoother,
   )
 
 
@@ -198,24 +191,21 @@ def test_crossed_rows_are_sorted() -> None:
   )
 
 
-@pytest.mark.parametrize("smoother", ["moving-average", "weighted"])
 @pytest.mark.parametrize("smoothing", [0.0, 0.65, 1.0, 2.0, 4.0])
-def test_smoothing_leaves_a_normal_table_unchanged(
-  smoothing: float, smoother: Smoother
-) -> None:
+def test_smoothing_leaves_a_normal_table_unchanged(smoothing: float) -> None:
   """A straight line in normal scores has nothing to smooth.
 
-  So the hermetic normal backends are exact whatever a backend's default
-  smoothing is, and a smoother that moved such a table would be biased.
+  So the hermetic normal backends are exact whatever the smoothing is, and a
+  smoother that moved such a table would be biased.
   """
   q = (0.5 + 1.7 * SCORES).unsqueeze(0)
 
-  table = make_table(q, "identity", smoothing=smoothing, smoother=smoother)
+  table = make_table(q, "identity", smoothing=smoothing)
 
   torch.testing.assert_close(table.knots, q)
 
 
-def test_weighted_smoother_keeps_the_middle_and_smooths_the_ends() -> None:
+def test_smoother_keeps_the_middle_and_smooths_the_ends() -> None:
   """A level keeps more of its own estimate the more precise that estimate is.
 
   The weights are the precision of a sample quantile, highest at the median.
@@ -223,7 +213,7 @@ def test_weighted_smoother_keeps_the_middle_and_smooths_the_ends() -> None:
   noisiest levels -- the outermost, which a per-level model estimates from a
   handful of observations -- almost as fitted.
   """
-  own = weighted_smoother(21, LIMIT, 0.65).diagonal()
+  own = smoother(21, LIMIT, 0.65).diagonal()
 
   assert bool((torch.diff(own[:11]) > 0).all())
   assert own[10] > 3 * own[0]
@@ -257,39 +247,24 @@ def clayton_conditional(
   return torch.logit(v_q).unsqueeze(0), v.unsqueeze(0), weight, density
 
 
-@pytest.mark.parametrize(
-  ("smoother", "smoothing", "iae"),
-  [
-    ("moving-average", 0.0, 0.0283),
-    ("moving-average", 2.0, 0.0887),
-    ("weighted", 0.65, 0.1162),
-  ],
-)
+@pytest.mark.parametrize(("smoothing", "iae"), [(0.0, 0.0283), (0.65, 0.1162)])
 def test_bias_on_an_exact_table_is_the_one_the_ab_measured(
-  smoother: Smoother, smoothing: float, iae: float
+  smoothing: float, iae: float
 ) -> None:
-  """The smoothers keep the bias they had when the A/B chose between them.
+  """The smoother keeps the bias it had when the A/B chose it.
 
   On the exact conditional quantiles of a Clayton copula at tau = 0.7, the
-  weighted smoother at 0.65 is *more* biased than the 7-cell average; it was
-  adopted for the per-level tree backends because it removes more of their
-  noise than it adds bias (``scripts/qt_ab``). A change to either smoother
-  that moved these numbers would void that comparison.
+  default bandwidth roughly quadruples the unsmoothed table's error. It was
+  adopted anyway because it removes far more of a per-level tree backend's
+  noise and leaves TabPFN's error unchanged (``scripts/qt_ab``); a change to
+  the smoother that moved these numbers would void that comparison.
   """
   q, v, weight, truth = clayton_conditional(theta=2 * 0.7 / 0.3, u=0.5)
-  table = make_table(q, "logit", smoothing=smoothing, smoother=smoother)
+  table = make_table(q, "logit", smoothing=smoothing)
 
   error = ((table.pdf(v)[0] - truth).abs() * weight).sum()
 
   assert float(error) == pytest.approx(iae, abs=5e-4)
-
-
-def test_an_unknown_smoother_is_refused() -> None:
-  """A misspelled smoother is refused, not silently read as no smoothing."""
-  with pytest.raises(ValueError, match="smoother must be"):
-    QuantileTableConfig(smoother="lowess")  # ty: ignore[invalid-argument-type] - the wrong value is the point
-  with pytest.raises(ValueError, match="smoother must be"):
-    make_table(noisy_table("logit"), "logit", smoother="lowess")  # ty: ignore[invalid-argument-type] - the wrong value is the point
 
 
 def test_exponential_tail_meets_a_straight_table_continuously() -> None:
@@ -312,21 +287,6 @@ def test_exponential_tail_meets_a_straight_table_continuously() -> None:
   )
 
 
-@pytest.mark.parametrize(
-  ("smoothing", "cells"), [(0.0, 1), (0.3, 1), (1.0, 3), (2.0, 7)]
-)
-def test_smoothing_window_is_measured_in_normal_scores(
-  smoothing: float, cells: int
-) -> None:
-  """The window is a width on the score axis, not a number of levels.
-
-  So a given ``smoothing`` means the same thing at any ``n_quantiles``.
-  """
-  step = 2 * LIMIT / 20
-
-  assert smoothing_window(smoothing, step) == cells
-
-
 def test_values_must_have_one_row_per_table_row() -> None:
   """A query with the wrong row count is refused rather than broadcast."""
   table = make_table(noisy_table("logit"), "logit")
@@ -335,58 +295,45 @@ def test_values_must_have_one_row_per_table_row() -> None:
     table.pdf(torch.full((2, 4), 0.5, dtype=torch.float64))
 
 
-def test_margin_uses_its_backends_smoothing_unless_configured() -> None:
-  """``smoothing=None`` defers to the backend; a number overrides it.
+def test_margin_reads_its_table_with_the_configured_smoothing() -> None:
+  """The margin smooths with the configuration's bandwidth, nothing else.
 
-  The per-backend default is what lets a per-level tree backend smooth more
-  than a joint model without every caller having to know which is which.
+  Every backend shares one read-out; a margin that dropped or replaced the
+  configured bandwidth would read its table differently from the others.
   """
-  default = NormalQuantileBackend(transform="identity")
-  configured = NormalQuantileBackend(
-    transform="identity",
-    quantile_table_config=QuantileTableConfig(smoothing=0.0),
-  )
+  noisy = noisy_table("identity", rows=1)
 
-  assert default.smoothing == NormalQuantileBackend.default_smoothing
-  assert configured.smoothing == 0.0
+  class Noisy(NormalQuantileBackend):
+    def _predict_quantiles(
+      self, x: torch.Tensor, alphas: torch.Tensor
+    ) -> torch.Tensor:
+      return noisy.expand(x.shape[0], -1).clone()
+
+  x = torch.zeros((1, 1), dtype=torch.float64)
+  for smoothing in (0.0, QuantileTableConfig().smoothing):
+    margin = Noisy(
+      transform="identity",
+      quantile_table_config=QuantileTableConfig(smoothing=smoothing),
+    )
+    margin._fitted = True
+
+    knots = margin._predict_quantile_table(x).knots
+
+    expected = QuantileTable(
+      noisy,
+      limit=LIMIT,
+      transform=resolve_transform("identity"),
+      eps=margin.eps,
+      smoothing=smoothing,
+      min_slope=0.2,
+    ).knots
+    torch.testing.assert_close(knots, expected, rtol=0.0, atol=0.0)
 
 
-def test_margin_uses_its_backends_smoother_unless_configured() -> None:
-  """``smoother=None`` defers to the backend; a name overrides it."""
-  default = NormalQuantileBackend(transform="identity")
-  configured = NormalQuantileBackend(
-    transform="identity",
-    quantile_table_config=QuantileTableConfig(smoother="weighted"),
-  )
-
-  assert default.smoother == "moving-average"
-  assert configured.smoother == "weighted"
-
-
-@pytest.mark.parametrize(
-  ("package", "module", "name"),
-  [
-    ("lightgbm", "lightgbm_quantile", "LightGBMQuantileBackend"),
-    ("xgboost", "xgboost_quantile", "XGBoostQuantileBackend"),
-    ("catboost", "catboost_quantile", "CatBoostQuantileBackend"),
-  ],
-)
-def test_per_level_tree_backends_default_to_the_weighted_smoother(
-  package: str, module: str, name: str
-) -> None:
-  """The tree backends read their tables with what the A/B chose for them.
-
-  On E1's cells the weighted smoother at 0.65 beat the 7-cell average for
-  every tree backend at every sample size; a backend left on the old default
-  would quietly report the read-out the A/B rejected.
-  """
-  pytest.importorskip(package)
-  backend = getattr(
-    __import__(f"npcc.core.backends.{module}", fromlist=[name]), name
-  )
-
-  assert backend.default_smoother == "weighted"
-  assert backend.default_smoothing == 0.65
+def test_negative_smoothing_is_refused() -> None:
+  """A negative bandwidth is refused rather than read as no smoothing."""
+  with pytest.raises(ValueError, match="smoothing must be nonnegative"):
+    QuantileTableConfig(smoothing=-0.1)
 
 
 def test_levels_are_the_normal_grid() -> None:

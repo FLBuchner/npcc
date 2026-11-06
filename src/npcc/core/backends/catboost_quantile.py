@@ -18,13 +18,12 @@ This backend requires the ``catboost`` optional dependency.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
 import torch
 from catboost import CatBoostRegressor
 from pyvinecopulib.core.extend import to_numpy
 
-from npcc.core._quantile_table import Smoother
 from npcc.core._transform import Transform
 from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 
@@ -86,11 +85,6 @@ class CatBoostQuantileBackend(ConditionalMargin):
   ValueError
       If ``catboost_params`` sets a parameter this backend controls.
   """
-
-  #: A fitted tree table, noisy across levels, is smoothed as the other tree
-  #: backends' are.
-  default_smoother: ClassVar[Smoother] = "weighted"
-  default_smoothing: ClassVar[float] = 0.65
 
   model_: CatBoostRegressor | None
 

@@ -27,7 +27,7 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar, NoReturn, Self, TypedDict
+from typing import NoReturn, Self, TypedDict
 
 import numpy as np
 import torch
@@ -35,12 +35,7 @@ from pyvinecopulib.core import MarginBase
 from pyvinecopulib.core.extend import prepare_covariates
 
 from npcc.core._placement import TensorPlacement, default_batch_size
-from npcc.core._quantile_table import (
-  SMOOTHERS,
-  QuantileTable,
-  Smoother,
-  normal_scores,
-)
+from npcc.core._quantile_table import QuantileTable, normal_scores
 from npcc.core._transform import Transform, normal_cdf, resolve_transform
 
 
@@ -58,15 +53,11 @@ class QuantileTableConfig:
     beyond the table on each side. The default is pyvinecopulib's normal-grid
     limit.
   smoothing
-    Width of the smoother, in normal-score units: the window the quantile
-    slopes are averaged over, or the weighted smoother's bandwidth at the
-    median. ``None`` is the backend's own default
-    (:attr:`ConditionalMargin.default_smoothing`); ``0`` turns smoothing off.
-  smoother
-    ``"moving-average"`` or ``"weighted"``; see
-    :mod:`npcc.core._quantile_table`. ``None`` is the backend's own default
-    (:attr:`ConditionalMargin.default_smoother`), which is ``"weighted"`` for
-    the backends that fit every level separately.
+    Bandwidth, in normal-score units at the median, of the smoother the
+    predicted table is fitted with (see :mod:`npcc.core._quantile_table`);
+    ``0`` turns smoothing off. The default suits every backend: it removes
+    most of the level-to-level noise of a per-level model and barely changes
+    a joint model's table.
   min_slope
     Floor on every quantile slope, as a fraction of the row's mean slope. It
     bounds the density a crossed or tied pair of quantiles can produce.
@@ -74,8 +65,7 @@ class QuantileTableConfig:
 
   n_quantiles: int = 21
   normal_limit: float = 3.25
-  smoothing: float | None = None
-  smoother: Smoother | None = None
+  smoothing: float = 0.65
   min_slope: float = 0.2
 
   def __post_init__(self) -> None:
@@ -92,16 +82,8 @@ class QuantileTableConfig:
         f"normal_limit must lie in (0, 6]; got {self.normal_limit}"
       )
 
-    if self.smoothing is not None and not self.smoothing >= 0.0:
-      raise ValueError(
-        f"smoothing must be None or nonnegative; got {self.smoothing}"
-      )
-
-    if self.smoother is not None and self.smoother not in SMOOTHERS:
-      raise ValueError(
-        f"smoother must be None or one of {list(SMOOTHERS)}; "
-        f"got {self.smoother!r}"
-      )
+    if not self.smoothing >= 0.0:
+      raise ValueError(f"smoothing must be nonnegative; got {self.smoothing}")
 
     if not 0.0 <= self.min_slope < 1.0:
       raise ValueError(f"min_slope must lie in [0, 1); got {self.min_slope}")
@@ -197,23 +179,7 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
   batch_size
       Default inference chunk size. If omitted, 400 is used on CPU and 2000 on
       CUDA.
-
-  Attributes
-  ----------
-  default_smoothing : float
-      The smoother's width, in normal-score units, used when the
-      configuration leaves :attr:`QuantileTableConfig.smoothing` at ``None``.
-  default_smoother : str
-      The smoother used when the configuration leaves
-      :attr:`QuantileTableConfig.smoother` at ``None``. A one-unit moving
-      average suits a backend whose levels share one model. A backend that
-      fits every level separately predicts its outermost levels from a handful
-      of observations, and takes the weighted smoother, which smooths those
-      hard and the middle lightly.
   """
-
-  default_smoothing: ClassVar[float] = 1.0
-  default_smoother: ClassVar[Smoother] = "moving-average"
 
   supports_covariates: bool = True
   supports_weights: bool = False
@@ -268,18 +234,6 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
         The bounds, infinite where the support is unbounded.
     """
     return self._response_transform.support
-
-  @property
-  def smoothing(self) -> float:
-    """The smoother's width this margin reconstructs with."""
-    configured = self.quantile_table_config.smoothing
-    return self.default_smoothing if configured is None else configured
-
-  @property
-  def smoother(self) -> Smoother:
-    """The smoother this margin reconstructs with."""
-    configured = self.quantile_table_config.smoother
-    return self.default_smoother if configured is None else configured
 
   @property
   def family_name(self) -> str:
@@ -608,9 +562,8 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
       limit=cfg.normal_limit,
       transform=self._response_transform,
       eps=self.eps,
-      smoothing=self.smoothing,
+      smoothing=cfg.smoothing,
       min_slope=cfg.min_slope,
-      smoother=self.smoother,
     )
 
   def _rows(

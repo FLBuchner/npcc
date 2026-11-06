@@ -18,8 +18,6 @@ This backend requires the ``ngboost`` optional dependency.
 
 from __future__ import annotations
 
-from typing import ClassVar
-
 import torch
 from ngboost import NGBRegressor
 from ngboost.distns import Normal
@@ -50,9 +48,6 @@ class NGBoostBackend(ConditionalMargin):
   **ngb_kwargs
     Additional arguments passed to ``NGBRegressor``.
   """
-
-  #: A parametric quantile function is already smooth across levels.
-  default_smoothing: ClassVar[float] = 0.0
 
   model_: NGBRegressor | None
 

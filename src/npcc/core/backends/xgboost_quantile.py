@@ -19,13 +19,12 @@ This backend requires the ``xgboost`` optional dependency.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
 import torch
 from pyvinecopulib.core.extend import to_numpy
 from xgboost.sklearn import XGBRegressor
 
-from npcc.core._quantile_table import Smoother
 from npcc.core._transform import Transform
 from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 
@@ -83,11 +82,6 @@ class XGBoostQuantileBackend(ConditionalMargin):
   ValueError
       If ``xgb_params`` sets a parameter this backend controls.
   """
-
-  #: Every level grows its own trees, so the table is smoothed as the
-  #: LightGBM backend's is.
-  default_smoother: ClassVar[Smoother] = "weighted"
-  default_smoothing: ClassVar[float] = 0.65
 
   model_: XGBRegressor | None
 
