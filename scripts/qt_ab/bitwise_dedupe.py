@@ -132,9 +132,16 @@ def main() -> None:
     try:
       ConditionalMargin._predict_quantile_table = table_before_56d9983
       before = quantities(model, grid)
+      # The same code twice: what the backend itself varies from run to run,
+      # against which a difference from deduplication is judged.
+      repeat = quantities(model, grid)
     finally:
       ConditionalMargin._predict_quantile_table = deduplicating
     after = quantities(model, grid)
+
+    def rel(a: torch.Tensor, b: torch.Tensor) -> float:
+      return float(((a - b).abs() / b.abs().clamp_min(1e-12)).max())
+
     for q in before:
       rows.append(
         {
@@ -143,6 +150,10 @@ def main() -> None:
           "n": cell.n,
           "bitwise": bool(torch.equal(before[q], after[q])),
           "max_abs_diff": float((before[q] - after[q]).abs().max()),
+          "max_rel_diff": rel(after[q], before[q]),
+          "bitwise_repeat": bool(torch.equal(before[q], repeat[q])),
+          "max_abs_diff_repeat": float((before[q] - repeat[q]).abs().max()),
+          "max_rel_diff_repeat": rel(repeat[q], before[q]),
         }
       )
     print(pd.DataFrame(rows[-len(before) :]).to_string(index=False), flush=True)
