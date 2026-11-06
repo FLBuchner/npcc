@@ -330,10 +330,21 @@ def test_margin_reads_its_table_with_the_configured_smoothing() -> None:
     torch.testing.assert_close(knots, expected, rtol=0.0, atol=0.0)
 
 
-def test_negative_smoothing_is_refused() -> None:
-  """A negative bandwidth is refused rather than read as no smoothing."""
-  with pytest.raises(ValueError, match="smoothing must be nonnegative"):
-    QuantileTableConfig(smoothing=-0.1)
+@pytest.mark.parametrize("smoothing", [-0.1, None, True, "0.65"])
+def test_a_smoothing_that_is_not_a_bandwidth_is_refused(
+  smoothing: object,
+) -> None:
+  """A negative or non-numeric smoothing is refused, saying what is required.
+
+  ``None`` meant "the backend's default" until every backend shared one
+  smoother; an old caller passing it must be told what is now required, not
+  meet a ``TypeError`` from inside the comparison. A bool would otherwise be
+  read as a bandwidth of 0 or 1.
+  """
+  with pytest.raises(
+    ValueError, match="smoothing must be a nonnegative number"
+  ):
+    QuantileTableConfig(smoothing=smoothing)  # ty: ignore[invalid-argument-type] - the wrong type is the point
 
 
 def test_levels_are_the_normal_grid() -> None:

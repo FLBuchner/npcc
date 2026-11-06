@@ -82,8 +82,18 @@ class QuantileTableConfig:
         f"normal_limit must lie in (0, 6]; got {self.normal_limit}"
       )
 
-    if not self.smoothing >= 0.0:
-      raise ValueError(f"smoothing must be nonnegative; got {self.smoothing}")
+    # A bool is an int, and None was once "the backend's default": both are
+    # refused by name rather than read as a bandwidth or left to fail on `>=`.
+    if (
+      isinstance(self.smoothing, bool)
+      or not isinstance(self.smoothing, (int, float))
+      or not self.smoothing >= 0.0
+    ):
+      raise ValueError(
+        f"smoothing must be a nonnegative number; got {self.smoothing!r}. "
+        "Every backend reads its table with the same smoother: leave it at "
+        "its default or pass a bandwidth in normal-score units."
+      )
 
     if not 0.0 <= self.min_slope < 1.0:
       raise ValueError(f"min_slope must lie in [0, 1); got {self.min_slope}")
