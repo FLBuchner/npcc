@@ -121,7 +121,7 @@ def probe(n: int, transform: str) -> dict[str, object]:
     limit=cfg.normal_limit,
     transform=margin._response_transform,
     eps=margin.eps,
-    smoothing=margin.smoothing,
+    smoothing=cfg.smoothing,
     min_slope=cfg.min_slope,
   )
   slope = table._slope
@@ -138,7 +138,7 @@ def probe(n: int, transform: str) -> dict[str, object]:
     "transform": transform,
     "n_quantiles": cfg.n_quantiles,
     "normal_limit": cfg.normal_limit,
-    "smoothing": margin.smoothing,
+    "smoothing": cfg.smoothing,
     "min_slope": cfg.min_slope,
     "rows": raw.shape[0],
     "output_dtypes": ";".join(f"{k}:{c}" for k, c in sorted(dtypes.items())),

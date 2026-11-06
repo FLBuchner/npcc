@@ -21,9 +21,9 @@ def noisy_table(n: int, m: int, limit: float, noise: float) -> torch.Tensor:
   return base + noise * torch.randn(n, m, generator=gen, dtype=torch.float64)
 
 
-# 1. ma|current reproduces the library bit for bit.
+# 1. wh|current is the library's read-out, bit for bit, at any bandwidth.
 for tr, width in itertools.product(
-  ("logit", "probit", "identity", "log"), (0.0, 1.0, 2.0)
+  ("logit", "probit", "identity", "log"), (0.0, 0.65, 1.0, 2.0)
 ):
   g = resolve_transform(tr)
   q = noisy_table(500, 21, 3.25, 0.3)
@@ -35,7 +35,7 @@ for tr, width in itertools.product(
     limit=3.25,
     transform=g,
     eps=1e-6,
-    readout=Readout(width=width),
+    readout=Readout("whittaker", width, "current"),
     min_slope=0.2,
   )
   lo, hi = g.support

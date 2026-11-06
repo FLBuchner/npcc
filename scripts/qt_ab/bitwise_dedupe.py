@@ -73,7 +73,7 @@ def table_before_56d9983(
     limit=cfg.normal_limit,
     transform=self._response_transform,
     eps=self.eps,
-    smoothing=self.smoothing,
+    smoothing=cfg.smoothing,
     min_slope=cfg.min_slope,
   )
 

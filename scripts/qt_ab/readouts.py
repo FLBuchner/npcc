@@ -32,11 +32,19 @@ from torch.nn import functional
 from npcc.core._quantile_table import (
   TAIL_CELLS,
   TAIL_MIN_SLOPE,
-  QuantileTable,
   normal_scores,
-  smoothing_window,
 )
 from npcc.core._transform import ResponseTransform, normal_cdf, normal_pdf
+
+
+def smoothing_window(smoothing: float, step: float) -> int:
+  """The odd number of cells closest to ``smoothing`` score units.
+
+  The moving average's window, as the library computed it before it moved to
+  one smoother (2f47c7f and earlier).
+  """
+  return max(1, 2 * round((smoothing / step - 1.0) / 2.0) + 1)
+
 
 #: Knots, the anchor included, a modeled-scale tail is fitted on.
 TAIL_KNOTS: int = 4
@@ -71,10 +79,6 @@ class Readout:
       f"ma{self.width:g}" if self.smoothing == "ma" else f"wh{self.width:g}"
     )
     return f"{smooth}|{self.tails}"
-
-  def is_library(self) -> bool:
-    """Whether this variant is the library's read-out, bit for bit."""
-    return self.smoothing == "ma" and self.tails == "current"
 
 
 @lru_cache(maxsize=32)
@@ -355,8 +359,9 @@ class ReadoutTable:
 def table_factory(readout: Readout, min_slope: float = 0.2):  # noqa: ANN201 - a QuantileTable-shaped callable
   """A callable with :class:`QuantileTable`'s signature, building ``readout``.
 
-  The library's own read-out is returned as the library class itself, so the
-  baseline arm is the code the paper ran, not a copy of it.
+  Every arm is a :class:`ReadoutTable`. Its ``ma|current`` arms are the
+  read-out the paper's E1 ran, bit for bit, and its ``wh|current`` arms the
+  library's current one (``check_readouts.py`` checks both).
   """
 
   def build(
@@ -368,18 +373,9 @@ def table_factory(readout: Readout, min_slope: float = 0.2):  # noqa: ANN201 - a
     smoothing: float,
     min_slope: float = min_slope,
     smoother: str = "moving-average",
-  ) -> QuantileTable | ReadoutTable:
+  ) -> ReadoutTable:
     # The arm fixes the read-out; the margin's own choice is overridden.
     del smoothing, smoother
-    if readout.is_library():
-      return QuantileTable(
-        quantiles,
-        limit=limit,
-        transform=transform,
-        eps=eps,
-        smoothing=readout.width,
-        min_slope=min_slope,
-      )
     return ReadoutTable(
       quantiles,
       limit=limit,
