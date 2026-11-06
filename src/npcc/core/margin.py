@@ -84,13 +84,15 @@ class QuantileTableConfig:
 
     # A bool is an int, and None was once "the backend's default": both are
     # refused by name rather than read as a bandwidth or left to fail on `>=`.
+    # An infinite bandwidth would multiply the penalty's zeros into NaNs.
     if (
       isinstance(self.smoothing, bool)
       or not isinstance(self.smoothing, (int, float))
-      or not self.smoothing >= 0.0
+      or not 0.0 <= self.smoothing < math.inf
     ):
       raise ValueError(
-        f"smoothing must be a nonnegative number; got {self.smoothing!r}. "
+        "smoothing must be a finite nonnegative number; "
+        f"got {self.smoothing!r}. "
         "Every backend reads its table with the same smoother: leave it at "
         "its default or pass a bandwidth in normal-score units."
       )
