@@ -49,10 +49,13 @@ class FakeTabPFNRegressor:
   """Mimics ``TabPFNRegressor``'s quantile output for ``Z ~ Normal(0, 1)``.
 
   Like the real regressor, it returns one array of ``n_samples`` per level.
+  Unlike it, it names no checkpoint unless given one, so the adapter has none
+  to load.
   """
 
-  def __init__(self, **_: object) -> None:
+  def __init__(self, *, model_path: object = None, **_: object) -> None:
     self.fitted_: bool = False
+    self.model_path = model_path
 
   @classmethod
   def create_default_for_version(
