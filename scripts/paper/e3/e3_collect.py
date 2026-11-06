@@ -367,6 +367,11 @@ def vdc_crosscheck(long: pd.DataFrame) -> pd.DataFrame | None:
 
 #: The primary E3c design first, then the stress variant.
 DESIGN_ORDER = {"decay": 0, "strong": 1}
+#: E3c's folder for each design. The folder is what names the design: the
+#: decay design's ``vdc_side.json`` has ``"design": "decay"``, but in the
+#: strong design's the ``design`` key describes the sampling (dims, seeds,
+#: cases), and its rows have no ``design`` column.
+E3C_FOLDERS = {"decay": common.RESULTS / "e3c_decay", "strong": common.RESULTS / "e3c"}
 
 
 FLOOR = float(np.log(common.LOG_FLOOR))
@@ -378,10 +383,11 @@ def common_set(long: pd.DataFrame, experiment: str, folders: dict[str, Path]) ->
   The paper lead's rule for densities an arm cannot evaluate: no floor, and
   one common set of test points per design, d and seed, shared by every arm
   of that cell. Each arm's per-point log-densities are read from its
-  ``.npy``. E3c's npcc-side arrays hold the floor where the density was NaN,
-  so there a point at the floor counts as non-finite, and ``mask_exact``
-  says whether those points are exactly the row's ``n_nonfinite``. E3d's
-  arrays and VDC's own-vine arrays are raw, NaN kept.
+  ``.npy``, stored as float32, so a common-set mean agrees with a row's own
+  float64 mean to about 1e-8. E3c's npcc-side arrays hold the floor where
+  the density was NaN, so there a point at the floor counts as non-finite,
+  and ``mask_exact`` says whether those points are exactly the row's
+  ``n_nonfinite``. E3d's arrays and VDC's own-vine arrays are raw, NaN kept.
 
   Returns
   -------
@@ -391,6 +397,10 @@ def common_set(long: pd.DataFrame, experiment: str, folders: dict[str, Path]) ->
       ``*_row``), and ``n_excluded``, ``n_common``, ``n_bad_arm`` and
       ``mask_exact`` per row.
   """
+  # A row without a design would fall out of every groupby below, silently.
+  if long["design"].isna().any():
+    raise ValueError(f"{experiment} rows must each have a design; got "
+                     f"{int(long['design'].isna().sum())} without")
   out = long.copy()
   for col in ("excess_nll", "test_loglik", "true_loglik"):
     out[f"{col}_row"] = out[col]
@@ -487,12 +497,18 @@ def summarize_e3c(long: pd.DataFrame) -> pd.DataFrame:
 
 
 def e3c_crosscheck(long: pd.DataFrame) -> pd.DataFrame | None:
-  """The shared machinery against pyvinecopulib's compiled vine and npcc's own."""
+  """The shared machinery against pyvinecopulib's compiled vine and npcc's own.
+
+  It compares each row's own log-likelihood, computed in float64 by the
+  process that fitted it, not the common-set one, which is computed from the
+  stored float32 log-densities and would hide a gap below about 1e-8.
+  """
   pairs = [("tll", "tll_cpp"), ("npcc-catboost-logit", "rosenblatt-vinecop-check")]
+  col = "test_loglik_row" if "test_loglik_row" in long else "test_loglik"
   rows = []
   for a_m, b_m in pairs:
-    a = long[long["method"] == a_m].set_index(["design", "d", "seed"])["test_loglik"]
-    b = long[long["method"] == b_m].set_index(["design", "d", "seed"])["test_loglik"]
+    a = long[long["method"] == a_m].set_index(["design", "d", "seed"])[col]
+    b = long[long["method"] == b_m].set_index(["design", "d", "seed"])[col]
     both = pd.concat([a.rename("shared"), b.rename("reference")], axis=1).dropna()
     for (design, d, seed), r in both.iterrows():
       rows.append({"design": design, "shared_arm": a_m, "check_arm": b_m, "d": d, "seed": seed,
@@ -853,11 +869,12 @@ def main() -> None:
       print("E3b pending:", missing(b_long))
 
   c_frames = []
-  for c_dir in (out / "e3c_decay", out / "e3c"):
+  for design, c_dir in E3C_FOLDERS.items():
     if not (c_dir / "vdc_side.csv").exists():
       continue
-    # The strong design's VDC side predates the key, so it reads as "strong".
-    design = json.loads((c_dir / "vdc_side.json").read_text()).get("design", "strong")
+    named = json.loads((c_dir / "vdc_side.json").read_text()).get("design")
+    if isinstance(named, str) and named != design:
+      raise ValueError(f"{c_dir} must hold the {design!r} design; its vdc_side.json names {named!r}")
     frame = read_long(c_dir, "E3c", cells="npcc_cells/*/d*.json")
     if "design" in frame and frame["design"].notna().any() and (frame["design"].dropna() != design).any():
       raise ValueError(f"{c_dir} rows must all be design {design!r}")
@@ -865,7 +882,7 @@ def main() -> None:
     c_frames.append(frame)
   if c_frames:
     c_long = pd.concat(c_frames, ignore_index=True, sort=False)
-    c_long = common_set(c_long, "E3c", {"strong": out / "e3c", "decay": out / "e3c_decay"})
+    c_long = common_set(c_long, "E3c", E3C_FOLDERS)
     frames["E3c"] = c_long
     c_long.to_csv(out / "e3c_long.csv", index=False)
     c_sum = summarize_e3c(c_long)
