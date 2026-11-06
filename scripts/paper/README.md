@@ -61,9 +61,16 @@ contaminated by the concurrency and are not reported (see E6).
 - TabPFN temperature ablation (supplement): `configs/study_tabpfn_temperature.toml`
   (v3 at temperature 1.0 and v3.5 at 0.9, logit; E1's cells for n in
   {500, 2000}, reps 0-4) with the sharded commands above and
-  `OUT=results/study_2026-11-06_tabpfn_temperature`; its fits pair with E1's
-  on identical data, so `analyze.py results/study_2026-11-05 --with
-  results/study_2026-11-06_tabpfn_temperature` puts both in one table.
+  `OUT=results/study_2026-11-06_tabpfn_temperature`, from a clean worktree at
+  7567717. Each checkpoint's own temperature, which E1 used, is 0.9 for v3
+  and 1.0 for v3.5, so the ablation swaps them. Its fits pair with E1's on
+  identical data: `scripts/paper/e1/paired.py results/study_2026-11-05 --with
+  results/study_2026-11-06_tabpfn_temperature --labels
+  tabpfn-quantiles-v3-temp1.0-logit --against tabpfn-quantiles-v3-logit
+  --common-cells --out results/study_2026-11-06_tabpfn_temperature/analysis/v3`,
+  and likewise v3.5 at 0.9 against `tabpfn-quantiles-v3.5-logit` (into
+  `analysis/v3.5`) and against `tabpfn-quantiles-v3-logit` (into
+  `analysis/vs_v3`).
 
 ## E1b — established competitors on E1's cells (§3.2)
 

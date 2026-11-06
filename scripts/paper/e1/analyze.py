@@ -145,8 +145,12 @@ def load(runs: list[Path]) -> dict[str, pd.DataFrame]:
     raise SystemExit(f"{runs} have no finished cells yet")
   tables = {}
   for name in ("metrics", "diagnostics", "quantities", "runtime"):
-    parts = [pd.read_parquet(d / f"{name}.parquet") for d in done]
-    tables[name] = annotate(pd.concat(parts, ignore_index=True))
+    # A run with no surface families writes no quantities table.
+    files = [d / f"{name}.parquet" for d in done]
+    parts = [pd.read_parquet(f) for f in files if f.exists()]
+    tables[name] = (
+      annotate(pd.concat(parts, ignore_index=True)) if parts else pd.DataFrame()
+    )
   tables["cells"] = pd.DataFrame({"cell": sorted({d.name for d in done})})
   return tables
 

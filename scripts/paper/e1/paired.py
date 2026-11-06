@@ -46,17 +46,26 @@ def best_gb(per_cell: pd.DataFrame) -> str:
   return str(gb.groupby("label")["KL"].mean().idxmin())
 
 
-def paired(per_cell: pd.DataFrame, label: str, other: str) -> pd.DataFrame:
-  """``label`` minus ``other``, per breakdown and level, over repetitions."""
+def paired(
+  per_cell: pd.DataFrame, label: str, other: str, *, common: bool = False
+) -> pd.DataFrame:
+  """``label`` minus ``other``, per breakdown and level, over repetitions.
+
+  Both must cover the same cells, unless ``common`` restricts them to the
+  cells they share -- an ablation run on a subset of a study's grid, say.
+  """
   a = per_cell[per_cell["label"] == label].set_index(CELL)[METRICS]
   b = per_cell[per_cell["label"] == other].set_index(CELL)[METRICS]
+  if common:
+    shared = a.index.intersection(b.index)
+    a, b = a.loc[shared], b.loc[shared]
   if a.empty or b.empty:
-    raise SystemExit(f"{label} and {other} must both have cells; one has none")
+    raise SystemExit(f"{label} and {other} must share cells; got none")
   if not a.index.sort_values().equals(b.index.sort_values()):
     missing = a.index.symmetric_difference(b.index)
     raise SystemExit(
-      f"{label} and {other} must cover the same cells; "
-      f"got {len(missing)} in only one"
+      f"{label} and {other} must cover the same cells; got "
+      f"{len(missing)} in only one (pass --common-cells to use the shared)"
     )
   diff = (a - b.loc[a.index]).reset_index()
   rows = []
@@ -82,6 +91,7 @@ def paired(per_cell: pd.DataFrame, label: str, other: str) -> pd.DataFrame:
             "se": float(v.std(ddof=1) / math.sqrt(len(v))),
             "wins": int((v < 0).sum()),
             "n_rep": len(v),
+            "n_cells": len(a),
           }
         )
   return pd.DataFrame(rows)
@@ -101,6 +111,11 @@ def main() -> None:
   p.add_argument("--labels", nargs="+", required=True)
   p.add_argument("--against", nargs="+", required=True)
   p.add_argument(
+    "--common-cells",
+    action="store_true",
+    help="Compare on the cells both estimators share, not all of each.",
+  )
+  p.add_argument(
     "--out", type=Path, default=None, help="Default: <run>/analysis."
   )
   a = p.parse_args()
@@ -112,7 +127,11 @@ def main() -> None:
   )
   labels = [best_gb(per_cell) if lab == "best-gb" else lab for lab in a.labels]
   table = pd.concat(
-    [paired(per_cell, lab, other) for lab in labels for other in a.against],
+    [
+      paired(per_cell, lab, other, common=a.common_cells)
+      for lab in labels
+      for other in a.against
+    ],
     ignore_index=True,
   )
   out = a.out or a.run / "analysis"
