@@ -90,6 +90,11 @@ the sharded commands above with `--device cpu`.
   `*_with_competitors` figures, and `scripts/paper/e1/r_selection.py <run>`
   joins each R fit's family, formula and EDF with its accuracy into
   `<run>/analysis/r_selection.csv`.
+- Paired comparison: `scripts/paper/e1/paired.py <run> --with <R run>
+  --labels tabpfn-quantiles-v3-logit tabicl-logit best-gb --against gamcopula
+  boostcopula-smooth-cv` writes each estimator's pdf KL and IAE minus each
+  competitor's, cell by cell, as mean, SE and wins over repetitions (overall,
+  by family and by n) into `<run>/analysis/paired.csv`.
 
 ## E2 — vine study (§3.4)
 
