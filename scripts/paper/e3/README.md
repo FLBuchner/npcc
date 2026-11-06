@@ -50,6 +50,9 @@ pair copula of E3a's cross-check and of E3c — it gets it from
 | `e3_collect.py` | npcc | Long tables, summaries, cross-checks, the common-set scoring, and the code check |
 | `e3_nan_diagnostics.py` | npcc | Which arms, trees and pair copulas give non-finite vine densities |
 | `e3_run_gpu_arms.py` | npcc | The pending GPU arms, once the GPU is free |
+| `e6_timing.sh` | both | E6's §3.3 part: clean timings of E3a's pairs and E3d's vines, one job at a time |
+| `e6_timing.py` | npcc | Its vine timings (competitors with and without selection, the TabPFN v3 vine) and `e3_timing.csv` |
+| `e6_timing_vdc.py` | VDC | Its VDC vine timings, with and without VDC's order selection |
 
 Each script documents its design, metric and outputs at the top.
 
@@ -304,6 +307,44 @@ It runs E3a, E3b and E3c's GPU arms, each in its own process and each
 resuming from its per-fit files, then the collector. It removes
 `PYTORCH_CUDA_ALLOC_CONF` from the children's environment, since
 `expandable_segments` fails on this machine's vGPU.
+
+### E6's timings (§3.3)
+
+E6's driver, `scripts/paper/e6/run_all.sh`, runs this part last, on an idle
+machine, one job at a time:
+
+```bash
+bash scripts/paper/e3/e6_timing.sh results/e6_timing
+```
+
+Everything goes under `results/e6_timing/e3/`, and the last step writes
+`results/e6_timing/e3_timing.csv`, which E6's `consolidate.py` reads. Its
+columns are section, method, setting, d, n, seed, stage, seconds, device,
+compute, CPU model, threads and npcc commit, plus the case, the load average
+and `loglik_gap_vs_e3`.
+- **E3a**, `n_train` = 2,000: every method on the same nine samples (seed
+  202 of each case), through E3a's own scripts and warm-ups:
+  - VDC, TLL and parametric;
+  - NPCC with TabPFN v3, TabICL, Nori, LightGBM, XGBoost and CatBoost.
+- **E3d's vines**, on E3d's decay-design samples:
+  - TabPFN v3's arm (a), at d = 5 (three seeds) and d = 10 (one seed);
+  - TLL, parametric and VDC, each fit with and without structure selection,
+    at d = 5 and d = 10 (three seeds). Without selection, the structure (or
+    VDC's order) that the selection returned is given back, so the two fits
+    differ by the selection alone.
+- **Protocol:**
+  - CPU methods run on one core, with every BLAS and OpenMP pool and torch
+    at one thread;
+  - GPU methods run with two host cores (`E6_GPU_THREADS`);
+  - every timing follows an untimed warm-up in its process.
+- **Check:** each timed fit records its held-out log-likelihood (KL in
+  E3a), and `loglik_gap_vs_e3` is its distance to the row E3 reported for
+  the same cell and method.
+- **Wall time:** about 55 minutes, of which about 25 are the d = 10 TabPFN
+  vine.
+- **Variables:** `E6_CPU_CORE`, `E6_GPU_THREADS`, `E6_GPU_CORES`,
+  `E6_E3A_SEEDS`, `E6_VINE_SEEDS` and `E6_TABPFN_D10_SEEDS` change the
+  cores and the seeds.
 
 ## Reproducibility
 
