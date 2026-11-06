@@ -29,6 +29,7 @@ import numpy as np
 import torch
 from pyvinecopulib.core.extend import to_numpy
 
+from npcc.core._quantile_table import Smoother
 from npcc.core._transform import Transform
 from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 
@@ -100,9 +101,11 @@ class LightGBMQuantileBackend(ConditionalMargin):
       If ``lgbm_params`` sets a parameter this backend controls.
   """
 
-  #: Every level is a separate model, so the predicted table is noisier
-  #: across levels than a joint model's and is smoothed more.
-  default_smoothing: ClassVar[float] = 2.0
+  #: Every level is a separate model, so the predicted table is noisy across
+  #: levels, most at the outermost ones, which few observations reach: the
+  #: weighted smoother smooths those hard and the middle lightly.
+  default_smoother: ClassVar[Smoother] = "weighted"
+  default_smoothing: ClassVar[float] = 0.65
 
   boosters_: list[lightgbm.Booster] | None
 

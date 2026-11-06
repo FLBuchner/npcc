@@ -21,10 +21,22 @@ exactly.
 
 **The slopes are regularized.** A fitted table is noisy across levels, the
 more so when each level is a separate model, and sorting a row whose quantiles
-crossed leaves cells of near-zero width and near-infinite density. The slopes
-``dQ/dt`` are therefore averaged over a window ``smoothing`` normal-score units
-wide, floored at ``min_slope`` times the row's mean slope, and integrated back
-into a table anchored at its median.
+crossed leaves cells of near-zero width and near-infinite density. The sorted
+row is smoothed by one of two smoothers, each of which leaves a straight line
+in ``t`` -- a normal distribution on the modeled scale -- exactly as it is:
+
+- ``"moving-average"`` averages the slopes ``dQ/dt`` over a window
+  ``smoothing`` normal-score units wide, the same width at every level;
+- ``"weighted"`` fits the knots by penalized least squares, with a penalty on
+  their second differences and weights proportional to the precision of a
+  sample quantile, ``phi(t)^2 / (Phi(t) (1 - Phi(t)))``. Its bandwidth is
+  ``smoothing`` at the median and about three times that at the outermost
+  levels, whose quantiles a per-level model estimates from a handful of
+  observations; a uniform window wide enough for those flattens the middle,
+  where the density peaks.
+
+The smoothed slopes are floored at ``min_slope`` times the row's mean slope
+and integrated back into a table anchored at its median.
 
 **The tails carry exactly the mass the table leaves out.** The table spans the
 levels ``[Phi(-L), Phi(L)]``, so ``Phi(-L)`` of mass lies beyond it on each
@@ -46,13 +58,28 @@ whole support and no log-likelihood is ``-inf``.
 from __future__ import annotations
 
 import math
+from functools import lru_cache
+from typing import Literal, cast
 
 import torch
 from torch.nn import functional
 
 from npcc.core._transform import ResponseTransform, normal_cdf, normal_pdf
 
-__all__ = ["QuantileTable", "normal_scores", "smoothing_window"]
+__all__ = [
+  "SMOOTHERS",
+  "QuantileTable",
+  "Smoother",
+  "normal_scores",
+  "smoothing_window",
+  "weighted_smoother",
+]
+
+Smoother = Literal["moving-average", "weighted"]
+"""Name of a slope smoother, as the configuration spells it."""
+
+SMOOTHERS: tuple[Smoother, ...] = ("moving-average", "weighted")
+"""Every smoother, in the order :data:`Smoother` lists them."""
 
 #: How many outer cells an exponential tail reads its rate from.
 TAIL_CELLS: int = 3
@@ -106,6 +133,42 @@ def smoothing_window(smoothing: float, step: float) -> int:
   return max(1, 2 * round((smoothing / step - 1.0) / 2.0) + 1)
 
 
+@lru_cache(maxsize=64)
+def weighted_smoother(m: int, limit: float, bandwidth: float) -> torch.Tensor:
+  """Return the matrix ``S`` of the weighted smoother; ``q @ S.T`` smooths.
+
+  ``S = (W + lam D'D)^-1 W``, where ``D`` takes second differences along the
+  levels, ``W`` holds the weights ``phi(t)^2 / (Phi(t) (1 - Phi(t)))`` scaled
+  to 1 at the median, and ``lam = (bandwidth / step)^4``, the penalty whose
+  equivalent kernel is about ``bandwidth`` normal-score units wide where the
+  weight is 1. ``D`` annihilates a straight line, so ``S`` reproduces one.
+
+  Parameters
+  ----------
+  m : int
+      Number of levels.
+  limit : float
+      The outermost normal score of the levels.
+  bandwidth : float
+      The smoother's bandwidth at the median, in normal-score units.
+
+  Returns
+  -------
+  torch.Tensor
+      ``S``, shape ``(m, m)``, ``float64`` on the CPU; cached, so callers
+      copy it to their device rather than modify it.
+  """
+  t = normal_scores(m, limit)
+  alpha = normal_cdf(t)
+  weight = normal_pdf(t).square() / (alpha * (1.0 - alpha))
+  w = torch.diag(weight / weight.max())
+  step = 2.0 * limit / (m - 1)
+  second = torch.diff(torch.eye(m, dtype=torch.float64), n=2, dim=0)
+  penalty = (bandwidth / step) ** 4 * second.T @ second
+  # torch's stubs leave linalg.solve's return untyped.
+  return cast("torch.Tensor", torch.linalg.solve(w + penalty, w))
+
+
 class QuantileTable:
   """A distribution per row, from a table of quantiles at normal-grid levels.
 
@@ -121,9 +184,12 @@ class QuantileTable:
   eps : float
       Distance the transform keeps from a finite end of the support.
   smoothing : float
-      Width of the slope-averaging window, in normal-score units.
+      The smoother's width in normal-score units: the moving-average window,
+      or the weighted smoother's bandwidth at the median. ``0`` is none.
   min_slope : float
       Floor on every slope, as a fraction of the row's mean slope.
+  smoother : {"moving-average", "weighted"}, default="moving-average"
+      Which smoother regularizes the slopes.
   """
 
   def __init__(
@@ -135,20 +201,29 @@ class QuantileTable:
     eps: float,
     smoothing: float,
     min_slope: float,
+    smoother: Smoother = "moving-average",
   ) -> None:
+    if smoother not in SMOOTHERS:
+      raise ValueError(
+        f"smoother must be one of {list(SMOOTHERS)}; got {smoother!r}"
+      )
     q = torch.sort(quantiles, dim=1).values
     n_rows, m = q.shape
     step = 2.0 * limit / (m - 1)
     mid = m // 2
 
-    slope = (q[:, 1:] - q[:, :-1]) / step
+    fitted = q
+    if smoother == "weighted" and smoothing > 0.0:
+      fitted = q @ weighted_smoother(m, limit, smoothing).to(q).T
+
+    slope = (fitted[:, 1:] - fitted[:, :-1]) / step
     mean_slope = (q[:, -1:] - q[:, :1]) / (2.0 * limit)
     # The last line of defense against a row with no spread at all, which a
     # relative floor cannot lift: below this a slope is rounding noise.
     resolution = torch.finfo(q.dtype).eps * (1.0 + q[:, mid : mid + 1].abs())
 
     window = smoothing_window(smoothing, step)
-    if window > 1:
+    if smoother == "moving-average" and window > 1:
       pad = window // 2
       padded = torch.cat(
         [slope[:, :1].expand(-1, pad), slope, slope[:, -1:].expand(-1, pad)],
@@ -164,7 +239,7 @@ class QuantileTable:
     knots = torch.cat(
       [torch.zeros_like(q[:, :1]), (slope * step).cumsum(dim=1)], dim=1
     )
-    knots = knots - knots[:, mid : mid + 1] + q[:, mid : mid + 1]
+    knots = knots - knots[:, mid : mid + 1] + fitted[:, mid : mid + 1]
 
     self._transform = transform
     self._eps = eps
