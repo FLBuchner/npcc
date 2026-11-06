@@ -535,21 +535,28 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
     *,
     batch_size: int | None = None,
   ) -> QuantileTable:
-    """Predict the quantile table of every conditioning row."""
+    """Predict the quantile table of every conditioning row.
+
+    Each distinct row reaches the backend once. A pair copula's grid repeats
+    its conditioning rows -- one per point of the other axis -- and a backend
+    predicts every row independently of the others in its chunk, so a repeat
+    would only recompute the same quantiles.
+    """
     self._check_fitted()
     effective_batch_size = self._resolve_batch_size(batch_size)
 
     cfg = self.quantile_table_config
     alphas = cfg.alphas(device=x.device, dtype=x.dtype)
     n_alphas = alphas.shape[0]
-    n_obs = x.shape[0]
+    distinct, inverse = torch.unique(x, dim=0, return_inverse=True)
+    n_obs = distinct.shape[0]
 
     parts: list[torch.Tensor] = []
 
     for start in range(0, n_obs, effective_batch_size):
       end = min(start + effective_batch_size, n_obs)
 
-      quantiles = self._predict_quantiles(x[start:end], alphas)
+      quantiles = self._predict_quantiles(distinct[start:end], alphas)
 
       expected_shape = (end - start, n_alphas)
 
@@ -562,7 +569,7 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
       parts.append(quantiles)
 
     table = (
-      torch.cat(parts, dim=0)
+      torch.cat(parts, dim=0)[inverse]
       if parts
       else torch.empty((0, n_alphas), dtype=torch.float64, device=self._device)
     )
