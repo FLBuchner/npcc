@@ -247,8 +247,8 @@ The truths are random R-vines drawn uniformly with pyvinecopulib 1.0's
 in both designs (paired: same structure and edge cases). The samples are
 drawn with pyvinecopulib 1.0. `results/e3d_unknown_structure/` then holds
 `samples.npz`, `truths.json`, `vdc_side.csv` and `vdc_side.json`,
-`cells/<arm>/` and `npcc_<arm>.csv`. The collector adds `e3d_long.csv` and
-`e3d_summary.csv` there.
+`cells/<arm>/` and `npcc_<arm>.csv`. The collector adds `e3d_long.csv`,
+`e3d_summary.csv` and `e3d_paired.csv` there.
 
 The competitors' `fit_s` includes their structure selection; arm (b)'s
 includes TLL's Dissmann selection, which it reuses. Every row records the
@@ -270,6 +270,21 @@ This writes, in `results/e3_vdc/`:
 - `e3c_long.csv`, `e3c_summary.csv` and `e3c_crosscheck.csv`, with a
   `design` column (`decay` rows first);
 - `e3_code_check.csv` and `e3_summary.json`.
+
+In `results/e3d_unknown_structure/` it writes `e3d_long.csv`,
+`e3d_summary.csv`, and `e3d_paired.csv`, which holds the numbers to cite. Per
+design and d, `e3d_paired.csv` gives:
+- each NPCC arm's paired difference to VDC, parametric and TLL, with its
+  standard error and the seeds it wins;
+- (a) minus (b), and (c) minus (a), per backend;
+- (b) minus VDC on the true structure;
+- every arm's and competitor's structure recovery;
+- the excluded test points, in total and per seed.
+
+E3c and E3d are read from the per-cell JSON files rather than the per-arm
+CSVs. A fit script writes its CSV only when its run ends, so a stage that is
+running, or was stopped, appears up to its last finished cell, with
+`n_seeds` stated.
 
 ### The GPU arms
 

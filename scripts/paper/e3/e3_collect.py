@@ -7,7 +7,8 @@ Run in the NPCC environment (it needs pandas), from the repository root:
     uv run --no-sync python scripts/paper/e3/e3_collect.py
 
 Rerun it whenever an arm finishes (the GPU arms arrive later); it reads
-whatever per-method CSVs exist and lists the E1 estimators still missing.
+whatever has been written, E3c's and E3d's cells as they land, and lists the
+E1 estimators still missing.
 
 **Roles.** Every summary row carries a ``role`` and a readable
 ``method_label``, assigned here from the method name (one place):
@@ -25,8 +26,11 @@ whatever per-method CSVs exist and lists the E1 estimators still missing.
 - ``excluded``: the same BIC-selected TLL in E3b, kept in ``e3b_long.csv``
   for the record and in no summary.
 
-**Inputs.** ``results/e3_vdc/e3a/{vdc_side,npcc_*}.csv`` and
-``results/e3_vdc/e3b/{vdc_side,npcc_*}.csv``.
+**Inputs.** Each sub-experiment's ``vdc_side.csv`` and its npcc side: the
+per-method CSVs ``npcc_*.csv`` in ``results/e3_vdc/e3a/`` and ``e3b/``, and
+the per-cell JSON files of E3c (``npcc_cells/<arm>/d*.json``) and E3d
+(``cells/<arm>/*.json``), since a fit script writes its CSV only when its run
+ends (``read_long``).
 
 **Outputs** (in ``results/e3_vdc/``):
 
@@ -64,8 +68,13 @@ whatever per-method CSVs exist and lists the E1 estimators still missing.
   ``npcc.RosenblattVinecop``;
 - in ``results/e3d_unknown_structure/``: ``e3d_long.csv`` and
   ``e3d_summary.csv`` (per design, d and arm: excess NLL with its standard
-  error over the ten seeds, the paired gap to each competitor that selects a
+  error over the seeds, the paired gap to each competitor that selects a
   structure -- VDC, TLL, parametric -- the structure recovery and timings);
+- ``e3d_paired.csv``, beside them, the numbers to cite: per design and d,
+  each NPCC arm's paired difference to VDC, parametric and TLL with its
+  standard error and wins, (a) minus (b) and (c) minus (a) per backend, (b)
+  minus VDC on the true structure, the structure recovery of every arm and
+  competitor, and the excluded test points (``paired_e3d``);
 - ``e3_code_check.csv``: every code hash the rows recorded (``code_sha256``,
   and ``vdc_server_code_sha256`` where VDC's server ran) against committed
   code and the file on disk, with the commit holding each version, plus the
@@ -149,7 +158,20 @@ E3D_VARIANTS = {
   "random-s": ("ablation", "random structure, simplified (ablation)"),
   "true-s": ("reference", "true structure, simplified (reference)"),
 }
+#: The experiment plan's letters for E3d's NPCC arms; ``true-s`` is a reference.
+E3D_LETTERS = {"random-ns": "a", "tll-ns": "b", "random-s": "c"}
+#: The competitors, each with its own structure selection.
+E3D_COMPETITORS = ("vdc", "parametric", "tll")
 E3D_RESULTS = common.NPCC_REPO / "results" / "e3d_unknown_structure"
+
+
+def e3d_npcc(method: str) -> tuple[str, str] | None:
+  """``(backend, variant)`` of an E3d NPCC method, or None for any other."""
+  if method.startswith("npcc-"):
+    for variant in E3D_VARIANTS:
+      if method.endswith(f"-{variant}"):
+        return method[len("npcc-"):-len(variant) - 1], variant
+  return None
 
 
 def role_of(experiment: str, method: str) -> tuple[str, str]:
@@ -162,10 +184,10 @@ def role_of(experiment: str, method: str) -> tuple[str, str]:
       return "arm", f"NPCC ({rest}), conditional on U1"
     if experiment == "E3c":
       return "arm", f"NPCC ({rest}) in the shared pyvinecopulib 1.0 vine"
-    if experiment == "E3d":
-      for variant, (role, text) in E3D_VARIANTS.items():
-        if rest.endswith(f"-{variant}"):
-          return role, f"NPCC ({rest[:-len(variant) - 1]}), {text}"
+    if experiment == "E3d" and (parsed := e3d_npcc(method)):
+      backend, variant = parsed
+      role, text = E3D_VARIANTS[variant]
+      return role, f"NPCC ({backend}), {text}"
     return "arm", f"NPCC ({rest})"
   try:
     return ROLES[experiment][method]
@@ -173,10 +195,26 @@ def role_of(experiment: str, method: str) -> tuple[str, str]:
     raise KeyError(f"{experiment} method {method!r} must have a role; add it to ROLES") from None
 
 
-def read_long(folder: Path, experiment: str) -> pd.DataFrame:
-  """Every per-method CSV under ``folder``, stacked, with roles assigned."""
+def read_long(folder: Path, experiment: str, cells: str | None = None) -> pd.DataFrame:
+  """Every row under ``folder``, stacked, with roles assigned.
+
+  The VDC side's rows come from ``vdc_side.csv``. The npcc side's come from
+  the per-method CSVs, or, given ``cells`` (a glob under ``folder``), from
+  the per-cell JSON files those CSVs are made of. A fit script writes its
+  CSV only when its run ends, but each cell as soon as it is scored, so
+  reading the cells sees a stopped or still-running stage up to its last
+  finished cell. E3c and E3d read the cells: they pair by seed and state
+  ``n_seeds``. E3a and E3b read the CSVs, which hold every case of a
+  finished run; E3a's summary averages over cases, and a partial run would
+  leave some of them out.
+  """
   frames = [pd.read_csv(folder / "vdc_side.csv")]
-  frames += [pd.read_csv(path) for path in sorted(folder.glob("npcc_*.csv"))]
+  if cells is None:
+    frames += [pd.read_csv(path) for path in sorted(folder.glob("npcc_*.csv"))]
+  else:
+    rows = [json.loads(path.read_text()) for path in sorted(folder.glob(cells))]
+    if rows:
+      frames.append(pd.DataFrame(rows))
   long = pd.concat(frames, ignore_index=True, sort=False)
   if "n_train" in long:
     long["n_train"] = long["n_train"].astype(int)
@@ -504,6 +542,147 @@ def summarize_e3d(long: pd.DataFrame) -> pd.DataFrame:
   return out.sort_values(["_d", "d", "_o", "mean_excess_nll"], kind="stable").drop(columns=["_o", "_d"])
 
 
+#: ``block``, ``method`` variant, ``versus`` variant: E3d's within-backend contrasts.
+E3D_CONTRASTS = (
+  ("random_minus_selected", "random-ns", "tll-ns"),
+  ("simplified_minus_nonsimplified", "random-s", "random-ns"),
+)
+E3D_PAIRED_COLUMNS = [
+  "design", "d", "block", "method", "versus", "backend", "variant", "n_seeds", "seeds",
+  "mean_method", "mean_versus", "mean_diff", "se_diff", "wins",
+  "recovery_tree1", "se_recovery_tree1", "recovery_overall", "se_recovery_overall",
+  "share_structure_equals_truth", "structure",
+  "n_excluded", "n_test_points", "share_excluded", "n_excluded_by_seed", "nonfinite_by_method",
+  "method_label", "versus_label",
+]
+
+
+def paired_e3d(long: pd.DataFrame) -> pd.DataFrame:
+  """E3d's paired differences, structure recovery and excluded points.
+
+  One row per design, d and quantity, in blocks named by ``block``:
+
+  - ``arm_minus_competitor``: each NPCC arm minus VDC, parametric and TLL,
+    each competitor selecting its own structure. The arms are (a) a random
+    structure and (b) TLL's selected one, both non-simplified, and (c) the
+    random structure simplified, an ablation;
+  - ``random_minus_selected``: (a) minus (b), per backend;
+  - ``simplified_minus_nonsimplified``: (c) minus (a), per backend, on the
+    same random structure;
+  - ``selected_minus_vdc_true``: (b) minus VDC's pair copulas on the true
+    structure;
+  - ``recovery``: the tree-1 and overall edge recovery of every arm and
+    competitor;
+  - ``excluded``: the test points outside the common set, in total and per
+    seed (``n_excluded_by_seed``), and the arms whose densities were not
+    finite there.
+
+  A difference pairs the seeds both methods have, each scored on its cell's
+  common set. ``n_seeds`` counts them, ``se_diff`` is ``sd / sqrt(n_seeds)``,
+  and ``wins`` counts the seeds where ``method`` has the lower excess NLL.
+  A stage that is still running contributes the seeds it has finished.
+
+  Returns
+  -------
+  DataFrame
+      The rows, in ``E3D_PAIRED_COLUMNS`` order; a column a block does not
+      use is empty.
+  """
+  excess = {key: group.set_index("seed")["excess_nll"]
+            for key, group in long.groupby(["design", "d", "method"])}
+  label = dict(zip(long["method"], long["method_label"], strict=True))
+  rows: list[dict] = []
+
+  def described(method: str) -> dict:
+    backend, variant = e3d_npcc(method) or ("", "")
+    return {"method": method, "backend": backend, "variant": E3D_LETTERS.get(variant, ""),
+            "method_label": label[method]}
+
+  def difference(design: str, d: int, block: str, method: str, versus: str) -> None:
+    if (design, d, method) not in excess or (design, d, versus) not in excess:
+      return
+    both = pd.concat([excess[design, d, method].rename("m"), excess[design, d, versus].rename("v")],
+                     axis=1, join="inner").dropna()
+    n = len(both)
+    if n == 0:
+      return
+    delta = both["m"] - both["v"]
+    rows.append({
+      "design": design, "d": d, "block": block, **described(method), "versus": versus,
+      "versus_label": label[versus], "n_seeds": n,
+      "seeds": ";".join(str(s) for s in sorted(both.index)),
+      "mean_method": float(both["m"].mean()), "mean_versus": float(both["v"].mean()),
+      "mean_diff": float(delta.mean()),
+      "se_diff": float(delta.std(ddof=1) / np.sqrt(n)) if n > 1 else None,
+      "wins": int((delta < 0).sum()),
+    })
+
+  def rank(method: str) -> tuple:
+    if method in E3D_COMPETITORS:
+      return (0, E3D_COMPETITORS.index(method))
+    backend, variant = e3d_npcc(method)
+    return (1, backend, E3D_LETTERS[variant])
+
+  for (design, d), cell in long.groupby(["design", "d"]):
+    arms = {e3d_npcc(m): m for m in cell["method"].unique() if e3d_npcc(m)}
+    backends = sorted({backend for backend, _ in arms})
+    for backend in backends:
+      for variant in E3D_LETTERS:
+        if (backend, variant) in arms:
+          for competitor in E3D_COMPETITORS:
+            difference(design, d, "arm_minus_competitor", arms[backend, variant], competitor)
+    for block, x, y in E3D_CONTRASTS:
+      for backend in backends:
+        if (backend, x) in arms and (backend, y) in arms:
+          difference(design, d, block, arms[backend, x], arms[backend, y])
+    for backend in backends:
+      if (backend, "tll-ns") in arms:
+        difference(design, d, "selected_minus_vdc_true", arms[backend, "tll-ns"], "vdc_true")
+
+    shown = cell[cell["role"].isin(["arm", "ablation"])]
+    for method in sorted(shown["method"].unique(), key=rank):
+      group = shown[shown["method"] == method]
+      n = len(group)
+      tree1 = pd.to_numeric(group["recovery_tree1"])
+      overall = pd.to_numeric(group["recovery_overall"])
+      rows.append({
+        "design": design, "d": d, "block": "recovery", **described(method), "n_seeds": n,
+        "seeds": ";".join(str(s) for s in sorted(group["seed"].unique())),
+        "recovery_tree1": float(tree1.mean()),
+        "se_recovery_tree1": float(tree1.std(ddof=1) / np.sqrt(n)) if n > 1 else None,
+        "recovery_overall": float(overall.mean()),
+        "se_recovery_overall": float(overall.std(ddof=1) / np.sqrt(n)) if n > 1 else None,
+        "share_structure_equals_truth": float(group["structure_equals_truth"].astype(str).eq("True").mean()),
+        "structure": group["structure"].iloc[0],
+      })
+
+    by_seed, n_test, nonfinite = {}, 0, {}
+    for seed, group in cell.groupby("seed"):
+      counts = set(pd.to_numeric(group["n_excluded"]).astype(int))
+      if len(counts) != 1:
+        raise ValueError(f"{design} d={d} seed {seed}: every arm must share one common set; "
+                         f"got n_excluded {sorted(counts)}")
+      by_seed[seed] = counts.pop()
+      n_test += int(group["n_test"].iloc[0])
+      for method, bad in zip(group["method"], pd.to_numeric(group["n_bad_arm"]), strict=True):
+        if bad > 0:
+          nonfinite[method] = nonfinite.get(method, 0) + int(bad)
+    rows.append({
+      "design": design, "d": d, "block": "excluded", "n_seeds": len(by_seed),
+      "seeds": ";".join(str(s) for s in by_seed),
+      "n_excluded": sum(by_seed.values()), "n_test_points": n_test,
+      "share_excluded": sum(by_seed.values()) / n_test,
+      "n_excluded_by_seed": ";".join(f"{s}:{k}" for s, k in by_seed.items()),
+      "nonfinite_by_method": ";".join(f"{m}:{k}" for m, k in sorted(nonfinite.items())),
+    })
+
+  out = pd.DataFrame(rows, columns=E3D_PAIRED_COLUMNS)
+  for col in ("n_seeds", "wins", "n_excluded", "n_test_points"):
+    out[col] = out[col].astype("Int64")
+  out["_d"] = out["design"].map(DESIGN_ORDER)
+  return out.sort_values(["_d", "d"], kind="stable").drop(columns="_d")
+
+
 def summarize_e3b(long: pd.DataFrame) -> pd.DataFrame:
   shown = long[long["role"] != "excluded"]
   vdc = shown[shown["method"] == "vdc"].set_index(["case", "seed"])["excess_nll"]
@@ -679,7 +858,7 @@ def main() -> None:
       continue
     # The strong design's VDC side predates the key, so it reads as "strong".
     design = json.loads((c_dir / "vdc_side.json").read_text()).get("design", "strong")
-    frame = read_long(c_dir, "E3c")
+    frame = read_long(c_dir, "E3c", cells="npcc_cells/*/d*.json")
     if "design" in frame and frame["design"].notna().any() and (frame["design"].dropna() != design).any():
       raise ValueError(f"{c_dir} rows must all be design {design!r}")
     frame["design"] = design
@@ -706,17 +885,23 @@ def main() -> None:
         print(c_check.groupby(["design", "check_arm"])["abs_gap"].max())
 
   if (E3D_RESULTS / "vdc_side.csv").exists():
-    d_long = common_set(read_long(E3D_RESULTS, "E3d"), "E3d",
+    # VDC's own rows are in vdc_side.csv; cells/vdc/ holds only its densities.
+    d_long = common_set(read_long(E3D_RESULTS, "E3d", cells="cells/*/*.json"), "E3d",
                         {"decay": E3D_RESULTS, "strong": E3D_RESULTS})
     frames["E3d"] = d_long
     d_long.to_csv(E3D_RESULTS / "e3d_long.csv", index=False)
     d_sum = summarize_e3d(d_long)
     d_sum.to_csv(E3D_RESULTS / "e3d_summary.csv", index=False)
-    report["e3d"] = {"summary": d_sum.to_dict("records")}
+    d_paired = paired_e3d(d_long)
+    d_paired.to_csv(E3D_RESULTS / "e3d_paired.csv", index=False)
+    report["e3d"] = {"summary": d_sum.to_dict("records"), "paired": d_paired.to_dict("records")}
     with show():
       print(d_sum[["design", "d", "method", "role", "n_seeds", "mean_excess_nll", "se_excess_nll",
                    "mean_recovery_tree1", "mean_recovery_overall", "fit_s_median",
                    "inference_s_median"]].to_string(index=False))
+      diffs = d_paired[d_paired["mean_diff"].notna()]
+      print(diffs[["design", "d", "block", "method", "versus", "n_seeds", "mean_diff", "se_diff",
+                   "wins"]].to_string(index=False))
 
   check = code_check(frames)
   check.to_csv(out / "e3_code_check.csv", index=False)
