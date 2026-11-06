@@ -367,8 +367,10 @@ def table_factory(readout: Readout, min_slope: float = 0.2):  # noqa: ANN201 - a
     eps: float,
     smoothing: float,
     min_slope: float = min_slope,
+    smoother: str = "moving-average",
   ) -> QuantileTable | ReadoutTable:
-    del smoothing
+    # The arm fixes the read-out; the margin's own choice is overridden.
+    del smoothing, smoother
     if readout.is_library():
       return QuantileTable(
         quantiles,

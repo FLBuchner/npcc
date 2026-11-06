@@ -41,6 +41,8 @@ ESTIMATORS = {
     "logit",
     {"model_version": "v3"},
   ),
+  "tabicl-logit": ("tabicl", "logit", {}),
+  "nori-logit": ("nori", "logit", {}),
 }
 
 
@@ -55,7 +57,14 @@ def cap_gpu_memory(gb: float) -> None:
     torch.cuda.set_per_process_memory_fraction(min(1.0, gb / total))
 
 
-def run_cell(cell: Cell, out: Path, device: str) -> None:
+def run_cell(
+  cell: Cell,
+  out: Path,
+  device: str,
+  labels: list[str],
+  grids: list[str],
+  arms: list[str] | None,
+) -> None:
   path = (
     out
     / f"{cell.family}__{cell.tau_scenario}__n{cell.n}__rep{cell.rep}.parquet"
@@ -74,7 +83,9 @@ def run_cell(cell: Cell, out: Path, device: str) -> None:
   rows: list[dict[str, object]] = []
   library_table = margin_module.QuantileTable
 
-  for label, (backend, transform, kwargs) in ESTIMATORS.items():
+  readouts = [rd for rd in READOUTS if arms is None or rd.label in arms]
+  for label in labels:
+    backend, transform, kwargs = ESTIMATORS[label]
     est = EstimatorSpec(
       label=label, backend=backend, transform=transform, backend_kwargs=kwargs
     )
@@ -135,11 +146,12 @@ def run_cell(cell: Cell, out: Path, device: str) -> None:
       }
     )
     try:
-      for grid_name, (m, lim) in GRIDS.items():
+      for grid_name in grids:
+        m, lim = GRIDS[grid_name]
         cfg = QuantileTableConfig(n_quantiles=m, normal_limit=lim)
         for mg in margins:
           mg.quantile_table_config = cfg
-        for rd in READOUTS:
+        for rd in readouts:
           margin_module.QuantileTable = table_factory(rd)
           rows += evaluate(
             model,
@@ -177,6 +189,21 @@ def main() -> None:
   parser.add_argument("--reps", type=int, nargs="+", default=list(range(10)))
   parser.add_argument("--device", default="cuda")
   parser.add_argument(
+    "--labels",
+    nargs="+",
+    default=["tabpfn-quantiles-v3-logit"],
+    choices=list(ESTIMATORS),
+  )
+  parser.add_argument(
+    "--grids", nargs="+", default=list(GRIDS), choices=list(GRIDS)
+  )
+  parser.add_argument(
+    "--arms",
+    nargs="+",
+    default=None,
+    help="read-out labels to replay, e.g. 'ma1|current'; default all",
+  )
+  parser.add_argument(
     "--gpu-mem-gb",
     type=float,
     default=3.0,
@@ -189,7 +216,7 @@ def main() -> None:
   todo = ab_gb.cells(args.n, args.reps)
   t0 = perf_counter()
   for i, c in enumerate(todo):
-    run_cell(c, args.out, args.device)
+    run_cell(c, args.out, args.device, args.labels, args.grids, args.arms)
     peak = (
       torch.cuda.max_memory_reserved() / 2**30
       if torch.cuda.is_available()
