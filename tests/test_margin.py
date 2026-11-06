@@ -546,10 +546,48 @@ def test_one_prediction_per_chunk_of_rows(
 
   monkeypatch.setattr(margin, "_predict_quantiles", spy)
   values = torch.linspace(0.15, 0.85, n_values, dtype=torch.float64)
+  # Distinct rows, so the count is not shortened by deduplication.
+  x = torch.arange(n_rows, dtype=torch.float64).reshape(-1, 1)
 
-  getattr(margin, method)(values, x=rows(n_rows))
+  getattr(margin, method)(values, x=x)
 
   assert calls == math.ceil(n_rows / batch_size)
+
+
+@pytest.mark.parametrize("method", ["pdf", "cdf", "icdf"])
+def test_a_repeated_row_reaches_the_backend_once(
+  monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+  """A conditioning row repeated across a query is predicted once.
+
+  A pair copula's grid repeats each conditioning row once per point of the
+  other axis; predicting every repeat multiplied the backend's work by the
+  grid size. The answer must be the one the repeats would have given.
+  """
+  margin = fitted_margin("logit")
+  seen: list[int] = []
+  original = margin._predict_quantiles
+
+  def shifted(x: torch.Tensor, alphas: torch.Tensor) -> torch.Tensor:
+    # Quantiles that depend on the row, so a row handed back to the wrong
+    # observation changes the answer.
+    seen.append(x.shape[0])
+    return original(x, alphas) + 3.0 * x[:, :1]
+
+  monkeypatch.setattr(margin, "_predict_quantiles", shifted)
+  distinct = torch.tensor([[0.9], [0.1], [0.5]], dtype=torch.float64)
+  x = distinct.repeat(4, 1)
+  values = torch.linspace(0.15, 0.85, 12, dtype=torch.float64)
+  one_at_a_time = getattr(margin, method)
+  expected = torch.cat(
+    [one_at_a_time(values[i : i + 1], x=x[i : i + 1]) for i in range(12)]
+  )
+
+  seen.clear()
+  got = getattr(margin, method)(values, x=x)
+
+  assert sum(seen) == distinct.shape[0]
+  torch.testing.assert_close(got, expected, rtol=0.0, atol=0.0)
 
 
 # ---------------------------------------------------------------------------
