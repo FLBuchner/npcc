@@ -27,7 +27,7 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar, NoReturn, Self, TypedDict
+from typing import NoReturn, Self, TypedDict
 
 import numpy as np
 import torch
@@ -53,10 +53,11 @@ class QuantileTableConfig:
     beyond the table on each side. The default is pyvinecopulib's normal-grid
     limit.
   smoothing
-    Width, in normal-score units, of the window the quantile slopes are
-    averaged over. ``None`` is the backend's own default
-    (:attr:`ConditionalMargin.default_smoothing`), which is wider for
-    backends that fit every level separately; ``0`` turns averaging off.
+    Bandwidth, in normal-score units at the median, of the smoother the
+    predicted table is fitted with (see :mod:`npcc.core._quantile_table`);
+    ``0`` turns smoothing off. The default suits every backend: it removes
+    most of the level-to-level noise of a per-level model and barely changes
+    a joint model's table.
   min_slope
     Floor on every quantile slope, as a fraction of the row's mean slope. It
     bounds the density a crossed or tied pair of quantiles can produce.
@@ -64,7 +65,7 @@ class QuantileTableConfig:
 
   n_quantiles: int = 21
   normal_limit: float = 3.25
-  smoothing: float | None = None
+  smoothing: float = 0.65
   min_slope: float = 0.2
 
   def __post_init__(self) -> None:
@@ -81,9 +82,19 @@ class QuantileTableConfig:
         f"normal_limit must lie in (0, 6]; got {self.normal_limit}"
       )
 
-    if self.smoothing is not None and not self.smoothing >= 0.0:
+    # A bool is an int, and None was once "the backend's default": both are
+    # refused by name rather than read as a bandwidth or left to fail on `>=`.
+    # An infinite bandwidth would multiply the penalty's zeros into NaNs.
+    if (
+      isinstance(self.smoothing, bool)
+      or not isinstance(self.smoothing, (int, float))
+      or not 0.0 <= self.smoothing < math.inf
+    ):
       raise ValueError(
-        f"smoothing must be None or nonnegative; got {self.smoothing}"
+        "smoothing must be a finite nonnegative number; "
+        f"got {self.smoothing!r}. "
+        "Every backend reads its table with the same smoother: leave it at "
+        "its default or pass a bandwidth in normal-score units."
       )
 
     if not 0.0 <= self.min_slope < 1.0:
@@ -180,17 +191,7 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
   batch_size
       Default inference chunk size. If omitted, 400 is used on CPU and 2000 on
       CUDA.
-
-  Attributes
-  ----------
-  default_smoothing : float
-      The slope-averaging width, in normal-score units, used when the
-      configuration leaves :attr:`QuantileTableConfig.smoothing` at ``None``.
-      One unit suits a backend whose levels share one model; a backend that
-      fits every level separately predicts a noisier table and raises it.
   """
-
-  default_smoothing: ClassVar[float] = 1.0
 
   supports_covariates: bool = True
   supports_weights: bool = False
@@ -245,12 +246,6 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
         The bounds, infinite where the support is unbounded.
     """
     return self._response_transform.support
-
-  @property
-  def smoothing(self) -> float:
-    """The slope-averaging width this margin reconstructs with."""
-    configured = self.quantile_table_config.smoothing
-    return self.default_smoothing if configured is None else configured
 
   @property
   def family_name(self) -> str:
@@ -535,21 +530,28 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
     *,
     batch_size: int | None = None,
   ) -> QuantileTable:
-    """Predict the quantile table of every conditioning row."""
+    """Predict the quantile table of every conditioning row.
+
+    Each distinct row reaches the backend once. A pair copula's grid repeats
+    its conditioning rows -- one per point of the other axis -- and a backend
+    predicts every row independently of the others in its chunk, so a repeat
+    would only recompute the same quantiles.
+    """
     self._check_fitted()
     effective_batch_size = self._resolve_batch_size(batch_size)
 
     cfg = self.quantile_table_config
     alphas = cfg.alphas(device=x.device, dtype=x.dtype)
     n_alphas = alphas.shape[0]
-    n_obs = x.shape[0]
+    distinct, inverse = torch.unique(x, dim=0, return_inverse=True)
+    n_obs = distinct.shape[0]
 
     parts: list[torch.Tensor] = []
 
     for start in range(0, n_obs, effective_batch_size):
       end = min(start + effective_batch_size, n_obs)
 
-      quantiles = self._predict_quantiles(x[start:end], alphas)
+      quantiles = self._predict_quantiles(distinct[start:end], alphas)
 
       expected_shape = (end - start, n_alphas)
 
@@ -562,7 +564,7 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
       parts.append(quantiles)
 
     table = (
-      torch.cat(parts, dim=0)
+      torch.cat(parts, dim=0)[inverse]
       if parts
       else torch.empty((0, n_alphas), dtype=torch.float64, device=self._device)
     )
@@ -572,7 +574,7 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
       limit=cfg.normal_limit,
       transform=self._response_transform,
       eps=self.eps,
-      smoothing=self.smoothing,
+      smoothing=cfg.smoothing,
       min_slope=cfg.min_slope,
     )
 

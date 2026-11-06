@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, ClassVar, TypeVar
+from typing import Any, TypeVar
 
 import lightgbm
 import numpy as np
@@ -99,10 +99,6 @@ class LightGBMQuantileBackend(ConditionalMargin):
   ValueError
       If ``lgbm_params`` sets a parameter this backend controls.
   """
-
-  #: Every level is a separate model, so the predicted table is noisier
-  #: across levels than a joint model's and is smoothed more.
-  default_smoothing: ClassVar[float] = 2.0
 
   boosters_: list[lightgbm.Booster] | None
 

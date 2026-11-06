@@ -18,7 +18,7 @@ This backend requires the ``catboost`` optional dependency.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
 import torch
 from catboost import CatBoostRegressor
@@ -85,10 +85,6 @@ class CatBoostQuantileBackend(ConditionalMargin):
   ValueError
       If ``catboost_params`` sets a parameter this backend controls.
   """
-
-  #: A fitted tree table, noisy across levels, is smoothed as much as the other
-  #: tree backends' are.
-  default_smoothing: ClassVar[float] = 2.0
 
   model_: CatBoostRegressor | None
 
