@@ -106,6 +106,13 @@ BACKENDS: dict[str, dict[str, str]] = {
 }
 LINESTYLE = {"ICL": "-", "GB": "--", "R": ":"}
 
+#: Panel titles of the shape families (E1c), whose tau(x) is implied by the
+#: family itself rather than set by a regime.
+FAMILY_NAMES = {
+  "clayton-gumbel-mix": "Clayton-Gumbel mixture",
+  "student-varying-nu": r"Student $t$, varying $\nu$",
+}
+
 _LABEL = re.compile(
   r"^(?:(?P<tabpfn>tabpfn)-quantiles-(?P<version>v[\d.]+)"
   r"(?:-temp(?P<temp>[\d.]+))?|(?P<other>[a-z]+))"
@@ -383,13 +390,24 @@ def fig_conditional_tau(
   part = diagnostics[
     (diagnostics["n"] == n) & diagnostics["label"].isin(labels)
   ]
-  panels = [(f, s) for f in ("clayton", "gaussian") for s in ("linear", "sin")]
+  # One row per family and one column per regime, as the study swept them.
+  families = sorted(diagnostics["family"].unique())
+  scenarios = sorted(diagnostics["tau_scenario"].unique())
   fig, axes = plt.subplots(
-    2, 2, figsize=(7.0, 5.0), sharex=True, sharey=True, constrained_layout=True
+    len(families),
+    len(scenarios),
+    figsize=(3.5 * len(scenarios), 2.5 * len(families)),
+    sharex=True,
+    sharey=True,
+    constrained_layout=True,
+    squeeze=False,
   )
+  panels = [(f, s) for f in families for s in scenarios]
   for ax, (family, scenario) in zip(axes.ravel(), panels, strict=True):
     sub = part[(part["family"] == family) & (part["tau_scenario"] == scenario)]
-    ax.set_title(f"{family.capitalize()}, {scenario}", fontsize=9)
+    name = FAMILY_NAMES.get(family, family.capitalize())
+    title = name if scenario == "implied" else f"{name}, {scenario}"
+    ax.set_title(title, fontsize=9)
     if sub.empty:
       continue
     truth = sub.groupby("x")["tau_true"].first()
