@@ -1,0 +1,51 @@
+# E1b: the R baselines gamCopula and boostCopula, on the exact cells and seeds
+# of the bivariate study in `configs/study.toml` (E1).
+#
+#   npcc-simstudy --config configs/study_r.toml --out results/<run> --resume \
+#     --shard I/K        # once per I in 0..K-1, then once without --shard
+#
+# Run from the repository root: each `script` resolves against the working
+# directory. Each needs R with gamCopula or boostCopula, and VineCopula, on the
+# library path; a cell runs each script once, which fits the method and
+# predicts the metric grid and the surface grid from that one fit.
+#
+# The [grid] table below is E1's, key for key, so every cell samples the data
+# and truth E1 scores; `tests/experiments/test_external.py` checks that the two
+# configs agree on everything but the estimators. `projection_grid_size` and
+# `tau_diagnostic_n` are kept for that agreement and do not reach a script: the
+# grid has no Sinkhorn entry, and a script's tau is its fitted model's, not a
+# sample estimate.
+#
+# Each script runs on one core unless R links a multithreaded BLAS, so K shard
+# processes use about K cores.
+
+[grid]
+families = ["clayton", "gaussian"]
+tau_scenarios = ["linear", "sin"]
+normalize = ["none"]
+n = [200, 500, 1000, 2000]
+n_rep = 10
+projection_grid_size = 30
+conditional_uv_grid_n = 20
+conditional_x_grid_n = 10
+surface_tau_levels = [0.1, 0.4, 0.7]
+surface_families = ["clayton", "gaussian"]
+enable_tau_diagnostics = true
+tau_diagnostic_n = 1000
+
+# `backend` names the R package in the result tables; `transform` is
+# "identity" because each script fits on the copula scale.
+
+[[grid.estimators]]
+label = "gamcopula"
+kind = "external_r"
+backend = "gamCopula"
+transform = "identity"
+script = "r_methods/fit_gamcopula.R"
+
+[[grid.estimators]]
+label = "boostcopula"
+kind = "external_r"
+backend = "boostCopula"
+transform = "identity"
+script = "r_methods/fit_boostcopula.R"

@@ -24,7 +24,7 @@ def _grid(*, arms: list[str] | None = None, eval_m: int = 20) -> VineGridConfig:
     n=[40],
     n_rep=1,
     estimators=[
-      EstimatorSpec(label="uni", backend="uniform-native", transform="logit")
+      EstimatorSpec(label="uni", backend="normal-quantile", transform="logit")
     ],
     arms=["oracle", "random", "tll"] if arms is None else arms,
     eval_x_n=2,
@@ -51,7 +51,7 @@ def test_random_structure_is_independent_of_the_truth() -> None:
   assert matrices == {False}
 
 
-def test_one_cell_runs_every_arm(register_uniform_backends: None) -> None:
+def test_one_cell_runs_every_arm(register_hermetic_backends: None) -> None:
   """Every configured arm must yield finite scores at every evaluation x."""
   grid = _grid()
   metrics, runtime = vine_runner.summarize_one_cell(
@@ -68,7 +68,7 @@ def test_one_cell_runs_every_arm(register_uniform_backends: None) -> None:
 
 
 def test_arms_use_their_contexts(
-  register_uniform_backends: None, monkeypatch: pytest.MonkeyPatch
+  register_hermetic_backends: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   """The oracle is simplified and the random arm conditions on u_D.
 
@@ -95,7 +95,7 @@ def test_arms_use_their_contexts(
 
 
 def test_resume_refuses_a_changed_grid(
-  register_uniform_backends: None, tmp_path: Path
+  register_hermetic_backends: None, tmp_path: Path
 ) -> None:
   """Resuming a different grid would silently mix two studies' cells."""
   run = RunConfig(out=tmp_path, device="cpu", fmt="csv")
@@ -105,7 +105,7 @@ def test_resume_refuses_a_changed_grid(
 
 
 def test_resume_reads_back_done_cells(
-  register_uniform_backends: None, tmp_path: Path
+  register_hermetic_backends: None, tmp_path: Path
 ) -> None:
   """A resumed run must return the checkpointed rows, not an empty table."""
   run = RunConfig(out=tmp_path, device="cpu", fmt="csv")
@@ -118,7 +118,7 @@ def test_resume_reads_back_done_cells(
 
 
 def test_tll_baseline_keeps_the_oracle_structure(
-  register_uniform_backends: None, monkeypatch: pytest.MonkeyPatch
+  register_hermetic_backends: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   """A baseline that re-selects its structure would confound the x effect.
 
@@ -148,7 +148,7 @@ def test_tll_baseline_keeps_the_oracle_structure(
 
 
 def test_the_signature_fingerprints_the_regimes(
-  register_uniform_backends: None, monkeypatch: pytest.MonkeyPatch
+  register_hermetic_backends: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   """Redefining a regime changes every truth, so it must refuse a resume.
 
@@ -169,7 +169,7 @@ def test_the_signature_fingerprints_the_regimes(
 
 
 def test_more_repetitions_resume_on_the_finished_cells(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
   tmp_path: Path,
   monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,9 +1,9 @@
-"""Fine-tuned TabPFN backend, read through its native head.
+"""Fine-tuned TabPFN backend.
 
 Fine-tunes TabPFN (`FinetunedTabPFNRegressor`, which fine-tunes the v2.5
 checkpoint) with a proper-scoring-rule loss, then reads the predictive
-distribution off the same native bar-distribution head as
-:class:`~npcc.core.backends.tabpfn_criterion.TabPFNCriterionBackend` — so it
+distribution off its quantiles exactly as
+:class:`~npcc.core.backends.tabpfn_quantile.TabPFNQuantileBackend` does -- so it
 subclasses that backend and overrides only ``_fit_model``.
 
 **Loss for our problem.** The downstream metric is the copula KL / log
@@ -22,62 +22,57 @@ Models ... Proper Scoring Rules", arXiv:2603.08206.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Unpack
 
 import torch
 from pyvinecopulib.core.extend import to_numpy
 
-from npcc.core.backends.tabpfn_criterion import TabPFNCriterionBackend
+from npcc.core.backends.tabpfn_quantile import TabPFNQuantileBackend
+from npcc.core.margin import MarginOptions
 
 
-class FinetunedTabPFNCriterionBackend(TabPFNCriterionBackend):
-  """TabPFN fine-tuned with a scoring-rule loss; criterion (bar) read-out.
+class FinetunedTabPFNBackend(TabPFNQuantileBackend):
+  """TabPFN fine-tuned with a scoring-rule loss, read through its quantiles.
 
   Parameters
   ----------
-  transform, eps, device, batch_size
-      Forwarded to :class:`TabPFNCriterionBackend`.
-  epochs, learning_rate
+  epochs, learning_rate, early_stopping
       Fine-tuning schedule for ``FinetunedTabPFNRegressor``.
   ce_loss_weight, crps_loss_weight, crls_loss_weight, mse_loss_weight, mae_loss_weight
       Proper-scoring-rule loss weights.  Default = pure bar-distribution NLL
       (`ce_loss_weight=1`, rest 0) — the density-optimal objective for copula
       KL (see module docstring).
-  **finetune_kwargs
+  finetune_kwargs : dict, optional
       Extra keyword arguments for ``FinetunedTabPFNRegressor`` (e.g.
-      ``early_stopping``, ``n_estimators_final_inference``).
+      ``n_estimators_final_inference``).
+  **margin : MarginOptions
+      Forwarded to :class:`~npcc.core.margin.ConditionalMargin`.
   """
 
   def __init__(
     self,
     *,
-    transform: Literal["identity", "logit", "probit"] = "logit",
-    eps: float = 1e-6,
-    device: str | torch.device | None = None,
-    batch_size: int | None = None,
     epochs: int = 30,
     learning_rate: float = 1e-5,
+    early_stopping: bool = True,
     ce_loss_weight: float = 1.0,
     crps_loss_weight: float = 0.0,
     crls_loss_weight: float = 0.0,
     mse_loss_weight: float = 0.0,
     mae_loss_weight: float = 0.0,
-    **finetune_kwargs: Any,  # noqa: ANN401 - passthrough to the finetuner
+    finetune_kwargs: dict[str, Any] | None = None,
+    **margin: Unpack[MarginOptions],
   ) -> None:
-    super().__init__(
-      transform=transform,
-      eps=eps,
-      device=device,
-      batch_size=batch_size,
-    )
+    super().__init__(**margin)
     self.epochs = epochs
     self.learning_rate = learning_rate
+    self.early_stopping = early_stopping
     self.ce_loss_weight = ce_loss_weight
     self.crps_loss_weight = crps_loss_weight
     self.crls_loss_weight = crls_loss_weight
     self.mse_loss_weight = mse_loss_weight
     self.mae_loss_weight = mae_loss_weight
-    self.finetune_kwargs = dict(finetune_kwargs)
+    self.finetune_kwargs = dict(finetune_kwargs or {})
 
   def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
     from tabpfn.finetuning.finetuned_regressor import FinetunedTabPFNRegressor
@@ -86,6 +81,7 @@ class FinetunedTabPFNCriterionBackend(TabPFNCriterionBackend):
       device=str(self._device),
       epochs=self.epochs,
       learning_rate=self.learning_rate,
+      early_stopping=self.early_stopping,
       ce_loss_weight=self.ce_loss_weight,
       crps_loss_weight=self.crps_loss_weight,
       crls_loss_weight=self.crls_loss_weight,

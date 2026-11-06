@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal
 
 import torch
 
-from npcc.core.margin_quantile_table import QuantileTableConfig
+from npcc.core._transform import TRANSFORMS, Transform
+from npcc.core.margin import QuantileTableConfig
 from npcc.core.registry import validate_backend_kwargs
-
-Transform = Literal["identity", "logit", "probit"]
 
 
 @dataclass
@@ -52,7 +50,7 @@ class FitControlsRosenblattBicop:
     grid across the whole product and can afford it.
   """
 
-  backend: str = "tabpfn-criterion"
+  backend: str = "tabpfn-quantiles"
   quantile_table_config: QuantileTableConfig | None = field(
     default_factory=QuantileTableConfig
   )
@@ -89,8 +87,10 @@ class FitControlsRosenblattBicop:
     if self.backend_kwargs is None:
       self.backend_kwargs = {}
 
-    if self.transform not in ("identity", "logit", "probit"):
-      raise ValueError("transform must be 'identity', 'logit', or 'probit'.")
+    if self.transform not in TRANSFORMS:
+      raise ValueError(
+        f"transform must be one of {list(TRANSFORMS)}; got {self.transform!r}"
+      )
 
     if not 0.0 < self.eps < 0.5:
       raise ValueError("eps must lie strictly between 0 and 0.5.")

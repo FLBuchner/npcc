@@ -12,26 +12,25 @@ Built-in backends are registered lazily: the factory imports its backend
 module (and, for the optional-extra backends, its third-party
 dependency) only when the backend is actually requested, so ``import
 npcc`` and :func:`available_backends` never import NGBoost / TabICL /
-scikit-learn.
+LightGBM.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from dataclasses import dataclass
+from importlib import import_module
+from typing import Any, cast
 
 import torch
 
+from npcc.core._transform import Transform
 from npcc.core.errors import (
   InvalidBackendKwargsError,
   MissingBackendDependencyError,
   UnknownBackendError,
 )
-from npcc.core.margin import ConditionalMargin
-from npcc.core.margin_quantile_table import QuantileTableConfig
-
-_Transform = Literal["identity", "logit", "probit"]
+from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 
 BackendFactory = Callable[..., ConditionalMargin]
 
@@ -42,18 +41,16 @@ _JSON_SCALARS = (bool, int, float, str)
 class BackendSpec:
   """A registered backend: its factory plus config-validation metadata.
 
-  ``allowed_kwargs=None`` means the backend accepts arbitrary ``backend_kwargs``
-  (only their JSON shape is checked) — used by hermetic test fakes and any
-  opt-out backend. A concrete set restricts the keys a study config may
-  pass, so typos fail at config-load time instead of hours into a run.
-  ``nested_kwargs`` names keys whose value must itself be a table/dict (e.g.
-  ``model_kwargs``); ``n_range`` is the backend's documented sample-size range.
+  ``kwarg_types=None`` means the backend accepts arbitrary ``backend_kwargs``
+  (only their JSON shape is checked) -- used by hermetic test fakes and any
+  opt-out backend. A mapping restricts the keys a study config may pass to its
+  own, and checks each value against the type it names, so typos fail at
+  config-load time instead of hours into a run. ``n_range`` is the backend's
+  documented sample-size range.
   """
 
   factory: BackendFactory
-  allowed_kwargs: frozenset[str] | None = None
-  nested_kwargs: frozenset[str] = frozenset()
-  kwarg_types: Mapping[str, type] = field(default_factory=dict)
+  kwarg_types: Mapping[str, type] | None = None
   n_range: tuple[int | None, int | None] | None = None
 
 
@@ -64,17 +61,13 @@ def register_backend(
   name: str,
   factory: BackendFactory,
   *,
-  allowed_kwargs: frozenset[str] | None = None,
-  nested_kwargs: frozenset[str] = frozenset(),
   kwarg_types: Mapping[str, type] | None = None,
   n_range: tuple[int | None, int | None] | None = None,
 ) -> None:
   """Register ``factory`` under ``name`` (overwrites any existing entry)."""
   _REGISTRY[name] = BackendSpec(
     factory=factory,
-    allowed_kwargs=allowed_kwargs,
-    nested_kwargs=nested_kwargs,
-    kwarg_types=dict(kwarg_types or {}),
+    kwarg_types=None if kwarg_types is None else dict(kwarg_types),
     n_range=n_range,
   )
 
@@ -115,8 +108,8 @@ def _matches_type(value: object, expected: type) -> bool:
 def validate_backend_kwargs(name: str, kwargs: Mapping[str, object]) -> None:
   """Validate ``backend_kwargs`` for ``name`` against its :class:`BackendSpec`.
 
-  Always checks JSON shape; when the spec declares ``allowed_kwargs`` it also
-  rejects unknown keys and type-checks the ones listed in ``kwarg_types``.
+  Always checks JSON shape; when the spec declares ``kwarg_types`` it also
+  rejects unknown keys and type-checks the rest.
   """
   spec = _spec(name)
   for key, value in kwargs.items():
@@ -125,23 +118,19 @@ def validate_backend_kwargs(name: str, kwargs: Mapping[str, object]) -> None:
         f"{name}.{key} must be JSON-serializable "
         f"(scalars, lists, dicts); got {type(value).__name__}."
       )
-  if spec.allowed_kwargs is None:
+  if spec.kwarg_types is None:
     return
-  unknown = sorted(set(kwargs) - spec.allowed_kwargs)
+  unknown = sorted(set(kwargs) - set(spec.kwarg_types))
   if unknown:
     raise InvalidBackendKwargsError(
       f"{name}: unknown backend_kwargs {unknown}; "
-      f"allowed: {sorted(spec.allowed_kwargs)}."
+      f"allowed: {sorted(spec.kwarg_types)}."
     )
   for key, value in kwargs.items():
-    if key in spec.nested_kwargs:
-      if not isinstance(value, dict):
-        raise InvalidBackendKwargsError(f"{name}.{key} must be a table/dict.")
-      continue
-    expected = spec.kwarg_types.get(key)
-    if expected is not None and not _matches_type(value, expected):
+    expected = spec.kwarg_types[key]
+    if not _matches_type(value, expected):
       raise InvalidBackendKwargsError(
-        f"{name}.{key} must be {expected.__name__}, got {type(value).__name__}."
+        f"{name}.{key} must be {expected.__name__}; got {type(value).__name__}."
       )
 
 
@@ -153,7 +142,7 @@ def documented_n_range(name: str) -> tuple[int | None, int | None] | None:
 def create_backend(
   name: str,
   *,
-  transform: _Transform,
+  transform: Transform,
   quantile_table_config: QuantileTableConfig,
   eps: float,
   device: str | torch.device | None,
@@ -179,481 +168,194 @@ def create_backend(
   )
 
 
-def _missing_extra(name: str, extra: str) -> MissingBackendDependencyError:
-  return MissingBackendDependencyError(
-    f"The {name!r} backend requires an optional dependency. "
-    f"Install it with `pip install npcc[{extra}]` (or `uv sync "
-    f"--extra {extra}`)."
-  )
-
-
-def _coerce_model_version(kw: dict[str, Any]) -> None:
-  """Turn a string ``model_version`` backend kwarg into the TabPFN enum."""
-  if "model_version" in kw:
-    from npcc.core.backends.tabpfn_common import ModelVersion
-
-    version = kw["model_version"]
-    if not isinstance(version, ModelVersion):
-      kw["model_version"] = ModelVersion(version)
-
-
 # ------------------------------------------------------------------
 # Built-in backends (lazy factories).
 # ------------------------------------------------------------------
 
 
-def _tabpfn_criterion_factory(
+def _register_builtin(
+  name: str,
+  target: str,
   *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  from npcc.core.backends.tabpfn_criterion import TabPFNCriterionBackend
+  extra: str | None = None,
+  install_hint: str | None = None,
+  kwarg_types: Mapping[str, type] | None = None,
+  n_range: tuple[int | None, int | None] | None = None,
+) -> None:
+  """Register a factory that imports its adapter when called, not now.
 
-  del quantile_table_config
-  _coerce_model_version(kw)
-  return TabPFNCriterionBackend(
-    transform=transform,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
+  That ``import npcc`` needs no optional extra rests on this deferral alone,
+  so the adapter is named by its import path rather than imported here.
 
+  Parameters
+  ----------
+  name : str
+      The registry name.
+  target : str
+      ``"module:Class"`` of the adapter.
+  extra : str, optional
+      The optional extra the adapter needs; ``None`` for a core one.
+  install_hint : str, optional
+      A message to raise instead of the generic missing-extra one.
+  kwarg_types : mapping of str to type, optional
+      Forwarded to :func:`register_backend`.
+  n_range : tuple, optional
+      Forwarded to :func:`register_backend`.
+  """
+  module_name, class_name = target.split(":")
 
-def _tabpfn_quantiles_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  from npcc.core.backends.tabpfn_quantile import TabPFNQuantileBackend
+  if install_hint is None and extra is not None:
+    install_hint = (
+      f"The {name!r} backend requires an optional dependency. "
+      f"Install it with `pip install npcc[{extra}]` (or `uv sync "
+      f"--extra {extra}`)."
+    )
 
-  _coerce_model_version(kw)
-  return TabPFNQuantileBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
+  def factory(**kwargs: Any) -> ConditionalMargin:  # noqa: ANN401 - heterogeneous backend kwargs
+    try:
+      backend_class = cast(
+        "type[ConditionalMargin]",
+        getattr(import_module(module_name), class_name),
+      )
+    except ImportError as exc:
+      if install_hint is None:
+        raise
+      raise MissingBackendDependencyError(install_hint) from exc
+    return backend_class(**kwargs)
 
-
-def _ngboost_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.ngboost import NGBoostBackend
-  except ImportError as exc:
-    raise _missing_extra("ngboost", "ngboost") from exc
-
-  del quantile_table_config
-  return NGBoostBackend(
-    transform=transform,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
+  register_backend(name, factory, kwarg_types=kwarg_types, n_range=n_range)
 
 
-def _quantile_gbm_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.quantile_gbm import QuantileGBMBackend
-  except ImportError as exc:
-    raise _missing_extra("gbm", "gbm") from exc
-
-  return QuantileGBMBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-def _tabicl_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.tabicl import TabICLBackend
-  except ImportError as exc:
-    raise _missing_extra("tabicl", "tabicl") from exc
-
-  return TabICLBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-def _catboost_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.catboost import CatBoostBackend
-  except ImportError as exc:
-    raise _missing_extra("catboost", "catboost") from exc
-
-  return CatBoostBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-def _xgb_quantile_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.xgboost_quantile import XGBQuantileBackend
-  except ImportError as exc:
-    raise _missing_extra("xgb-quantile", "xgboost") from exc
-
-  return XGBQuantileBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-def _pytabkit_realmlp_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.pytabkit import PyTabKitRealMLPBackend
-  except ImportError as exc:
-    raise _missing_extra("pytabkit-realmlp", "pytabkit") from exc
-
-  return PyTabKitRealMLPBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-def _pytabkit_tabm_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.pytabkit import PyTabKitTabMBackend
-  except ImportError as exc:
-    raise _missing_extra("pytabkit-tabm", "pytabkit") from exc
-
-  return PyTabKitTabMBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-def _tabpfn_finetune_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  # Fine-tuning is native to the core `tabpfn` package (no extra).
-  from npcc.core.backends.tabpfn_finetune import (
-    FinetunedTabPFNCriterionBackend,
-  )
-
-  del quantile_table_config
-  return FinetunedTabPFNCriterionBackend(
-    transform=transform,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-def _tabicl_finetune_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.tabicl_finetune import FinetunedTabICLBackend
-  except ImportError as exc:
-    raise _missing_extra("tabicl-finetune", "tabicl") from exc
-
-  return FinetunedTabICLBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-def _nori_factory(
-  *,
-  transform: _Transform,
-  quantile_table_config: QuantileTableConfig,
-  eps: float,
-  device: str | torch.device | None,
-  batch_size: int | None,
-  **kw: Any,  # noqa: ANN401 - heterogeneous backend kwargs
-) -> ConditionalMargin:
-  try:
-    from npcc.core.backends.nori import NoriBackend
-  except ImportError as exc:
-    raise MissingBackendDependencyError(
-      "The 'nori' backend requires synthefy-nori. Until the torch-uncapping "
-      "fix reaches PyPI, install the fork into a cu128 env:\n"
-      '  uv pip install "synthefy-nori @ '
-      'git+https://github.com/tvatter/synthefy-nori.git@allow-newer-torch-cuda"'
-    ) from exc
-
-  return NoriBackend(
-    transform=transform,
-    quantile_table_config=quantile_table_config,
-    eps=eps,
-    device=device,
-    batch_size=batch_size,
-    **kw,
-  )
-
-
-# TabPFN model version (v2.5 / v3) is a hyperparameter, not a distinct
-# backend: pass `backend_kwargs = { model_version = "v2.5" }` (default v3).
-_TABPFN_KWARGS = frozenset({"model_kwargs", "model_version"})
-_FINETUNE_LOSS_KWARGS = frozenset(
-  {
-    "epochs",
-    "learning_rate",
-    "early_stopping",
-    "ce_loss_weight",
-    "crps_loss_weight",
-    "crls_loss_weight",
-    "mse_loss_weight",
-    "mae_loss_weight",
-  }
-)
-_FINETUNE_LOSS_TYPES: dict[str, type] = {
+_FINETUNE_KWARGS: dict[str, type] = {
   "epochs": int,
   "learning_rate": float,
   "early_stopping": bool,
-  "ce_loss_weight": float,
-  "crps_loss_weight": float,
-  "crls_loss_weight": float,
-  "mse_loss_weight": float,
-  "mae_loss_weight": float,
 }
-_PYTABKIT_KWARGS = frozenset(
-  {"hpo", "n_cv", "n_refit", "random_state", "n_epochs"}
-)
-_PYTABKIT_TYPES: dict[str, type] = {
+_PYTABKIT_KWARGS: dict[str, type] = {
   "hpo": bool,
   "n_cv": int,
   "n_refit": int,
+  "random_state": int,
   "n_epochs": int,
 }
 
-register_backend(
-  "tabpfn-criterion",
-  _tabpfn_criterion_factory,
-  allowed_kwargs=_TABPFN_KWARGS,
-  nested_kwargs=frozenset({"model_kwargs"}),
-  n_range=(None, 100_000),
-)
-register_backend(
+# TabPFN model version (v2.5 / v3) is a hyperparameter, not a distinct
+# backend: pass `backend_kwargs = { model_version = "v2.5" }` (default v3).
+_register_builtin(
   "tabpfn-quantiles",
-  _tabpfn_quantiles_factory,
-  allowed_kwargs=_TABPFN_KWARGS,
-  nested_kwargs=frozenset({"model_kwargs"}),
+  "npcc.core.backends.tabpfn_quantile:TabPFNQuantileBackend",
+  kwarg_types={"model_kwargs": dict, "model_version": str},
   n_range=(None, 100_000),
 )
-register_backend(
+# Fine-tuning is native to the core `tabpfn` package (no extra).
+_register_builtin(
   "tabpfn-finetune",
-  _tabpfn_finetune_factory,
-  allowed_kwargs=_FINETUNE_LOSS_KWARGS,
-  kwarg_types=_FINETUNE_LOSS_TYPES,
+  "npcc.core.backends.tabpfn_finetune:FinetunedTabPFNBackend",
+  kwarg_types={
+    **_FINETUNE_KWARGS,
+    "ce_loss_weight": float,
+    "crps_loss_weight": float,
+    "crls_loss_weight": float,
+    "mse_loss_weight": float,
+    "mae_loss_weight": float,
+  },
   n_range=(None, 50_000),
 )
-register_backend(
+_register_builtin(
   "ngboost",
-  _ngboost_factory,
-  allowed_kwargs=frozenset(
-    {"n_estimators", "learning_rate", "minibatch_frac", "random_state"}
-  ),
-  kwarg_types={"n_estimators": int, "learning_rate": float},
-)
-register_backend(
-  "gbm",
-  _quantile_gbm_factory,
-  allowed_kwargs=frozenset(
-    {
-      "n_estimators",
-      "max_depth",
-      "learning_rate",
-      "subsample",
-      "min_samples_leaf",
-      "random_state",
-    }
-  ),
+  "npcc.core.backends.ngboost:NGBoostBackend",
+  extra="ngboost",
   kwarg_types={
     "n_estimators": int,
-    "max_depth": int,
     "learning_rate": float,
-    "subsample": float,
+    "minibatch_frac": float,
+    "random_state": int,
   },
 )
-register_backend(
+_register_builtin(
+  "lightgbm",
+  "npcc.core.backends.lightgbm_quantile:LightGBMQuantileBackend",
+  extra="lightgbm",
+  kwarg_types={
+    "n_estimators": int,
+    "learning_rate": float,
+    "max_depth": int,
+    "num_leaves": int,
+    "min_child_samples": int,
+    "min_child_weight": float,
+    "subsample": float,
+    "subsample_freq": int,
+    "colsample_bytree": float,
+    "reg_alpha": float,
+    "reg_lambda": float,
+    "n_jobs": int,
+    "random_state": int,
+  },
+)
+_register_builtin(
+  "xgboost",
+  "npcc.core.backends.xgboost_quantile:XGBoostQuantileBackend",
+  extra="xgboost",
+  kwarg_types={
+    "n_estimators": int,
+    "learning_rate": float,
+    "max_depth": int,
+    "min_child_weight": float,
+    "subsample": float,
+    "colsample_bytree": float,
+    "reg_alpha": float,
+    "reg_lambda": float,
+    "n_jobs": int,
+    "random_state": int,
+  },
+)
+_register_builtin(
   "catboost",
-  _catboost_factory,
-  allowed_kwargs=frozenset(
-    {
-      "iterations",
-      "depth",
-      "learning_rate",
-      "l2_leaf_reg",
-      "random_seed",
-      "border_count",
-      "task_type",
-    }
-  ),
-  kwarg_types={"iterations": int, "depth": int, "learning_rate": float},
-)
-# `xgb-quantile` is registered like any other backend, and is a poor choice on
-# a study grid that reaches into the tails: XGBoost quantile trees cannot
-# extrapolate, so the predicted conditional support collapses to roughly the
-# inner [0.24, 0.96] of (0, 1) and the quantile->density inversion returns
-# density exactly 0 outside it. On the study grid that zeroes ~44% of
-# evaluation points holding ~16% of the true mass, so KL = E_true[log(truth/0)]
-# blows up: pdf-KL ~8 against ~0.1-0.4 for every other backend. Restricted to
-# in-support cells its KL is an ordinary ~0.5, so this is tail collapse rather
-# than quantile crossing (rows are monotone-sorted) or a metric artifact. A
-# tail-robust inversion -- extrapolated quantile tails, or a floored density --
-# is the prerequisite to using it on unbounded supports. A registry entry is
-# not a recommendation; a study excludes it by not naming it.
-register_backend(
-  "xgb-quantile",
-  _xgb_quantile_factory,
-  allowed_kwargs=frozenset(
-    {
-      "n_estimators",
-      "tree_method",
-      "max_depth",
-      "learning_rate",
-      "subsample",
-      "colsample_bytree",
-      "min_child_weight",
-      "reg_alpha",
-      "reg_lambda",
-      "gamma",
-      "n_jobs",
-      "random_state",
-    }
-  ),
+  "npcc.core.backends.catboost_quantile:CatBoostQuantileBackend",
+  extra="catboost",
   kwarg_types={
-    "n_estimators": int,
-    "max_depth": int,
+    "iterations": int,
     "learning_rate": float,
-    "subsample": float,
+    "depth": int,
+    "l2_leaf_reg": float,
+    "thread_count": int,
+    "random_seed": int,
   },
 )
-register_backend(
+_register_builtin(
   "pytabkit-realmlp",
-  _pytabkit_realmlp_factory,
-  allowed_kwargs=_PYTABKIT_KWARGS,
-  kwarg_types=_PYTABKIT_TYPES,
+  "npcc.core.backends.pytabkit:PyTabKitRealMLPBackend",
+  extra="pytabkit",
+  kwarg_types=_PYTABKIT_KWARGS,
 )
-register_backend(
+_register_builtin(
   "pytabkit-tabm",
-  _pytabkit_tabm_factory,
-  allowed_kwargs=_PYTABKIT_KWARGS,
-  kwarg_types=_PYTABKIT_TYPES,
+  "npcc.core.backends.pytabkit:PyTabKitTabMBackend",
+  extra="pytabkit",
+  kwarg_types=_PYTABKIT_KWARGS,
 )
 # Nori's NoriRegressor kwargs are model-release-specific; left unrestricted.
-register_backend("nori", _nori_factory)
-register_backend(
+_register_builtin(
+  "nori",
+  "npcc.core.backends.nori:NoriBackend",
+  install_hint=(
+    "The 'nori' backend requires synthefy-nori. Until the torch-uncapping fix "
+    "reaches PyPI, install the fork into a cu128 env:\n"
+    '  uv pip install "synthefy-nori @ '
+    'git+https://github.com/tvatter/synthefy-nori.git@allow-newer-torch-cuda"'
+  ),
+)
+_register_builtin(
   "tabicl",
-  _tabicl_factory,
-  allowed_kwargs=frozenset({"model_kwargs"}),
-  nested_kwargs=frozenset({"model_kwargs"}),
+  "npcc.core.backends.tabicl:TabICLBackend",
+  extra="tabicl",
+  kwarg_types={"model_kwargs": dict},
   n_range=(300, 48_000),
 )
-register_backend(
+_register_builtin(
   "tabicl-finetune",
-  _tabicl_finetune_factory,
-  allowed_kwargs=frozenset({"epochs", "learning_rate", "early_stopping"}),
-  kwarg_types={"epochs": int, "learning_rate": float, "early_stopping": bool},
+  "npcc.core.backends.tabicl_finetune:FinetunedTabICLBackend",
+  extra="tabicl",
+  kwarg_types=_FINETUNE_KWARGS,
   n_range=(300, 48_000),
 )

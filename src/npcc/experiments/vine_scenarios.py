@@ -157,11 +157,11 @@ def margin_log_pdf(
 def true_vine(truth: VineTruth, x_val: float) -> pv.Vinecop:
   """The true vine at one covariate value, as a parametric ``Vinecop``."""
   x = torch.tensor([float(x_val)], dtype=torch.float64)
-  # `scenarios._bicop` is the bivariate study's tau-to-parameter map; sharing
+  # `scenarios.bicop` is the bivariate study's tau-to-parameter map; sharing
   # it keeps tree 1 of a vine and a bivariate cell the same copula.
   pair_copulas = [
     [
-      scenarios._bicop(
+      scenarios.bicop(
         scenarios.FAMILIES[e.family], float(edge_tau(e.regime, e.tree, x)[0])
       )
       for e in row

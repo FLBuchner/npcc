@@ -1,23 +1,26 @@
-"""Smoke tests for the optional non-TabPFN backends (gbm / ngboost / tabicl).
+"""Smoke tests for the backends that need an extra, a GPU or a download.
 
 Each test ``importorskip``s its backend dependency, so the suite still
-passes in environments where the extra is not installed.  GBM and NGBoost
-fit locally and quickly; TabICL is a foundation model whose first fit
-downloads weights, so it is additionally guarded against download/runtime
-failures (skipped, like the real-TabPFN smoke).
+passes in environments where the extra is not installed.  LightGBM and NGBoost
+fit locally and quickly; TabICL and Nori are foundation models whose first fit
+downloads weights, so they are additionally guarded against download/runtime
+failures. The TabPFN fine-tune smoke is opt-in: it is a GPU training loop.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import cast
 
 import pytest
 import torch
 
-from npcc.core.bicop import RosenblattBicop
-from npcc.core.controls import FitControlsRosenblattBicop
-from npcc.core.margin_quantile_table import QuantileTableConfig
+from npcc.core import (
+  FitControlsRosenblattBicop,
+  QuantileTableConfig,
+  RosenblattBicop,
+)
 
 
 def _gaussian_copula_sample(
@@ -53,17 +56,154 @@ def _check_fitted_model(m: RosenblattBicop) -> None:
   assert -1.0 <= tau <= 1.0
 
 
-def test_gbm_backend_smoke() -> None:
-  pytest.importorskip("sklearn")
-  u, v = _gaussian_copula_sample(80, rho=0.6, seed=0)
+def test_lightgbm_backend_smoke() -> None:
+  pytest.importorskip("lightgbm")
+  u, v = _gaussian_copula_sample(200, rho=0.6, seed=0)
   m = RosenblattBicop(
     FitControlsRosenblattBicop(
-      backend="gbm",
-      quantile_table_config=QuantileTableConfig(n_quantiles=11),
-      backend_kwargs={"n_estimators": 20, "max_depth": 2},
+      backend="lightgbm",
+      device="cpu",
+      backend_kwargs={"n_estimators": 20, "random_state": 0},
     )
   ).fit(torch.column_stack([u, v]))
   _check_fitted_model(m)
+
+
+def test_lightgbm_fits_one_booster_per_level() -> None:
+  """Every probability level the table reads has its own booster.
+
+  The table is read at ``config.alphas()``; a booster count that drifted from
+  it would hand the reconstruction a table of the wrong width.
+  """
+  pytest.importorskip("lightgbm")
+  from npcc.core.backends.lightgbm_quantile import LightGBMQuantileBackend
+
+  config = QuantileTableConfig(n_quantiles=9)
+  margin = LightGBMQuantileBackend(
+    quantile_table_config=config, device="cpu", n_estimators=5
+  )
+  u, v = _gaussian_copula_sample(120, rho=0.5, seed=1)
+  margin.fit(v.double(), x=u.double().reshape(-1, 1))
+
+  assert margin.boosters_ is not None
+  assert len(margin.boosters_) == config.n_quantiles
+  table = margin.cdf(
+    torch.tensor([0.2, 0.8], dtype=torch.float64),
+    x=torch.tensor([[0.5], [0.5]], dtype=torch.float64),
+  )
+  assert table[0] < table[1]
+
+
+def test_lightgbm_refuses_a_parameter_it_controls() -> None:
+  """A caller's ``objective`` or ``alpha`` would silently replace the level's.
+
+  Every booster's objective and level come from the quantile table, so letting
+  either through would fit every level to the same quantile.
+  """
+  pytest.importorskip("lightgbm")
+  from npcc.core.backends.lightgbm_quantile import LightGBMQuantileBackend
+
+  with pytest.raises(ValueError, match=r"must control \['alpha'\]"):
+    LightGBMQuantileBackend(alpha=0.5)
+
+
+def test_xgboost_backend_smoke() -> None:
+  pytest.importorskip("xgboost")
+  u, v = _gaussian_copula_sample(200, rho=0.6, seed=0)
+  m = RosenblattBicop(
+    FitControlsRosenblattBicop(
+      backend="xgboost",
+      device="cpu",
+      backend_kwargs={"n_estimators": 20, "random_state": 0},
+    )
+  ).fit(torch.column_stack([u, v]))
+  _check_fitted_model(m)
+
+
+def test_xgboost_predicts_one_column_per_level() -> None:
+  """The model predicts the table at every level the reconstruction reads.
+
+  XGBoost takes the levels as ``quantile_alpha`` and answers one column per
+  level; a width that drifted from ``config.alphas()`` would be read at the
+  wrong normal scores.
+  """
+  pytest.importorskip("xgboost")
+  from npcc.core.backends.xgboost_quantile import XGBoostQuantileBackend
+
+  config = QuantileTableConfig(n_quantiles=9)
+  margin = XGBoostQuantileBackend(
+    quantile_table_config=config, device="cpu", n_estimators=5
+  )
+  u, v = _gaussian_copula_sample(120, rho=0.5, seed=1)
+  x = u.double().reshape(-1, 1)
+  margin.fit(v.double(), x=x)
+
+  table = margin._predict_quantiles(x[:3], config.alphas())
+  assert table.shape == (3, config.n_quantiles)
+  cdf = margin.cdf(
+    torch.tensor([0.2, 0.8], dtype=torch.float64),
+    x=torch.tensor([[0.5], [0.5]], dtype=torch.float64),
+  )
+  assert cdf[0] < cdf[1]
+
+
+def test_xgboost_refuses_a_parameter_it_controls() -> None:
+  """A caller's ``quantile_alpha`` would silently replace the table's levels.
+
+  The reconstruction reads the predictions at ``config.alphas()``, so a model
+  fitted at other levels would be read at the wrong normal scores.
+  """
+  pytest.importorskip("xgboost")
+  from npcc.core.backends.xgboost_quantile import XGBoostQuantileBackend
+
+  with pytest.raises(ValueError, match=r"must control \['quantile_alpha'\]"):
+    XGBoostQuantileBackend(quantile_alpha=[0.5])
+
+
+def test_catboost_backend_smoke() -> None:
+  pytest.importorskip("catboost")
+  u, v = _gaussian_copula_sample(200, rho=0.6, seed=0)
+  m = RosenblattBicop(
+    FitControlsRosenblattBicop(
+      backend="catboost",
+      device="cpu",
+      backend_kwargs={"iterations": 20, "random_seed": 0},
+    )
+  ).fit(torch.column_stack([u, v]))
+  _check_fitted_model(m)
+
+
+def test_catboost_refuses_a_parameter_it_controls() -> None:
+  """A caller's ``loss_function`` would silently replace the table's levels.
+
+  The reconstruction reads the predictions at ``config.alphas()``, so a model
+  fitted under another loss would be read as a quantile table it is not.
+  """
+  pytest.importorskip("catboost")
+  from npcc.core.backends.catboost_quantile import CatBoostQuantileBackend
+
+  with pytest.raises(ValueError, match=r"must control \['loss_function'\]"):
+    CatBoostQuantileBackend(loss_function="RMSE")
+
+
+def test_catboost_writes_nothing_to_the_working_directory(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """A fit leaves no ``catboost_info/`` behind in the caller's directory.
+
+  CatBoost writes one on every fit by default, so a study run from a checkout
+  littered the repository with training logs.
+  """
+  pytest.importorskip("catboost")
+  from npcc.core.backends.catboost_quantile import CatBoostQuantileBackend
+
+  monkeypatch.chdir(tmp_path)
+  u, v = _gaussian_copula_sample(60, rho=0.5, seed=3)
+  CatBoostQuantileBackend(device="cpu", iterations=5).fit(
+    v.double(), x=u.double().reshape(-1, 1)
+  )
+
+  assert list(tmp_path.iterdir()) == []
 
 
 def test_ngboost_backend_smoke() -> None:
@@ -73,19 +213,6 @@ def test_ngboost_backend_smoke() -> None:
     FitControlsRosenblattBicop(
       backend="ngboost",
       backend_kwargs={"n_estimators": 40},
-    )
-  ).fit(torch.column_stack([u, v]))
-  _check_fitted_model(m)
-
-
-def test_catboost_backend_smoke() -> None:
-  pytest.importorskip("catboost")
-  u, v = _gaussian_copula_sample(80, rho=0.6, seed=3)
-  m = RosenblattBicop(
-    FitControlsRosenblattBicop(
-      backend="catboost",
-      backend_kwargs={"iterations": 100},
-      quantile_table_config=QuantileTableConfig(n_quantiles=21),
     )
   ).fit(torch.column_stack([u, v]))
   _check_fitted_model(m)

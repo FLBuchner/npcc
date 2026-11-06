@@ -4,7 +4,7 @@ Two invariants, both of which the package documents and neither of which
 anything checked before.
 
 ``npcc.core.registry``'s module docstring promises that "``import npcc`` and
-:func:`available_backends` never import NGBoost / TabICL / scikit-learn",
+:func:`available_backends` never import NGBoost / TabICL / LightGBM",
 which is what makes the optional extras optional. Nothing enforced it, and one
 eager import anywhere in the chain -- a convenience re-export, a type
 annotation moved out from behind ``TYPE_CHECKING`` -- would turn an extra into
@@ -39,6 +39,7 @@ _SRC = _ROOT / "src" / "npcc"
 #: fact about someone else's dependency tree.
 _OPTIONAL = (
   "catboost",
+  "lightgbm",
   "ngboost",
   "pytabkit",
   "synthefy_nori",
@@ -99,58 +100,68 @@ def test_validating_backend_kwargs_needs_no_optional_extra() -> None:
   )
 
 
-def _all_imports(path: Path) -> set[str]:
-  """Every module named by an import in ``path``, at any scope, dotted.
+def _imports(path: Path, *, module_scope: bool = False) -> set[str]:
+  """Every module named by an import in ``path``, dotted.
 
   Parameters
   ----------
   path : pathlib.Path
       The Python file to read.
+  module_scope : bool, default=False
+      Whether to leave out the imports inside a function body, which run only
+      when the function is called.
 
   Returns
   -------
   set of str
-      Full dotted module names, so a layer prefix can be matched.
+      Full dotted module names, so a layer prefix or one module can be
+      matched; ``name.split(".")[0]`` is the package.
   """
   tree = ast.parse(path.read_text())
-  names: set[str] = set()
-  for node in ast.walk(tree):
-    if isinstance(node, ast.Import):
-      names.update(alias.name for alias in node.names)
-    elif isinstance(node, ast.ImportFrom) and node.module:
-      names.add(node.module)
-  return names
-
-
-def _module_scope_imports(path: Path) -> set[str]:
-  """Top-level module names imported at module scope in ``path``.
-
-  Parameters
-  ----------
-  path : pathlib.Path
-      The Python file to read.
-
-  Returns
-  -------
-  set of str
-      One entry per module-scope import, as its first dotted component.
-  """
-  tree = ast.parse(path.read_text())
-  nested = {
-    node
-    for parent in ast.walk(tree)
-    if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef))
-    for node in ast.walk(parent)
-  }
+  nested = (
+    {
+      node
+      for parent in ast.walk(tree)
+      if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef))
+      for node in ast.walk(parent)
+    }
+    if module_scope
+    else set()
+  )
   names: set[str] = set()
   for node in ast.walk(tree):
     if node in nested:
       continue
     if isinstance(node, ast.Import):
-      names.update(alias.name.split(".")[0] for alias in node.names)
+      names.update(alias.name for alias in node.names)
     elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-      names.add(node.module.split(".")[0])
+      names.add(node.module)
   return names
+
+
+def _needs_extra(path: Path) -> bool:
+  """Whether importing ``path`` imports an optional extra, through adapters.
+
+  Parameters
+  ----------
+  path : pathlib.Path
+      An adapter module under ``npcc/core/backends``.
+
+  Returns
+  -------
+  bool
+      ``True`` if it, or an adapter it imports at module scope, imports a
+      package from ``_OPTIONAL``.
+  """
+  imported = _imports(path, module_scope=True)
+  if {m.split(".")[0] for m in imported} & set(_OPTIONAL):
+    return True
+  prefix = "npcc.core.backends."
+  return any(
+    _needs_extra(path.parent / f"{m.removeprefix(prefix)}.py")
+    for m in imported
+    if m.startswith(prefix)
+  )
 
 
 def test_the_registry_imports_no_backend_module_at_module_scope() -> None:
@@ -162,29 +173,11 @@ def test_the_registry_imports_no_backend_module_at_module_scope() -> None:
   from inside a factory body. One module-scope import here promotes every
   extra to a hard dependency at once.
   """
-  eager = {
-    name
-    for name in _module_scope_imports(_SRC / "core" / "registry.py")
-    if name == "npcc"
-  }
-  registry = (_SRC / "core" / "registry.py").read_text()
-  tree = ast.parse(registry)
-  nested = {
-    node
-    for parent in ast.walk(tree)
-    if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef))
-    for node in ast.walk(parent)
-  }
-  module_scope_backends = {
-    node.module
-    for node in ast.walk(tree)
-    if isinstance(node, ast.ImportFrom)
-    and node not in nested
-    and (node.module or "").startswith("npcc.core.backends")
-  }
+  module_scope = _imports(_SRC / "core" / "registry.py", module_scope=True)
 
-  assert module_scope_backends == set()
-  assert eager <= {"npcc"}
+  assert {
+    m for m in module_scope if m.startswith("npcc.core.backends")
+  } == set()
 
 
 @pytest.mark.parametrize(
@@ -193,23 +186,24 @@ def test_the_registry_imports_no_backend_module_at_module_scope() -> None:
   ids=lambda p: p.name,
 )
 def test_every_adapter_is_reached_only_through_a_factory(path: Path) -> None:
-  """An adapter that imports an extra must not be imported eagerly anywhere.
+  """An adapter that needs an extra is imported eagerly only by adapters.
 
-  ``npcc/__init__.py`` re-exports the two TabPFN adapters, which is why they
-  are exempt: `tabpfn` is a hard dependency, not an extra.
+  Another adapter may: it is itself reached only through a factory, which its
+  own case here checks, since it needs the extra too -- through the adapter it
+  subclasses, if not directly. ``npcc/__init__.py`` re-exports the TabPFN
+  adapter, which passes because `tabpfn` is a hard dependency, not an extra.
   """
-  if path.name in {"__init__.py", "tabpfn_common.py"}:
+  backends = _SRC / "core" / "backends"
+  if path.name == "__init__.py":
     pytest.skip("no third-party import of its own")
-
-  needs_extra = _module_scope_imports(path) & set(_OPTIONAL)
-  if not needs_extra:
-    pytest.skip("imports no optional extra")
+  if not _needs_extra(path):
+    pytest.skip("needs no optional extra")
 
   module = f"npcc.core.backends.{path.stem}"
   eager = [
     other
     for other in sorted(_SRC.rglob("*.py"))
-    if other != path and module in _module_scope_imports(other)
+    if other.parent != backends and module in _imports(other, module_scope=True)
   ]
 
   assert eager == [], f"{module} imported at module scope by {eager}"
@@ -230,7 +224,7 @@ def test_core_never_imports_the_layer_above_it(path: Path) -> None:
   """
   imported = {
     name
-    for name in _all_imports(path)
+    for name in _imports(path)
     if name == "npcc.experiments" or name.startswith("npcc.experiments.")
   }
 
@@ -250,9 +244,10 @@ def test_every_core_name_is_also_reachable_from_the_top() -> None:
 
   assert set(npcc.core.__all__) <= set(npcc.__all__)
   assert set(npcc.__all__) - set(npcc.core.__all__) == {
-    "TabPFNCriterionBackend",
     "TabPFNQuantileBackend",
   }
+  for name in npcc.core.__all__:
+    assert getattr(npcc, name) is getattr(npcc.core, name), name
 
 
 @pytest.mark.parametrize("module", ["npcc", "npcc.core"])

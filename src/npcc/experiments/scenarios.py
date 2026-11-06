@@ -4,8 +4,8 @@ A *scenario* pairs a copula family with a Kendall's-tau regime and defines:
 
 - :func:`sample` — draw a training set ``(u, v[, x])`` from the known copula;
 - :func:`eval_grid` — the fixed points at which estimates are scored;
-- :func:`ground_truth` — the exact ``pdf`` / ``cdf`` / ``hfunc1`` / ``hfunc2``
-  on that evaluation grid.
+- :func:`ground_truth` — the exact ``pdf`` / ``hfunc1`` / ``hfunc2`` on that
+  evaluation grid.
 
 Everything is backed by :mod:`pyvinecopulib`: ``Bicop.tau_to_parameters`` maps a
 target Kendall's tau to the family's parameter, and ``Bicop.hinv1`` provides a
@@ -16,13 +16,22 @@ Conditional scenarios vary ``tau`` with a scalar covariate ``x`` (``x`` is a
 deterministic ``linspace`` over the unit interval, matching the original
 notebook study); unconditional scenarios use a single fixed ``tau`` and no
 covariate (``x is None``).
+
+A *shape family* (:data:`SHAPE_FAMILIES`) moves the copula's shape with ``x``,
+not only its strength, so no single parametric family with a smooth
+``tau(x)`` can represent it. It takes the one regime :data:`IMPLIED`, since
+its ``tau(x)`` is implied by that shape; each family states it in closed
+form. The shape families sit outside :data:`FAMILIES` and
+:data:`TAU_SCENARIOS`, which the vine study draws its edges from by position.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import numpy as np
 import pyvinecopulib as pv
 import torch
 
@@ -40,7 +49,7 @@ FAMILIES: dict[str, pv.BicopFamily] = {
   "joe": pv.BicopFamily.joe,
 }
 
-QUANTITIES: tuple[str, ...] = ("pdf", "cdf", "hfunc1", "hfunc2")
+QUANTITIES: tuple[str, ...] = ("pdf", "hfunc1", "hfunc2")
 
 # Conditional evaluation grid defaults.
 CONDITIONAL_UV_GRID_N: int = 20
@@ -117,6 +126,11 @@ class EvalGrid:
   u_axis: torch.Tensor
   v_axis: torch.Tensor
 
+  @property
+  def uv(self) -> torch.Tensor:
+    """The evaluation points as one ``(n_points, 2)`` copula argument."""
+    return torch.column_stack([self.u_flat, self.v_flat])
+
 
 def interior_axis(n: int) -> torch.Tensor:
   """Midpoint grid on ``(0, 1)`` with boundaries excluded."""
@@ -132,15 +146,165 @@ def conditional_x_axis(n: int) -> torch.Tensor:
   return torch.linspace(X_MIN, X_MAX, n, dtype=torch.float64)
 
 
-def _bicop(family: pv.BicopFamily, tau: float) -> pv.Bicop:
-  """Bicop of ``family`` whose Kendall's tau equals ``tau``."""
+def bicop(family: pv.BicopFamily, tau: float) -> pv.Bicop:
+  """Return the ``family`` copula whose Kendall's tau equals ``tau``.
+
+  Parameters
+  ----------
+  family : pyvinecopulib.BicopFamily
+      A one-parameter family.
+  tau : float
+      The target Kendall's tau.
+
+  Returns
+  -------
+  pyvinecopulib.Bicop
+      The copula.
+  """
   proto = pv.Bicop(family=family)
   params = proto.tau_to_parameters(float(tau))
   return pv.Bicop(family=family, parameters=params)
 
 
+# ---------------------------------------------------------------------------
+# Shape families
+# ---------------------------------------------------------------------------
+
+#: The tau regime of every shape family, and of nothing else.
+IMPLIED: str = "implied"
+
+
+@dataclass(frozen=True)
+class ShapeFamily:
+  """A conditional copula whose shape, not only its strength, moves with x.
+
+  At each ``x`` it is the finite mixture ``sum_k w_k(x) c_k(u, v)`` that
+  ``components(x)`` lists as ``(w_k, c_k)`` pairs, with weights summing to
+  one. The density and both h-functions are linear in the mixture, so the
+  ground truth is exact. ``tau_of_x`` is its Kendall's tau, in closed form.
+  """
+
+  name: str
+  components: Callable[[float], tuple[tuple[float, pv.Bicop], ...]]
+  tau_of_x: Callable[[torch.Tensor], torch.Tensor]
+
+
+#: Kendall's tau of both components of ``clayton-gumbel-mix``.
+MIX_TAU: float = 0.5
+
+#: ``(I_CG, I_GC)`` for ``clayton-gumbel-mix``, where ``I_AB`` is
+#: ``int int C_A dC_B`` and C and G are its Clayton and Gumbel components.
+#: Each is computed as Nelsen's ``1/2 - int int h1_A h2_B du dv``, whose
+#: integrand is bounded, by tensor tanh-sinh quadrature at 127, 254, 507 and
+#: 1015 nodes a side, which agree to 5e-15; tensor Gauss-Legendre agrees to
+#: 6e-14. The same nodes give ``I_CC = I_GG = (tau + 1) / 4 = 0.375`` to
+#: 1e-14, so each value is correct to about 1e-13. The two are equal, since
+#: Nelsen's concordance function is symmetric in its arguments.
+MIX_CROSS_INTEGRALS: tuple[float, float] = (
+  0.374081988542034,
+  0.374081988542034,
+)
+
+#: Kendall's tau of ``student-varying-nu`` at every ``x``.
+STUDENT_TAU: float = 0.5
+
+#: The degrees of freedom of ``student-varying-nu`` at ``x = 0`` and ``x = 1``.
+STUDENT_NU_RANGE: tuple[float, float] = (2.0, 50.0)
+
+
+def student_nu(x: float) -> float:
+  """Degrees of freedom of ``student-varying-nu`` at ``x``.
+
+  ``exp{log 2 + x (log 50 - log 2)}``, written as ``2 (50 / 2) ** x`` so that
+  it is exactly 2 at ``x = 0`` and exactly 50 at ``x = 1``, pyvinecopulib's
+  upper bound.
+
+  Parameters
+  ----------
+  x : float
+      The covariate.
+
+  Returns
+  -------
+  float
+      The degrees of freedom.
+  """
+  lo, hi = STUDENT_NU_RANGE
+  return lo * math.pow(hi / lo, x)
+
+
+def _mix_components(x: float) -> tuple[tuple[float, pv.Bicop], ...]:
+  return (
+    (1.0 - x, bicop(pv.BicopFamily.clayton, MIX_TAU)),
+    (x, bicop(pv.BicopFamily.gumbel, MIX_TAU)),
+  )
+
+
+def _mix_tau(x: torch.Tensor) -> torch.Tensor:
+  """Kendall's tau of ``(1 - x) C_C + x C_G``, quadratic in the weight ``x``.
+
+  ``tau = 4 int int C dC - 1`` and ``int int C dC`` is bilinear in the
+  mixture, so with ``I_AB = int int C_A dC_B``::
+
+    tau(x) = (1 - x)^2 tau_C + x^2 tau_G + x (1 - x) [4 (I_CG + I_GC) - 2]
+
+  With both components at tau 0.5 it dips to about 0.4982 at ``x = 1/2``.
+  """
+  i_cg, i_gc = MIX_CROSS_INTEGRALS
+  cross = 4.0 * (i_cg + i_gc) - 2.0
+  return (1.0 - x) ** 2 * MIX_TAU + x**2 * MIX_TAU + x * (1.0 - x) * cross
+
+
+def _student_components(x: float) -> tuple[tuple[float, pv.Bicop], ...]:
+  # An elliptical copula's tau is (2 / pi) arcsin(rho).
+  rho = math.sin(math.pi * STUDENT_TAU / 2.0)
+  student = pv.Bicop(
+    family=pv.BicopFamily.student,
+    parameters=np.array([[rho], [student_nu(x)]], dtype=np.float64),
+  )
+  return ((1.0, student),)
+
+
+SHAPE_FAMILIES: dict[str, ShapeFamily] = {
+  # M1, a tail transition: lower-tail Clayton at x = 0 to upper-tail Gumbel
+  # at x = 1, each at tau 0.5, mixed with weight x.
+  "clayton-gumbel-mix": ShapeFamily(
+    "clayton-gumbel-mix", _mix_components, _mix_tau
+  ),
+  # M2, varying tails at a fixed tau: a Student t copula at tau 0.5 whose
+  # degrees of freedom rise log-linearly from 2 to 50 over the unit interval.
+  "student-varying-nu": ShapeFamily(
+    "student-varying-nu",
+    _student_components,
+    lambda x: torch.full_like(x, STUDENT_TAU),
+  ),
+}
+
+
 def is_conditional(scenario: str) -> bool:
-  return TAU_SCENARIOS[scenario].conditional
+  """Whether ``scenario`` varies with a covariate.
+
+  Parameters
+  ----------
+  scenario : str
+      A key of :data:`TAU_SCENARIOS`, or :data:`IMPLIED`.
+
+  Returns
+  -------
+  bool
+      ``True`` for a conditional regime and for :data:`IMPLIED`.
+  """
+  return scenario == IMPLIED or TAU_SCENARIOS[scenario].conditional
+
+
+def _check_pair(family: str, scenario: str) -> None:
+  """Refuse a shape family off :data:`IMPLIED`, and the reverse."""
+  if (family in SHAPE_FAMILIES) != (scenario == IMPLIED):
+    raise ValueError(
+      f"tau_scenario must be {IMPLIED!r} exactly when the family is one of "
+      f"the shape families {sorted(SHAPE_FAMILIES)}; got family {family!r} "
+      f"with tau_scenario {scenario!r}"
+    )
 
 
 def eval_grid(
@@ -150,24 +314,11 @@ def eval_grid(
   conditional_x_grid_n: int = CONDITIONAL_X_GRID_N,
 ) -> EvalGrid:
   """Fixed evaluation grid for ``scenario`` (conditional or unconditional)."""
-  spec = TAU_SCENARIOS[scenario]
-  if spec.conditional:
-    u_axis = interior_axis(conditional_uv_grid_n)
-    v_axis = interior_axis(conditional_uv_grid_n)
-    uu, vv = torch.meshgrid(u_axis, v_axis, indexing="ij")
-    u_pairs = uu.reshape(-1)
-    v_pairs = vv.reshape(-1)
-    x_axis = conditional_x_axis(conditional_x_grid_n)
-    n_pairs = u_pairs.shape[0]
-    return EvalGrid(
-      u_flat=u_pairs.repeat_interleave(conditional_x_grid_n),
-      v_flat=v_pairs.repeat_interleave(conditional_x_grid_n),
-      x_flat=x_axis.repeat(n_pairs).reshape(-1, 1),
-      shape=(n_pairs, conditional_x_grid_n),
-      conditional=True,
-      x_axis=x_axis,
-      u_axis=u_axis,
-      v_axis=v_axis,
+  if is_conditional(scenario):
+    return eval_grid_for_x(
+      scenario,
+      conditional_x_axis(conditional_x_grid_n),
+      conditional_uv_grid_n=conditional_uv_grid_n,
     )
   axis = interior_axis(UV_GRID_N)
   uu, vv = torch.meshgrid(axis, axis, indexing="ij")
@@ -189,7 +340,7 @@ def eval_grid_for_x(
   scenario: str, x_axis: torch.Tensor, *, conditional_uv_grid_n: int
 ) -> EvalGrid:
   """Conditional evaluation grid at caller-selected ``x`` values."""
-  if not TAU_SCENARIOS[scenario].conditional:
+  if not is_conditional(scenario):
     raise ValueError("eval_grid_for_x is only valid for conditional scenarios.")
   x_axis = x_axis.to(dtype=torch.float64)
   u_axis = interior_axis(conditional_uv_grid_n)
@@ -210,44 +361,65 @@ def eval_grid_for_x(
   )
 
 
+def _quantities(cop: pv.Bicop, uv: torch.Tensor) -> dict[str, torch.Tensor]:
+  """Every scored quantity of ``cop`` at the points ``uv``."""
+  uv_host = uv.contiguous().numpy()
+  return {
+    "pdf": torch.from_numpy(cop.pdf(uv_host)),
+    "hfunc1": torch.from_numpy(cop.hfunc1(uv_host)),
+    "hfunc2": torch.from_numpy(cop.hfunc2(uv_host)),
+  }
+
+
+def _mixture_quantities(
+  family: ShapeFamily, x: float, uv: torch.Tensor
+) -> dict[str, torch.Tensor]:
+  """Every scored quantity of ``family`` at ``x``, at the points ``uv``."""
+  out = {q: torch.zeros(uv.shape[0], dtype=torch.float64) for q in QUANTITIES}
+  for weight, cop in family.components(x):
+    for q, values in _quantities(cop, uv).items():
+      out[q] += weight * values
+  return out
+
+
 def ground_truth(
   family: str, scenario: str, grid: EvalGrid | None = None
 ) -> dict[str, torch.Tensor]:
-  """Exact pdf/cdf/hfunc1/hfunc2 on :func:`eval_grid` for ``(family, scenario)``.
+  """Exact pdf/hfunc1/hfunc2 on ``grid`` for ``(family, scenario)``.
 
-  Conditional: one ``Bicop`` per evaluation ``x`` (50), evaluated at the 25 uv
-  pairs, stacked into ``(n_pairs, n_x)`` grids.  Unconditional: a single
-  ``Bicop`` evaluated on the flattened uv grid.
+  Conditional: one ``Bicop`` per evaluation ``x``, evaluated at every uv pair,
+  stacked into ``(n_pairs, n_x)`` grids.  Unconditional: a single ``Bicop``
+  evaluated on the flattened uv grid. A shape family is conditional, and at
+  each ``x`` mixes its components' quantities with their weights. ``grid``
+  defaults to the scenario's :func:`eval_grid`.
   """
+  _check_pair(family, scenario)
+  grid = eval_grid(scenario) if grid is None else grid
+  if family in SHAPE_FAMILIES:
+    assert grid.x_axis is not None
+    pairs = grid.uv.reshape(*grid.shape, 2)[:, 0]
+    shape_cols = [
+      _mixture_quantities(SHAPE_FAMILIES[family], float(x), pairs)
+      for x in grid.x_axis
+    ]
+    return {
+      q: torch.stack([c[q] for c in shape_cols], dim=1) for q in QUANTITIES
+    }
+
   fam = FAMILIES[family]
   spec = TAU_SCENARIOS[scenario]
-  grid = eval_grid(scenario) if grid is None else grid
 
   if spec.conditional:
     assert spec.tau_of_x is not None and grid.x_axis is not None
-    tau_x = spec.tau_of_x(grid.x_axis)
-    u_grid = grid.u_flat.reshape(grid.shape)
-    v_grid = grid.v_flat.reshape(grid.shape)
-    uv = torch.column_stack([u_grid[:, 0], v_grid[:, 0]])
-    uv_host = uv.numpy()
-    cols: dict[str, list[torch.Tensor]] = {q: [] for q in QUANTITIES}
-    for tau in tau_x:
-      cop = _bicop(fam, float(tau))
-      cols["pdf"].append(torch.from_numpy(cop.pdf(uv_host)))
-      cols["cdf"].append(torch.from_numpy(cop.cdf(uv_host)))
-      cols["hfunc1"].append(torch.from_numpy(cop.hfunc1(uv_host)))
-      cols["hfunc2"].append(torch.from_numpy(cop.hfunc2(uv_host)))
-    return {q: torch.stack(cols[q], dim=1) for q in QUANTITIES}
+    pairs = grid.uv.reshape(*grid.shape, 2)[:, 0]
+    cols = [
+      _quantities(bicop(fam, float(tau)), pairs)
+      for tau in spec.tau_of_x(grid.x_axis)
+    ]
+    return {q: torch.stack([c[q] for c in cols], dim=1) for q in QUANTITIES}
 
   assert spec.tau is not None
-  cop = _bicop(fam, spec.tau)
-  uv = torch.column_stack([grid.u_flat, grid.v_flat]).numpy()
-  return {
-    "pdf": torch.from_numpy(cop.pdf(uv)),
-    "cdf": torch.from_numpy(cop.cdf(uv)),
-    "hfunc1": torch.from_numpy(cop.hfunc1(uv)),
-    "hfunc2": torch.from_numpy(cop.hfunc2(uv)),
-  }
+  return _quantities(bicop(fam, spec.tau), grid.uv)
 
 
 def sample(
@@ -257,15 +429,20 @@ def sample(
 
   Conditional: ``x`` is a deterministic ``linspace`` and each row is sampled by
   inverse Rosenblatt, ``v = hinv1([u, w])`` under the row's own ``tau(x_i)``.
-  Unconditional: ``Bicop.sample`` with no covariate (``x is None``).
+  Unconditional: ``Bicop.sample`` with no covariate (``x is None``). A shape
+  family is conditional and is sampled by :func:`_sample_shape`.
   """
+  _check_pair(family, scenario)
+  if family in SHAPE_FAMILIES:
+    return _sample_shape(SHAPE_FAMILIES[family], n, seed)
+
   fam = FAMILIES[family]
   spec = TAU_SCENARIOS[scenario]
   generator = torch.Generator().manual_seed(seed)
 
   if not spec.conditional:
     assert spec.tau is not None
-    cop = _bicop(fam, spec.tau)
+    cop = bicop(fam, spec.tau)
     seeds = torch.randint(1, 2**31 - 1, (3,), generator=generator).tolist()
     uv = torch.from_numpy(
       cop.sample(n, seeds=[int(s) for s in seeds]),
@@ -284,9 +461,52 @@ def sample(
   v = torch.empty(n, dtype=torch.float64)
   # ponytail: one Bicop per row because tau(x) is continuous and pyvinecopulib
   # does not vectorize hinv1 over row-specific parameters. O(n) Bicop builds is
-  # negligible next to the TabPFN fit; if it ever bites, group by rounded tau.
+  # negligible next to an estimator's fit; if it ever bites, group by rounded
+  # tau.
   for i in range(n):
-    cop = _bicop(fam, float(tau_x[i]))
+    cop = bicop(fam, float(tau_x[i]))
+    uv_host = torch.stack([u[i], w[i]]).reshape(1, 2).numpy()
+    v[i] = float(cop.hinv1(uv_host).item())
+  return u, v, x.reshape(-1, 1)
+
+
+def _pick(components: tuple[tuple[float, pv.Bicop], ...], r: float) -> pv.Bicop:
+  """The component whose interval of cumulative weight holds ``r``."""
+  total = 0.0
+  for weight, cop in components:
+    total += weight
+    if r < total:
+      return cop
+  # Rounding can leave the weights summing to just under one.
+  return components[-1][1]
+
+
+def _sample_shape(
+  family: ShapeFamily, n: int, seed: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+  """Draw ``n`` training points from a shape family, exactly.
+
+  ``x`` is the conditional ``linspace``. One generator, seeded with ``seed``,
+  draws three blocks of ``n`` uniforms in turn: ``u``; the inverse-Rosenblatt
+  noise ``w``; and ``r``, which picks row ``i``'s component as the first whose
+  cumulative weight at ``x_i`` exceeds ``r_i``, so component ``k`` with
+  probability ``w_k(x_i)``. Each component has uniform margins and ``r`` is
+  independent of ``u``, so ``v = hinv1([u, w])`` under the picked component
+  is a draw from the mixture. ``r`` is drawn for a one-component family too,
+  so every shape family lays its stream out the same way.
+  """
+  generator = torch.Generator().manual_seed(seed)
+  x = torch.linspace(X_MIN, X_MAX, n, dtype=torch.float64)
+  u = torch.rand(n, generator=generator, dtype=torch.float64).clamp(
+    _EPS, 1.0 - _EPS
+  )
+  w = torch.rand(n, generator=generator, dtype=torch.float64).clamp(
+    _EPS, 1.0 - _EPS
+  )
+  r = torch.rand(n, generator=generator, dtype=torch.float64)
+  v = torch.empty(n, dtype=torch.float64)
+  for i in range(n):
+    cop = _pick(family.components(float(x[i])), float(r[i]))
     uv_host = torch.stack([u[i], w[i]]).reshape(1, 2).numpy()
     v[i] = float(cop.hinv1(uv_host).item())
   return u, v, x.reshape(-1, 1)

@@ -5,16 +5,18 @@ from __future__ import annotations
 import pytest
 import torch
 from pyvinecopulib import RVineStructure
-from pyvinecopulib.core import ControlsLike, VinedistBase
+from pyvinecopulib.core import VinedistBase
 
+from npcc.core import (
+  ConditionalMargin,
+  FitControlsRosenblattVinecop,
+  QuantileTableConfig,
+  RosenblattVinecop,
+  RosenblattVinedist,
+  create_backend,
+)
 from npcc.core._placement import resolve_device
-from npcc.core.bicop import RosenblattBicop
-from npcc.core.controls import FitControlsRosenblattVinecop
-from npcc.core.margin import ConditionalMargin
-from npcc.core.margin_quantile_table import QuantileTableConfig
-from npcc.core.registry import create_backend
-from npcc.core.vinecop import RosenblattVinecop
-from npcc.core.vinedist import RosenblattVinedist
+from tests.conftest import NormalQuantileBackend, hermetic_backend
 
 
 def make_structure() -> RVineStructure:
@@ -36,7 +38,7 @@ def make_data() -> torch.Tensor:
 
 
 def make_controls(
-  backend: str = "uniform-native",
+  backend: str = "normal-quantile",
 ) -> FitControlsRosenblattVinecop:
   return FitControlsRosenblattVinecop(
     backend=backend,
@@ -70,9 +72,9 @@ def make_distribution(
 
 
 def fit_distribution(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
   *,
-  backend: str = "uniform-native",
+  backend: str = "normal-quantile",
   x: torch.Tensor | None = None,
 ) -> RosenblattVinedist:
   controls = make_controls(backend)
@@ -85,7 +87,7 @@ def test_rosenblatt_vinedist_subclasses_vinedist_base() -> None:
 
 
 def test_constructor_binds_fixed_parts(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   controls = make_controls()
   distribution = make_distribution(controls)
@@ -97,9 +99,9 @@ def test_constructor_binds_fixed_parts(
 
 
 def test_fit_fits_one_independent_margin_per_column(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
-  distribution = fit_distribution(register_uniform_backends)
+  distribution = fit_distribution(register_hermetic_backends)
 
   assert all(
     isinstance(margin, ConditionalMargin) and margin.is_fitted
@@ -109,30 +111,34 @@ def test_fit_fits_one_independent_margin_per_column(
 
 
 def test_fit_uses_one_backend_for_margins_and_pairs(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
-  distribution = fit_distribution(
-    register_uniform_backends,
-    backend="uniform-quantile",
-  )
+  """The configured backend reaches the margins and every pair, not the default.
+
+  Registered under a second name, so a pair that fell back to the controls'
+  default backend would be told apart from one that read the configured one.
+  """
+  with hermetic_backend("normal-quantile-configured"):
+    distribution = fit_distribution(
+      register_hermetic_backends, backend="normal-quantile-configured"
+    )
 
   for margin in distribution.margins:
-    assert isinstance(margin, ConditionalMargin)
-    assert margin.family_name == "_UniformQuantileBackend"
+    assert isinstance(margin, NormalQuantileBackend)
 
   vinecop = distribution.vinecop
   assert isinstance(vinecop, RosenblattVinecop)
   assert all(
-    pair.backend == "uniform-quantile"
+    pair.backend == "normal-quantile-configured"
     for row in vinecop.pair_copulas
     for pair in row
   )
 
 
 def test_marginal_cdf_is_probability_integral_transform(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
-  distribution = fit_distribution(register_uniform_backends)
+  distribution = fit_distribution(register_hermetic_backends)
   y = torch.tensor(
     [
       [-1.0, 0.0, 1.0],
@@ -142,15 +148,15 @@ def test_marginal_cdf_is_probability_integral_transform(
   )
 
   result = distribution.marginal_cdf(y)
-  expected = (y + 2.0) / 4.0
+  expected = torch.distributions.Normal(0.0, 1.0).cdf(y)
 
   torch.testing.assert_close(result, expected)
 
 
 def test_joint_pdf_matches_sklar_factorization(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
-  distribution = fit_distribution(register_uniform_backends)
+  distribution = fit_distribution(register_hermetic_backends)
   y = torch.tensor(
     [
       [-0.5, 0.0, 0.5],
@@ -161,13 +167,14 @@ def test_joint_pdf_matches_sklar_factorization(
 
   u = distribution.marginal_cdf(y)
   copula_density = distribution.vinecop.pdf(u)
-  expected = copula_density * 0.25**3
+  margin_density = torch.distributions.Normal(0.0, 1.0).log_prob(y).exp()
+  expected = copula_density * margin_density.prod(dim=1)
 
   torch.testing.assert_close(distribution.pdf(y), expected)
 
 
 def test_conditional_fit_and_pdf_return_tensors(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   generator = torch.Generator(device="cpu")
   generator.manual_seed(43)
@@ -176,7 +183,7 @@ def test_conditional_fit_and_pdf_return_tensors(
     generator=generator,
     dtype=torch.float64,
   )
-  distribution = fit_distribution(register_uniform_backends, x=x)
+  distribution = fit_distribution(register_hermetic_backends, x=x)
 
   result = distribution.pdf(make_data()[:5], x=x[:5])
 
@@ -186,9 +193,9 @@ def test_conditional_fit_and_pdf_return_tensors(
 
 
 def test_rosenblatt_round_trip(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
-  distribution = fit_distribution(register_uniform_backends)
+  distribution = fit_distribution(register_hermetic_backends)
   y = make_data()[:5]
 
   transformed = distribution.rosenblatt(y)
@@ -198,9 +205,9 @@ def test_rosenblatt_round_trip(
 
 
 def test_unconditional_sample_returns_original_scale_tensor(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
-  distribution = fit_distribution(register_uniform_backends)
+  distribution = fit_distribution(register_hermetic_backends)
 
   first = distribution.sample(8, seeds=[42])
   second = distribution.sample(8, seeds=[42])
@@ -213,7 +220,7 @@ def test_unconditional_sample_returns_original_scale_tensor(
 
 
 def test_fit_places_foreign_data_on_the_controls_device(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   """Anything ``torch.as_tensor`` accepts is accepted, and placed.
 
@@ -241,7 +248,7 @@ def test_fit_places_foreign_data_on_the_controls_device(
 
 
 def test_fit_rejects_dimension_mismatch(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   controls = make_controls()
   distribution = make_distribution(controls)
@@ -252,7 +259,7 @@ def test_fit_rejects_dimension_mismatch(
 
 
 def test_fit_rejects_covariate_row_mismatch(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   controls = make_controls()
   distribution = make_distribution(controls)
@@ -264,7 +271,7 @@ def test_fit_rejects_covariate_row_mismatch(
 
 
 def test_fit_rejects_weights_carried_in_the_controls(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   """A vine that cannot weight must say so, or it returns the unweighted fit.
 
@@ -279,14 +286,14 @@ def test_fit_rejects_weights_carried_in_the_controls(
     weights = torch.ones(30, dtype=torch.float64)
 
     def to_dict(self) -> dict[str, object]:
-      return {"backend": "uniform-native", "device": "cpu"}
+      return {"backend": "normal-quantile", "device": "cpu"}
 
   with pytest.raises(TypeError, match="honors no observation weights"):
     distribution.fit(make_data(), WeightedControls())
 
 
 def test_conditional_sample_returns_tensor(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   generator = torch.Generator(device="cpu")
   generator.manual_seed(43)
@@ -295,7 +302,7 @@ def test_conditional_sample_returns_tensor(
     generator=generator,
     dtype=torch.float64,
   )
-  distribution = fit_distribution(register_uniform_backends, x=x)
+  distribution = fit_distribution(register_hermetic_backends, x=x)
 
   result = distribution.sample(5, x=x[:5], seeds=[42])
 
@@ -304,20 +311,13 @@ def test_conditional_sample_returns_tensor(
   assert result.device.type == "cpu"
 
 
-def test_vinedist_types_are_publicly_exported() -> None:
-  import npcc
-
-  assert npcc.ConditionalMargin is ConditionalMargin
-  assert npcc.RosenblattVinedist is RosenblattVinedist
-
-
 class _RecordingMargin(ConditionalMargin):
   """A margin that records the column it was fitted on, and nothing else.
 
-  The hermetic uniform backends ignore their data, so no fitted quantity of
-  theirs varies by column -- which is exactly what a sharing bug would look
-  like. This records the responses instead, so "each margin saw its own
-  column" is checkable directly.
+  The hermetic normal backend ignores its data, so no fitted quantity of its
+  varies by column -- which is exactly what a sharing bug would look like. This
+  records the responses instead, so "each margin saw its own column" is
+  checkable directly.
   """
 
   def __init__(self) -> None:
@@ -327,65 +327,14 @@ class _RecordingMargin(ConditionalMargin):
   def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
     self.seen = z.clone()
 
-  def pdf(
-    self,
-    y: torch.Tensor,
-    /,
-    *,
-    x: torch.Tensor | None = None,
-    batch_size: int | None = None,
+  def _predict_quantiles(
+    self, x: torch.Tensor, alphas: torch.Tensor
   ) -> torch.Tensor:
-    del x, batch_size
-    return torch.full_like(y.reshape(-1), 0.5)
-
-  def cdf(
-    self,
-    y: torch.Tensor,
-    /,
-    *,
-    x: torch.Tensor | None = None,
-    batch_size: int | None = None,
-  ) -> torch.Tensor:
-    del x, batch_size
-    return torch.clamp(0.5 * (y.reshape(-1) + 1.0), 0.01, 0.99)
-
-  def icdf(
-    self,
-    p: torch.Tensor,
-    /,
-    *,
-    x: torch.Tensor | None = None,
-    batch_size: int | None = None,
-  ) -> torch.Tensor:
-    del x, batch_size
-    return 2.0 * p.reshape(-1) - 1.0
-
-  def pdf_grid(
-    self,
-    y_grid: torch.Tensor,
-    /,
-    *,
-    x: torch.Tensor,
-    batch_size: int | None = None,
-  ) -> torch.Tensor:
-    del batch_size
-    return torch.full((x.shape[0], y_grid.reshape(-1).shape[0]), 0.5)
-
-  def cdf_grid(
-    self,
-    y_grid: torch.Tensor,
-    /,
-    *,
-    x: torch.Tensor,
-    batch_size: int | None = None,
-  ) -> torch.Tensor:
-    del batch_size
-    row = self.cdf(y_grid.reshape(-1))
-    return row.unsqueeze(0).expand(x.shape[0], -1).clone()
+    return (2.0 * alphas - 1.0).unsqueeze(0).expand(x.shape[0], -1).clone()
 
 
 def test_one_unfitted_margin_is_not_shared_across_variables(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
 ) -> None:
   """One margin standing for every variable is copied, not aliased.
 
@@ -395,7 +344,7 @@ def test_one_unfitted_margin_is_not_shared_across_variables(
   ``VinedistBase._bind_dist`` now ``unshare``s an unfitted one, and
   ``_reestimate`` does the same before refitting per column.
   """
-  del register_uniform_backends
+  del register_hermetic_backends
 
   controls = make_controls()
   structure = make_structure()
@@ -421,8 +370,8 @@ def test_one_unfitted_margin_is_not_shared_across_variables(
 
 
 def test_fit_threads_covariates_through_to_every_pair(
-  register_uniform_backends: None,
-  monkeypatch: pytest.MonkeyPatch,
+  register_hermetic_backends: None,
+  pair_fit_widths: list[int | None],
 ) -> None:
   """A conditional distribution fit must reach the copula half, not just the margins.
 
@@ -446,53 +395,19 @@ def test_fit_threads_covariates_through_to_every_pair(
     dtype=torch.float64,
   )
 
-  widths: list[int | None] = []
-  original_fit = RosenblattBicop.fit
-
-  def record_fit(
-    self: RosenblattBicop,
-    uv: torch.Tensor,
-    /,
-    controls: ControlsLike | None = None,
-    *,
-    var_types: list[str] | None = None,
-    x: torch.Tensor | None = None,
-  ) -> RosenblattBicop:
-    widths.append(None if x is None else int(x.shape[1]))
-    return original_fit(self, uv, controls, var_types=var_types, x=x)
-
-  monkeypatch.setattr(RosenblattBicop, "fit", record_fit)
-
   distribution.fit(data, controls, x=x)
 
-  assert widths == [2, 2, 3]
+  assert pair_fit_widths == [2, 2, 3]
 
 
 def test_fit_without_covariates_hands_the_pairs_none(
-  register_uniform_backends: None,
-  monkeypatch: pytest.MonkeyPatch,
+  register_hermetic_backends: None,
+  pair_fit_widths: list[int | None],
 ) -> None:
   """The counterpart: an unconditional fit must not fabricate a covariate block."""
   controls = make_controls()
   distribution = make_distribution(controls)
 
-  widths: list[int | None] = []
-  original_fit = RosenblattBicop.fit
-
-  def record_fit(
-    self: RosenblattBicop,
-    uv: torch.Tensor,
-    /,
-    controls: ControlsLike | None = None,
-    *,
-    var_types: list[str] | None = None,
-    x: torch.Tensor | None = None,
-  ) -> RosenblattBicop:
-    widths.append(None if x is None else int(x.shape[1]))
-    return original_fit(self, uv, controls, var_types=var_types, x=x)
-
-  monkeypatch.setattr(RosenblattBicop, "fit", record_fit)
-
   distribution.fit(make_data(), controls)
 
-  assert widths == [None, None, 1]
+  assert pair_fit_widths == [None, None, 1]

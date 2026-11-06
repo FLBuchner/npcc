@@ -59,9 +59,12 @@ $$f_Y(y \mid w) = f_Z(T(y) \mid w) \left|\tfrac{dT(y)}{dy}\right|.$$
 
 Supported transforms: `transform="logit"` (default,
 $\tfrac{1}{y(1-y)}$), `transform="probit"`
-($\tfrac{1}{\phi(\Phi^{-1}(y))}$), and `transform="identity"`.  The
-transform machinery lives on the backend-neutral base class, so every
-backend gets it for free.
+($\tfrac{1}{\phi(\Phi^{-1}(y))}$), `transform="identity"`, and
+`transform="log"` ($\tfrac{1}{y}$) for a nonnegative original-scale
+margin.  The transform fixes the margin's support -- $(0, 1)$, the real
+line, or $[0, \infty)$ -- and a margin accepts a declared `support` only
+when it is that one.  The transform machinery lives on the backend-neutral
+base class, so every backend gets it for free.
 
 ---
 
@@ -72,13 +75,12 @@ name:
 
 | `backend=`             | Underlying model                          | Extra to install   |
 | ---------------------- | ----------------------------------------- | ------------------ |
-| `"tabpfn-criterion"`   | TabPFN native binned head (default)       | — (core)           |
-| `"tabpfn-quantiles"`   | TabPFN quantile output, inverted          | — (core)           |
+| `"tabpfn-quantiles"`   | TabPFN quantile output (default)          | — (core)           |
 | `"tabpfn-finetune"`    | TabPFN fine-tuned on a scoring rule       | — (core)           |
 | `"ngboost"`            | NGBoost parametric (analytic)             | `npcc[ngboost]`    |
-| `"gbm"`                | scikit-learn quantile GBM                 | `npcc[gbm]`        |
-| `"catboost"`           | CatBoost MultiQuantile                    | `npcc[catboost]`   |
-| `"xgb-quantile"`       | XGBoost quantile trees (see note)         | `npcc[xgboost]`    |
+| `"lightgbm"`           | LightGBM quantile boosters, one per level | `npcc[lightgbm]`   |
+| `"xgboost"`            | XGBoost multi-level quantile model (CPU)  | `npcc[xgboost]`    |
+| `"catboost"`           | CatBoost MultiQuantile model (CPU)        | `npcc[catboost]`   |
 | `"pytabkit-realmlp"`   | PyTabKit RealMLP                          | `npcc[pytabkit]`   |
 | `"pytabkit-tabm"`      | PyTabKit TabM                             | `npcc[pytabkit]`   |
 | `"tabicl"`             | TabICL foundation model                   | `npcc[tabicl]`     |
@@ -87,39 +89,41 @@ name:
 
 `available_backends()` lists them, `documented_n_range(name)` gives a
 backend's supported sample-size range, and `register_backend(name, factory)`
-adds your own.  `npcc[backends]` installs every non-TabPFN extra at once.
+adds your own — with `kwarg_types={"depth": int, ...}` if its
+`backend_kwargs` should be checked when a study config loads.
+`npcc[backends]` installs every non-TabPFN extra at once.
 
-`"xgb-quantile"` is registered but a poor choice on an unbounded support:
-XGBoost quantile trees cannot extrapolate, so the predicted conditional
-support collapses to roughly the inner `[0.24, 0.96]` of `(0, 1)` and the
-quantile-to-density inversion returns exactly zero outside it.  See the note
-in `npcc/core/registry.py`.
+`"lightgbm"`, `"xgboost"` and `"catboost"` are the gradient-boosting backends,
+all on the CPU. LightGBM fits the 21 levels of a quantile table concurrently,
+in well under a second per Rosenblatt direction at the study's sample sizes;
+XGBoost fits them in one model in about a second (its CUDA path fails on
+virtualized GPUs), and CatBoost in one shared ensemble in a fraction of one.
+All three default to shallow trees and a short schedule, which did better
+than each library's own deeper defaults at these sample sizes.
 
-### Two base classes
+### One base class
 
-Every backend implements the abstract
-`ConditionalMargin` interface — `fit(y, x=w)`, `pdf(y, x=w)`,
-`cdf(y, x=w)`, `icdf(alphas, x=w)`, plus the Cartesian-grid fast paths
-`pdf_grid(y_grid, x=w)` / `cdf_grid(y_grid, x=w)`. There are two ways to
-implement it:
+Every backend subclasses `ConditionalMargin`, whose interface is
+`fit(y, x=w)`, `pdf(y, x=w)`, `cdf(y, x=w)`, `icdf(alphas, x=w)`, plus the
+Cartesian-grid fast paths `pdf_grid(y_grid, x=w)` / `cdf_grid(y_grid, x=w)`,
+and implements two hooks: `_fit_model(w, z)` and
+`_predict_quantiles(w, alphas) -> (n, K)`, a table of conditional quantiles.
+Everything else — the chunked, memory-safe table prediction, the monotone
+re-sort, and the predict-once-per-row pdf/cdf/icdf/grid read-out — is
+inherited, whether the backend is a foundation model, a boosted ensemble or
+a parametric family (`ngboost` reads its SciPy distribution's quantiles).
 
-- **Quantile-table backends** subclass `QuantileTableDistribution1D` and
-  implement a single hook, `_predict_quantiles(w, alphas) -> (n, K)`.
-  Everything else — the chunked, memory-safe quantile-table prediction,
-  the monotone re-sort, and the predict-once-per-row pdf/cdf/icdf/grid
-  inversion — is inherited.  This is the universal fast path used by
-  `tabpfn-quantiles`, `gbm`, and `tabicl`.  Recovery details: pdf via
-  $f(y \mid w) = 1 / Q'(\alpha)$ at $\alpha = F(y \mid w)$; cdf/icdf by
-  linear interpolation in the sorted quantile table; $Q'$ floored to a
-  positive constant for stability.
-
-- **Native-evaluation backends** subclass `ConditionalMargin`
-  directly and evaluate the predictive distribution at arbitrary points.
-  `tabpfn-criterion` reads TabPFN's `criterion` head
-  (`predict(W, output_type="full")` → logits + `pdf`/`cdf`/`icdf`); it is
-  faster than, and (currently) as accurate as, the quantile read-out —
-  hence the **default**.  `ngboost` uses the analytic SciPy frozen
-  distribution (`pred_dist(W).dist`).
+Recovery details: the levels are a normal grid, $\alpha_k = \Phi(t_k)$ with
+$t_k$ equally spaced on $[-3.25, 3.25]$ (pyvinecopulib's grid for
+nonparametric pair copulas, on the probability axis), and $Q$ is
+interpolated linearly in $t$, so $F(z) = \Phi(t(z))$,
+$f(z) = \phi(t(z)) / Q'(t)$ and $F^{-1}(p) = Q(\Phi^{-1}(p))$ are
+closed-form and mutually consistent. The slopes $Q'(t)$ are averaged over a window of
+`QuantileTableConfig.smoothing` normal-score units and floored, which
+absorbs crossed and tied quantiles.  The $\Phi(-3.25)$ of mass beyond each
+end of the table is spread uniformly up to a finite bound of the support, or
+into an exponential tail toward an infinite one, so the density is positive
+across the whole support.
 
 ### Speed
 
@@ -161,16 +165,15 @@ leaves this class writes, so every knob is a setting.
 | `tau(x_row=None, *, n=1000, seeds=None)` | Kendall's $\tau(x)$ via [pyvinecopulib](https://github.com/vinecopulib/pyvinecopulib)'s recipe: `ghalton(n, 2)` + inverse-Rosenblatt + `wdm`. |
 | `plot(plot_type="surface", margin_type="unif", xylim=None, grid_size=None, *, x=None)` | Contour or surface plot, inherited from `BicopBase`. |
 
-`npcc.__all__` carries 23 names, and `npcc.core` re-exports all but the two
-concrete TabPFN backend leaves — either import path works.  Briefly: the four
+`npcc.__all__` carries 21 names, and `npcc.core` re-exports all but the
+concrete TabPFN backend leaf — either import path works.  Briefly: the four
 estimators (`RosenblattBicop`, `RosenblattVinecop`, `RosenblattVinedist`,
 `ConditionalMargin`), the fit controls (`FitControlsRosenblattBicop`,
-`FitControlsRosenblattVinecop`, `Transform`), the quantile-table layer
-(`QuantileTableConfig`, `QuantileTableDistribution1D`), the registry
-(`BackendSpec`, `available_backends`, `create_backend`, `documented_n_range`,
-`register_backend`, `validate_backend_kwargs`), the `TabPFNCriterionBackend` /
-`TabPFNQuantileBackend` leaves, and a six-member error taxonomy rooted at
-`NpccError`.
+`FitControlsRosenblattVinecop`, `Transform`), the quantile-table
+configuration (`QuantileTableConfig`), the registry (`BackendSpec`,
+`available_backends`, `create_backend`, `documented_n_range`,
+`register_backend`, `validate_backend_kwargs`), the `TabPFNQuantileBackend`
+leaf, and a six-member error taxonomy rooted at `NpccError`.
 
 ### Quick start
 
@@ -196,7 +199,7 @@ clayton = pv.Bicop(
 )
 u = torch.as_tensor(clayton.sample(n=1000, seeds=[2, 2, 4]))
 
-# Fit the Rosenblatt copula (default backend: "tabpfn-criterion")
+# Fit the Rosenblatt copula (default backend: "tabpfn-quantiles")
 model = RosenblattBicop().fit(u)
 
 # Pointwise density
@@ -236,12 +239,14 @@ model = RosenblattBicop(controls)
 RosenblattBicop(FitControlsRosenblattBicop(
     backend="ngboost", backend_kwargs={"n_estimators": 500},
 ))
-RosenblattBicop(FitControlsRosenblattBicop(backend="gbm", backend_kwargs={"max_depth": 3}))
+RosenblattBicop(FitControlsRosenblattBicop(
+    backend="lightgbm", backend_kwargs={"n_estimators": 200},
+))
 
 # To pin the TabPFN model version:
 from tabpfn.constants import ModelVersion
 RosenblattBicop(FitControlsRosenblattBicop(
-    backend="tabpfn-criterion",
+    backend="tabpfn-quantiles",
     backend_kwargs={"model_version": ModelVersion.V3},
 ))
 ```
@@ -308,7 +313,7 @@ x_train = torch.randn((500, 2), generator=generator, dtype=torch.float64)
 
 # The order and truncation level are fixed by the supplied structure.
 structure = pv.RVineStructure.from_order([1, 2, 3])
-controls = FitControlsRosenblattVinecop(backend="tabpfn-criterion", device="cpu")
+controls = FitControlsRosenblattVinecop(backend="tabpfn-quantiles", device="cpu")
 
 vine = RosenblattVinecop(None, structure, device=controls.device)
 vine.fit(u_train, controls, x=x_train)
@@ -383,7 +388,7 @@ x_train = torch.randn((500, 2), generator=generator, dtype=torch.float64)
 structure = pv.RVineStructure.from_order([1, 2, 3])
 table_config = QuantileTableConfig()
 controls = FitControlsRosenblattVinecop(
-   backend="tabpfn-criterion",
+   backend="tabpfn-quantiles",
    quantile_table_config=table_config,
    device="cpu",
 )
@@ -414,9 +419,10 @@ samples = dist.sample(5, x=x_query, seeds=[42])
 One `FitControlsRosenblattVinecop` configures the backend family used by the
 margins and pair copulas.
 
-The initial implementation supports continuous real-valued margins only.
-Every margin uses the identity target transform, while pair copulas default to
-the logit transform on the unit interval. A fixed `RVineStructure` is required.
+The initial implementation supports continuous margins only. The example's
+margins use the identity target transform, and a nonnegative variable takes
+`transform="log"` instead; pair copulas default to the logit transform on the
+unit interval. A fixed `RVineStructure` is required.
 Custom margins, observation weights, automatic structure selection, and
 variable names are not currently supported.
 
@@ -441,7 +447,7 @@ executes them under pytest so a stale demo fails somewhere.
 uv sync --extra cpu
 
 # Optionally add non-TabPFN backends:
-uv sync --extra cpu --extra ngboost --extra gbm --extra tabicl
+uv sync --extra cpu --extra ngboost --extra lightgbm --extra tabicl
 ```
 
 The declared dependencies are `pyvinecopulib>=1.0.0`, `tabpfn>=8.0` and

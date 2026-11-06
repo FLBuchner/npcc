@@ -79,8 +79,8 @@ Four rules, pinned by `tests/test_import_surface.py`:
 3. **`npcc.experiments` is above `npcc.core`** and the edge points one way.
    Nothing under `core` may name it.
 4. **The two public surfaces agree.** `npcc.core.__all__` is a subset of
-   `npcc.__all__`; the difference is exactly the two concrete TabPFN backend
-   leaves, which live in `npcc.core.backends`.
+   `npcc.__all__`; the difference is exactly the concrete TabPFN backend
+   leaf, `TabPFNQuantileBackend`, which lives in `npcc.core.backends`.
 
 `matplotlib`, `pandas` and `sklearn` are **not** treated as optional in that
 test, because each is also a transitive hard dependency — `matplotlib` of
@@ -91,8 +91,7 @@ would pin a fact about someone else's dependency tree.
 
 - **An unprefixed module is an import path.** It holds one public thing, or a
   small coherent set of them: `bicop.py`, `vinecop.py`, `vinedist.py`,
-  `margin.py`, `margin_quantile_table.py`, `controls.py`, `errors.py`,
-  `registry.py`.
+  `margin.py`, `controls.py`, `errors.py`, `registry.py`.
 - **An underscore-prefixed module is internal, and is named for what it
   does** — `_placement.py`, `_interp.py`, `_trim.py` — following
   pyvinecopulib's `_<level>_<thing>` scheme.
@@ -194,16 +193,15 @@ Three separable steps on every input:
 |---|---|---|
 | placement | the `_prep` hook | onto this estimator's dtype (`float64`) and device |
 | layout | the `_layout` hook | which shapes are admissible |
-| domain | `check_uv`, called from the `_prep_args` override | copula arguments into the open unit interval |
+| domain | `check_open_unit`, called from the `_prep_args` override | copula arguments into the open unit interval |
 
 All three are hooks here. Upstream composes the first two and then applies its
 own module-level `trim` inside `_prep_args`; `RosenblattBicop` **overrides**
-`_prep_args` so `check_uv` runs in `trim`'s place. That is the single site
-every evaluation member reaches, since `BicopBase` dispatches `pdf`, `cdf`,
-`hfunc1/2` and `hinv1/2` through `_atoms`, which calls it first.
-`_prepare_grid_inputs` rejects-then-clamps inline rather than calling
-`check_uv`, because `check_uv` requires `u` and `v` to have equal shapes and a
-grid pair is a cross product.
+`_prep_args` so `check_open_unit` runs in `trim`'s place. That is the single
+site every evaluation member reaches, since `BicopBase` dispatches `pdf`,
+`cdf`, `hfunc1/2` and `hinv1/2` through `_atoms`, which calls it first. The
+grid methods, which take two axes rather than a pair argument, call it on each
+axis.
 
 Three rules that are easy to get wrong:
 
@@ -226,7 +224,7 @@ Three rules that are easy to get wrong:
   `torch.asarray`, whose `requires_grad` default changed — silently `False`
   on torch 2.11, `obj.requires_grad` from 2.13.
 
-`check_uv` **departs** from pyvinecopulib's `trim` in both halves, and the
+`check_open_unit` **departs** from pyvinecopulib's `trim` in both halves, and the
 second half is what makes the `_prep_args` override mandatory rather than
 stylistic.
 
@@ -252,11 +250,16 @@ behavior and not a decision this file has made.
 
 **One NumPy boundary.** Everything that hands a tensor to a third-party model
 goes through `pyvinecopulib.core.extend.to_numpy`, which detaches and transfers and
-adopts no dtype. Two kinds of site stay outside it, and both should: five
-transfers in the CatBoost and Nori adapters *name* a dtype while moving
-(`to_numpy` would hand the model float64 where it wants float32), and nine
-hand off to a CPU torch tensor rather than to NumPy, because that is what the
-third-party call takes.
+adopts no dtype. Two kinds of site stay outside it, and both should: three
+transfers in the Nori adapter *name* a dtype while moving (`to_numpy` would
+hand the model float64 where it wants float32), and three in the TabPFN
+adapter hand off to a CPU torch tensor rather than to NumPy, because that is
+what the third-party call takes.
+
+The way back is one function too: an adapter reads its model's quantiles
+through `ConditionalMargin._quantile_rows`, and **states** the library's
+orientation with `levels_first` rather than letting the shape decide. A chunk
+with as many rows as there are levels is square, and reads either way.
 
 ## Docstrings and prose
 
@@ -285,7 +288,7 @@ third-party call takes.
 - **Every test's docstring states the defect it exists to prevent.** A test
   that only restates the code's happy path has no reason to exist.
 - Tests run in parallel (`-n auto`); no shared mutable state. The
-  `register_uniform_backends` fixture pops what it registered on teardown.
+  `register_hermetic_backends` fixture pops what it registered on teardown.
 - **A test that needs a GPU carries `@pytest.mark.cuda` and a `skipif`, and
   the mark goes on the parametrize *param*, not inside the body** — a mark
   applied from the body lands after collection and does neither. `-m "not
@@ -297,9 +300,10 @@ third-party call takes.
 - Tests import from the public namespaces, `npcc` or `npcc.core`, except where
   a test's subject is an internal module.
 - **The suite is hermetic by default.** TabPFN is faked via a monkeypatched
-  regressor, and two closed-form `Uniform(-2, 2)` backends exercise the whole
-  registry and vine cascade with no third-party model. A test that reaches a
-  real model skips when its dependency or credentials are absent.
+  regressor, and a closed-form `Normal(0, 1)` quantile backend, which the
+  reconstruction reproduces exactly, exercises the whole registry and vine
+  cascade with no third-party model. A test that reaches a real model skips
+  when its dependency or credentials are absent.
 - A test that passes a wrong type on purpose says so in a comment and names
   the rule it suppresses.
 - **Fix what you find.** A defect uncovered along the way is fixed, not
@@ -324,7 +328,7 @@ third-party call takes.
 | where a new argument goes in a signature | *Estimator API shape* |
 | what to do with a setting you cannot honor | *Estimator API shape* |
 | whether to place, check, or clamp an input | *Placement, layout, domain* |
-| how to get a tensor to a third-party model | *Placement, layout, domain* |
+| how to get a tensor to a third-party model, or its quantiles back | *Placement, layout, domain* |
 | whether an `Any` is allowed | *Code style* |
 | how to word an error | *Docstrings and prose* |
 | whether a comment should exist | *Code style* |
