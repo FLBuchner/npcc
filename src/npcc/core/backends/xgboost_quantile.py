@@ -19,7 +19,7 @@ This backend requires the ``xgboost`` optional dependency.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 
 import torch
 from pyvinecopulib.core.extend import to_numpy
@@ -82,10 +82,6 @@ class XGBoostQuantileBackend(ConditionalMargin):
   ValueError
       If ``xgb_params`` sets a parameter this backend controls.
   """
-
-  #: Every level grows its own trees, so the table is smoothed as much as the
-  #: LightGBM backend's.
-  default_smoothing: ClassVar[float] = 2.0
 
   model_: XGBRegressor | None
 

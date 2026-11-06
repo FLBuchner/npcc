@@ -8,8 +8,8 @@ import pytest
 import torch
 
 from npcc.core import QuantileTableConfig
-from npcc.core._quantile_table import QuantileTable, smoothing_window
-from npcc.core._transform import resolve_transform
+from npcc.core._quantile_table import QuantileTable, smoother
+from npcc.core._transform import normal_cdf, resolve_transform
 from tests.conftest import TAIL_MASS, NormalQuantileBackend
 
 LIMIT = QuantileTableConfig().normal_limit
@@ -191,18 +191,80 @@ def test_crossed_rows_are_sorted() -> None:
   )
 
 
-@pytest.mark.parametrize("smoothing", [0.0, 1.0, 2.0, 4.0])
+@pytest.mark.parametrize("smoothing", [0.0, 0.65, 1.0, 2.0, 4.0])
 def test_smoothing_leaves_a_normal_table_unchanged(smoothing: float) -> None:
   """A straight line in normal scores has nothing to smooth.
 
-  So the hermetic normal backends are exact whatever a backend's default
-  smoothing is, and a smoother that moved such a table would be biased.
+  So the hermetic normal backends are exact whatever the smoothing is, and a
+  smoother that moved such a table would be biased.
   """
   q = (0.5 + 1.7 * SCORES).unsqueeze(0)
 
   table = make_table(q, "identity", smoothing=smoothing)
 
   torch.testing.assert_close(table.knots, q)
+
+
+def test_smoother_keeps_the_middle_and_smooths_the_ends() -> None:
+  """A level keeps more of its own estimate the more precise that estimate is.
+
+  The weights are the precision of a sample quantile, highest at the median.
+  Inverted, they would smooth the peak of the density hardest and leave the
+  noisiest levels -- the outermost, which a per-level model estimates from a
+  handful of observations -- almost as fitted.
+  """
+  own = smoother(21, LIMIT, 0.65).diagonal()
+
+  assert bool((torch.diff(own[:11]) > 0).all())
+  assert own[10] > 3 * own[0]
+  torch.testing.assert_close(own, own.flip(0))
+
+
+def clayton_conditional(
+  theta: float, u: float
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+  """Exact ``V | U = u`` under Clayton: its quantiles and its density.
+
+  Returns the logit-scale quantiles at the default levels, an evaluation grid
+  on ``v`` uniform in its normal score, the quadrature weights of that grid,
+  and the true conditional density on it.
+  """
+  alpha = normal_cdf(SCORES)
+  v_q = (
+    (alpha * u ** (theta + 1)) ** (-theta / (1 + theta)) + 1 - u**-theta
+  ) ** (-1 / theta)
+  s = torch.linspace(-8.0, 8.0, 40001, dtype=torch.float64)
+  v = normal_cdf(s)
+  keep = (v > 0) & (v < 1)
+  s, v = s[keep], v[keep]
+  weight = torch.exp(-0.5 * s * s) / math.sqrt(2 * math.pi) * (16.0 / 40000)
+  # A float to a float power is typed Any; the result is a tensor.
+  density: torch.Tensor = (
+    (1 + theta)
+    * (u * v) ** (-theta - 1)
+    * (u**-theta + v**-theta - 1) ** (-2 - 1 / theta)
+  )
+  return torch.logit(v_q).unsqueeze(0), v.unsqueeze(0), weight, density
+
+
+@pytest.mark.parametrize(("smoothing", "iae"), [(0.0, 0.0283), (0.65, 0.1162)])
+def test_bias_on_an_exact_table_is_the_one_the_ab_measured(
+  smoothing: float, iae: float
+) -> None:
+  """The smoother keeps the bias it had when the A/B chose it.
+
+  On the exact conditional quantiles of a Clayton copula at tau = 0.7, the
+  default bandwidth roughly quadruples the unsmoothed table's error. It was
+  adopted anyway because it removes far more of a per-level tree backend's
+  noise and leaves TabPFN's error unchanged (``scripts/qt_ab``); a change to
+  the smoother that moved these numbers would void that comparison.
+  """
+  q, v, weight, truth = clayton_conditional(theta=2 * 0.7 / 0.3, u=0.5)
+  table = make_table(q, "logit", smoothing=smoothing)
+
+  error = ((table.pdf(v)[0] - truth).abs() * weight).sum()
+
+  assert float(error) == pytest.approx(iae, abs=5e-4)
 
 
 def test_exponential_tail_meets_a_straight_table_continuously() -> None:
@@ -225,21 +287,6 @@ def test_exponential_tail_meets_a_straight_table_continuously() -> None:
   )
 
 
-@pytest.mark.parametrize(
-  ("smoothing", "cells"), [(0.0, 1), (0.3, 1), (1.0, 3), (2.0, 7)]
-)
-def test_smoothing_window_is_measured_in_normal_scores(
-  smoothing: float, cells: int
-) -> None:
-  """The window is a width on the score axis, not a number of levels.
-
-  So a given ``smoothing`` means the same thing at any ``n_quantiles``.
-  """
-  step = 2 * LIMIT / 20
-
-  assert smoothing_window(smoothing, step) == cells
-
-
 def test_values_must_have_one_row_per_table_row() -> None:
   """A query with the wrong row count is refused rather than broadcast."""
   table = make_table(noisy_table("logit"), "logit")
@@ -248,20 +295,45 @@ def test_values_must_have_one_row_per_table_row() -> None:
     table.pdf(torch.full((2, 4), 0.5, dtype=torch.float64))
 
 
-def test_margin_uses_its_backends_smoothing_unless_configured() -> None:
-  """``smoothing=None`` defers to the backend; a number overrides it.
+def test_margin_reads_its_table_with_the_configured_smoothing() -> None:
+  """The margin smooths with the configuration's bandwidth, nothing else.
 
-  The per-backend default is what lets a per-level tree backend smooth more
-  than a joint model without every caller having to know which is which.
+  Every backend shares one read-out; a margin that dropped or replaced the
+  configured bandwidth would read its table differently from the others.
   """
-  default = NormalQuantileBackend(transform="identity")
-  configured = NormalQuantileBackend(
-    transform="identity",
-    quantile_table_config=QuantileTableConfig(smoothing=0.0),
-  )
+  noisy = noisy_table("identity", rows=1)
 
-  assert default.smoothing == NormalQuantileBackend.default_smoothing
-  assert configured.smoothing == 0.0
+  class Noisy(NormalQuantileBackend):
+    def _predict_quantiles(
+      self, x: torch.Tensor, alphas: torch.Tensor
+    ) -> torch.Tensor:
+      return noisy.expand(x.shape[0], -1).clone()
+
+  x = torch.zeros((1, 1), dtype=torch.float64)
+  for smoothing in (0.0, QuantileTableConfig().smoothing):
+    margin = Noisy(
+      transform="identity",
+      quantile_table_config=QuantileTableConfig(smoothing=smoothing),
+    )
+    margin._fitted = True
+
+    knots = margin._predict_quantile_table(x).knots
+
+    expected = QuantileTable(
+      noisy,
+      limit=LIMIT,
+      transform=resolve_transform("identity"),
+      eps=margin.eps,
+      smoothing=smoothing,
+      min_slope=0.2,
+    ).knots
+    torch.testing.assert_close(knots, expected, rtol=0.0, atol=0.0)
+
+
+def test_negative_smoothing_is_refused() -> None:
+  """A negative bandwidth is refused rather than read as no smoothing."""
+  with pytest.raises(ValueError, match="smoothing must be nonnegative"):
+    QuantileTableConfig(smoothing=-0.1)
 
 
 def test_levels_are_the_normal_grid() -> None:
