@@ -126,7 +126,20 @@ the command behind every file in `results/e3_vdc/`.
 - Summary: `uv run --no-sync python scripts/paper/e4/summarize.py
   results/e4_coherence`, which reads the parts in both folders.
 
+## E6 — clean timings
+
+With nothing else running on the machine, `uv run --no-sync python
+scripts/paper/e6/timing.py bivariate --out results/e6_timing` times each
+Rosenblatt direction's fit, density and h-function, and the pair's density, on
+E1's evaluation grid, for the six main-text estimators at n in {200, 500,
+1000, 2000}, 3 reps each, after one untimed warm-up per estimator. `...
+timing.py vine --out results/e6_timing` takes the vine runner's per-arm fit
+and evaluation times at d in {3, 5}, n in {500, 1000}, after one untimed
+cell. Every row records the device, where the estimator computes, the thread
+settings and the commit. The projection cost per distinct conditioning value
+(E4, `--cost-only`) runs in the same idle window.
+
 ## Still to be filled in
 
-E1c (the misspecified scenarios), the projection-grid ablation and E6 (clean
-timings) are added here when their runs are final.
+E1c (the misspecified scenarios) and the projection-grid ablation are added
+here when their runs are final.
