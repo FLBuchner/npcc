@@ -97,6 +97,10 @@ the sharded commands above with `--device cpu`.
   `*_with_competitors` figures, and `scripts/paper/e1/r_selection.py <run>`
   joins each R fit's family, formula and EDF with its accuracy into
   `<run>/analysis/r_selection.csv`.
+- CV stops: `scripts/paper/e1/cv_stops.py results/study_2026-11-05_r_smooth_cv`
+  writes each cross-validated fit's stop out of the cap (`cv_stops.csv`) and,
+  per n, how many stopped within 5% of it (`cv_stops_by_n.csv`), into the
+  run's `analysis/`.
 - Paired comparison: `scripts/paper/e1/paired.py <run> --with <R run>
   --labels tabpfn-quantiles-v3-logit tabicl-logit best-gb --against gamcopula
   boostcopula-smooth-cv` writes each estimator's pdf KL and IAE minus each

@@ -106,6 +106,9 @@ BACKENDS: dict[str, dict[str, str]] = {
 }
 LINESTYLE = {"ICL": "-", "GB": "--", "R": ":"}
 
+#: The R competitors the figures show; the tables keep every R arm run.
+FIGURE_COMPETITORS = ("gamcopula", "boostcopula-smooth-cv")
+
 #: Panel titles of the shape families (E1c), whose tau(x) is implied by the
 #: family itself rather than set by a regime.
 FAMILY_NAMES = {
@@ -510,20 +513,12 @@ def main() -> None:
   fig_conditional_tau(
     t["diagnostics"], main_labels, out / "conditional_tau_full.pdf", n=a.tau_n
   )
-  competitors = [
-    k for k in BACKENDS if k in _R_LABELS and k in set(by_n["label"])
-  ]
+  competitors = [k for k in FIGURE_COMPETITORS if k in set(by_n["label"])]
   if competitors:
     fig_accuracy_by_n(
       by_n,
       main_labels + competitors,
       out / "accuracy_by_n_with_competitors.pdf",
-    )
-    fig_conditional_tau(
-      t["diagnostics"],
-      subset + competitors,
-      out / "conditional_tau_with_competitors.pdf",
-      n=a.tau_n,
     )
 
   print(f"{len(t['cells'])} cells -> {out}")
