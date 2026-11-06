@@ -29,6 +29,7 @@ Usage (from the npcc repository root, with nothing else running)::
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import platform
 import subprocess
@@ -60,6 +61,13 @@ MAIN_LABELS = [
 #: Backends whose model runs on the torch device; the gradient boosters
 #: compute on the CPU whatever device their tensors are placed on.
 DEVICE_BACKENDS = {"tabpfn-quantiles", "tabicl", "nori"}
+
+#: Each gradient booster's own thread-count argument.
+THREAD_KWARG = {
+  "lightgbm": "n_jobs",
+  "xgboost": "n_jobs",
+  "catboost": "thread_count",
+}
 
 
 def _sync() -> None:
@@ -173,6 +181,16 @@ def bivariate(a: argparse.Namespace) -> pd.DataFrame:
   rows = []
   for label in a.labels:
     est = by_label[label]
+    # A thread count is the boosters' own argument; the seed stays E1's.
+    spec, threads = est, ""
+    if est.backend in THREAD_KWARG:
+      threads = "all"
+      if a.gb_threads is not None:
+        kwargs = {**est.backend_kwargs, THREAD_KWARG[est.backend]: a.gb_threads}
+        spec, threads = (
+          dataclasses.replace(est, backend_kwargs=kwargs),
+          a.gb_threads,
+        )
     for n, rep, warm_up in plan:
       cell = Cell(family=a.family, tau_scenario=a.tau_scenario, n=n, rep=rep)
       seed = _cell_seed(a.base_seed, cell)
@@ -184,7 +202,7 @@ def bivariate(a: argparse.Namespace) -> pd.DataFrame:
         )
       torch.manual_seed(derive_seed(seed, est.estimator_id))
       model = RosenblattBicop(
-        est.controls(
+        spec.controls(
           FitControlsRosenblattBicop,
           device=a.device,
           projection_grid_size=grid_cfg.projection_grid_size,
@@ -211,6 +229,7 @@ def bivariate(a: argparse.Namespace) -> pd.DataFrame:
           "compute": "gpu"
           if est.backend in DEVICE_BACKENDS and device.startswith("cuda")
           else "cpu",
+          "backend_threads": threads,
           "eval_points": int(eval_grid.uv.shape[0]),
           **times,
           **hw,
@@ -254,6 +273,12 @@ def main() -> None:
   b.add_argument("--reps", type=int, default=3)
   b.add_argument("--family", default="clayton")
   b.add_argument("--tau-scenario", default="linear")
+  b.add_argument(
+    "--gb-threads",
+    type=int,
+    default=None,
+    help="Thread count for the gradient boosters (default: all cores).",
+  )
   v = sub.add_parser("vine", help="Per-arm vine timings.")
   v.add_argument("--config", type=Path, default=Path("configs/vine_study.toml"))
   v.add_argument("--d", type=int, nargs="+", default=[3, 5])
@@ -263,11 +288,13 @@ def main() -> None:
     q.add_argument("--base-seed", type=int, default=317)
     q.add_argument("--device", default=None)
     q.add_argument("--out", type=Path, required=True)
+    q.add_argument("--tag", default="", help="Suffix of the output file.")
   a = p.parse_args()
 
   table = bivariate(a) if a.what == "bivariate" else vine(a)
   a.out.mkdir(parents=True, exist_ok=True)
   name = "bivariate" if a.what == "bivariate" else "vines"
+  name += f"_{a.tag}" if a.tag else ""
   table.to_csv(a.out / f"{name}.csv", index=False)
   print(f"{len(table)} rows -> {a.out / name}.csv")
 

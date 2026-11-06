@@ -174,13 +174,28 @@ the command behind every file in `results/e3_vdc/`.
 
 ## E6 — clean timings
 
-With nothing else running on the machine, `uv run --no-sync python
-scripts/paper/e6/timing.py bivariate --out results/e6_timing` times each
-Rosenblatt direction's fit, density and h-function, and the pair's density, on
-E1's evaluation grid, for the six main-text estimators at n in {200, 500,
-1000, 2000}, 3 reps each, after one untimed warm-up per estimator. `...
-timing.py vine --out results/e6_timing` takes the vine runner's per-arm fit
-and evaluation times at d in {3, 5}, n in {500, 1000}, after one untimed
-cell. Every row records the device, where the estimator computes, the thread
-settings and the commit. The projection cost per distinct conditioning value
-(E4, `--cost-only`) runs in the same idle window.
+`bash scripts/paper/e6/run_all.sh` runs every timing, one job at a time, into
+`results/e6_timing/`, and refuses to start while another process holds the
+GPU or the load average is 2 or more. The jobs, each after an untimed
+warm-up:
+
+- bivariate (`scripts/paper/e6/timing.py bivariate`): each Rosenblatt
+  direction's fit, density and h-function, and the pair's density, on E1's
+  clayton/linear cells at n in {200, 500, 1000, 2000}, 3 reps, for the six
+  main-text estimators; the gradient boosters once more on one thread
+  (`--gb-threads 1`);
+- the R competitors on the same cells, single-threaded, from their scripts'
+  own step timers: `configs/e6_timing_gamcopula.toml` (3 reps) and
+  `configs/e6_timing_boostcopula_cv.toml` (1 rep; its fit is deterministic
+  given the folds);
+- vines (`timing.py vine`): the vine runner's per-arm fit and evaluation at d
+  in {3, 5}, n in {500, 1000}, 3 reps;
+- the projection's cost per distinct conditioning value (E4's
+  `coherence.py --cost-only --projection-grid 30 60`) for TabPFN v3 and
+  LightGBM at n = 2000;
+- the unconditional comparison's timings (`scripts/paper/e3/e6_timing.sh`).
+
+`scripts/paper/e6/consolidate.py` then writes `timings.csv`, one row per timed
+call with the device, CPU, thread settings and commit, and
+`timings_summary.csv`, the median seconds and the number of repetitions per
+section, method, setting, n, d, k, grid and stage.

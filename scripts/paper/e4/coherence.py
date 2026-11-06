@@ -247,8 +247,6 @@ def main() -> None:
   p.add_argument("--cost-k", type=int, nargs="+", default=[1, 10, 100, 1000])
   p.add_argument("--cost-repeats", type=int, default=5)
   a = p.parse_args()
-  if a.cost_only and a.projection_grid:
-    p.error("--cost-only and --projection-grid are separate runs")
 
   grid_cfg = load_grid(a.config)
   by_label = {e.label: e for e in grid_cfg.estimators}
@@ -309,10 +307,21 @@ def main() -> None:
         "npcc_commit": commit,
       }
       if a.cost_only:
-        cost = projection_cost_rows(
-          model, a.sinkhorn, a.cost_k, repeats=a.cost_repeats
-        )
-        rows += [{**base, "diagnostic": "projection_cost", **r} for r in cost]
+        # With --projection-grid, the cost is timed on each grid size.
+        for size in a.projection_grid or [grid_cfg.projection_grid_size]:
+          model.projection_grid_size = size
+          cost = projection_cost_rows(
+            model, a.sinkhorn, a.cost_k, repeats=a.cost_repeats
+          )
+          rows += [
+            {
+              **base,
+              "diagnostic": "projection_cost",
+              "projection_grid_size": size,
+              **r,
+            }
+            for r in cost
+          ]
         continue
       if a.projection_grid:
         sized = projection_grid_rows(
