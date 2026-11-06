@@ -53,7 +53,7 @@ BACKENDS: dict[str, dict[str, str]] = {
     "marker": "o",
   },
   "tabicl": {
-    "name": "TabICL",
+    "name": "TabICLv2",
     "group": "ICL",
     "color": "#56B4E9",
     "marker": "s",
