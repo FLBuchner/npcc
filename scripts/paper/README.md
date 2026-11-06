@@ -91,7 +91,7 @@ the sharded commands above with `--device cpu`.
   joins each R fit's family, formula and EDF with its accuracy into
   `<run>/analysis/r_selection.csv`.
 
-## E2 — vine study
+## E2 — vine study (§3.4)
 
 - Config: `configs/vine_study.toml`: TabPFN v3 with the logit transform;
   oracle, random and TLL arms; d in {3, 5}, n in {500, 1000}, 20 reps; 80
@@ -101,7 +101,14 @@ the sharded commands above with `--device cpu`.
   aggregation pass; `logs/provenance.txt` has the exact commands. A shard
   that ran out of GPU memory was resumed, which reuses its finished cells: a
   cell's seeds depend on the cell alone. A d = 5 shard peaks at about 7 GB,
-  since every fitted margin holds its own TabPFN model on the GPU.
+  since every fitted margin held its own TabPFN model on the GPU before
+  f4f17b5.
+- Analysis: `uv run --no-sync python scripts/paper/e2/analyze.py
+  results/vine_2026-11-06` writes the table (`vine_table.csv`, in the columns
+  of `tab:vine-results`), the figure (`vine_kl_by_x`, PDF and PNG, with the
+  plotted values in `vine_kl_by_x.csv`) and the numbers the text quotes
+  (`vine_text_numbers.json`) into `results/vine_2026-11-06/analysis/`, and
+  prints the table's LaTeX rows. Timings come from E6.
 
 ## E3 — comparison with VDC (§3.3)
 
