@@ -10,6 +10,8 @@ Columns of ``results/qt_ab/exact_readout_bias.csv``:
 - ``iae_s{w}_f{f}``: integrated absolute error of the density over (0, 1) with
   slope smoothing ``w`` normal-score units (0, 1, 2 = 1, 3, 7 cells) and slope
   floor ``f`` (0 or 0.2);
+- ``iae_weighted0.65_f0.2``: the same with the weighted smoother at bandwidth
+  0.65, the gradient-boosting backends' default;
 - ``tail_kl_current`` / ``tail_kl_modeled``: the part of KL(true || read-out)
   beyond the outermost knots, with the library's tails (uniform on the copula
   scale) and with modeled-scale tails (exponential in logit z, linear in the
@@ -157,6 +159,17 @@ def rows() -> list[dict[str, object]]:
             )
             if (width, floor) == (0.0, 0.0):
               unsmoothed = est
+          weighted = QuantileTable(
+            torch.as_tensor(z)[None],
+            limit=L,
+            transform=g,
+            eps=1e-12,
+            smoothing=0.65,
+            min_slope=0.2,
+            smoother="weighted",
+          )
+          est = weighted.pdf(torch.as_tensor(V)[None]).numpy()[0]
+          row["iae_weighted0.65_f0.2"] = float(np.sum(np.abs(est - truth) * DV))
           tail = modeled_tail_density(z, tr)
           beyond = ~np.isnan(tail)
           row["tail_kl_current"] = float(
