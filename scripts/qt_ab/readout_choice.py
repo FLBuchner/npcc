@@ -6,8 +6,11 @@ the tree backends, the 3-cell one for the others), on the same fitted model:
 
 - ``base_pdf_KL``: A0's pdf KL;
 - ``d_<metric>`` / ``se_<metric>``: the arm minus A0 in pdf KL, pdf IAE and
-  held-out KL, mean and standard error over the pairs (cell x rep, and x
-  transform where a backend ran under several, which are pooled);
+  held-out KL, mean and standard error over the pairs, one per cell x rep.
+  A backend run under several transforms (the tree backends, logit and
+  probit) fits them on the same sample, so its differences are averaged over
+  the transforms within each cell x rep first: counting them as separate
+  pairs would understate the SE;
 - ``share_improved``: the share of pairs whose pdf KL the arm lowers;
 - ``commit``: the commits the runs were produced from.
 
@@ -45,6 +48,8 @@ ARMS = [
   ("m21", "ma2|modeled"),
 ]
 METRICS = ["pdf_KL", "pdf_IAE", "holdout_kl"]
+#: One sample: what a pair is, once the transforms fitted on it are averaged.
+CELL_REP = ["family", "tau_scenario", "rep"]
 
 
 def table(runs: list[Path]) -> pd.DataFrame:
@@ -66,10 +71,11 @@ def table(runs: list[Path]) -> pd.DataFrame:
     for grid, arm in ARMS:
       if arm.endswith("|modeled") and not trees:
         continue
-      for n, r in held[(held.grid == grid) & (held.arm == arm)].groupby("n"):
+      for n, rt in held[(held.grid == grid) & (held.arm == arm)].groupby("n"):
+        r = rt.groupby(CELL_REP)[METRICS].mean()
         row: dict[str, object] = {
           "backend": backend,
-          "transforms": "+".join(sorted(r["transform"].unique())),
+          "transforms": "+".join(sorted(rt["transform"].unique())),
           "n": n,
           "grid": grid,
           "arm": arm,

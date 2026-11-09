@@ -11,7 +11,9 @@ All commands run from the repository root. Outputs go under
 `results/qt_ab/`, which is not tracked; `QT_AB_RESULTS` moves the single
 checks' CSVs elsewhere, and `ab.py` writes where `--out` says. Every row of
 every output, CSV or parquet, records the commit it was produced from, and
-whether tracked files differed from it.
+whether tracked files differed from it. An interpreter from another checkout
+(a CUDA one, say) needs `PYTHONPATH=src`; without it, it would import its own
+checkout's package, and the scripts refuse to run.
 
 ## The paired A/B on E1's cells
 

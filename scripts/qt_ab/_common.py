@@ -22,12 +22,21 @@ from time import perf_counter
 
 import torch
 
+import npcc
 from npcc.core.bicop import RosenblattBicop
 from npcc.experiments import runner, scenarios
 from npcc.experiments._study import derive_seed
 from npcc.experiments.config import Cell, EstimatorSpec
 
 ROOT = Path(__file__).resolve().parents[2]
+# Outputs are stamped with this checkout's commit, so the package that ran
+# must be this checkout's: an interpreter from another checkout imports its
+# own unless PYTHONPATH puts this one's src first.
+if not Path(npcc.__file__).resolve().is_relative_to(ROOT):
+  raise SystemExit(
+    f"npcc must be imported from {ROOT / 'src'}; got {npcc.__file__}. "
+    f"Run with PYTHONPATH={ROOT / 'src'}."
+  )
 #: Where the single checks write their CSV; ``QT_AB_RESULTS`` moves it, so that
 #: a stamped rerun goes to a fresh folder.
 RESULTS = Path(os.environ.get("QT_AB_RESULTS", ROOT / "results" / "qt_ab"))
