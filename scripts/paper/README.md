@@ -47,6 +47,13 @@ contaminated by the concurrency and are not reported (see E6).
   the tables (`overall.csv`, `by_n.csv`, `ranking*.csv`, `margins.csv`) and the
   figures (`accuracy_by_n`, `conditional_tau`, each as PDF and PNG) into
   `results/study_2026-11-05/analysis/`.
+- Refitting some estimators after a code change: `npcc-simstudy --config
+  configs/study.toml --labels <label> ... --out <fresh folder>` fits only
+  those estimators, each exactly as in the full run (same data, same torch
+  seed); every shard and the aggregation pass take the same `--labels`.
+  `analyze.py` and `paired.py` then take `--replacing <fresh folder>`, whose
+  rows replace those labels' rows of the other runs; pass `--out` as well,
+  so the original analysis stays as it was.
 - Density slices (supplement): `scripts/paper/e1/density_slices.py fit
   --tabpfn <version> --transform <transform> --out
   results/study_2026-11-05/analysis/slices` (add `--part I/K` to split), then
@@ -198,6 +205,11 @@ warm-up:
   `coherence.py --cost-only --projection-grid 30 60`) for TabPFN v3 and
   LightGBM at n = 2000;
 - the unconditional comparison's timings (`scripts/paper/e3/e6_timing.sh`).
+
+`E6_REUSE_R=<earlier E6 folder>` copies that run's R competitor timings
+instead of rerunning them, since no npcc change touches them; each keeps the
+commit its own `provenance.jsonl` records, and `logs/provenance.txt` names
+the folder they came from.
 
 `scripts/paper/e6/consolidate.py` then writes `timings.csv`, one row per timed
 call with the device, CPU, thread settings and commit, and

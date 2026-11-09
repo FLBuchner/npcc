@@ -360,8 +360,11 @@ and `loglik_gap_vs_e3`.
 - **Which commit each hash belongs to.** Some rows ran an earlier commit's
   version of a module, while the module has since changed in comments only.
   For example, rows produced before the American-spelling fix ran
-  `e3_vdc_pair.py` and `e3a_vdc_side.py` as committed in `7000ae3`. Those
-  rows stay valid and regenerable from that commit, and
+  `e3_vdc_pair.py` and `e3a_vdc_side.py` as committed in `7000ae3`, and
+  rows produced before "cell-centred" became "cell-centered" in the
+  docstrings of `e3_vdc_pair.py` and `e3_vdc_server.py` ran those two as
+  committed before that fix. Those rows stay valid and regenerable from
+  their commits, and
   `e3_code_check.csv` maps every recorded hash to its commit. Each row also records
   the npcc commit, whether `src/npcc/core` was modified (`npcc_core_dirty`),
   and the modified paths elsewhere.

@@ -16,7 +16,7 @@ import json
 import tomllib
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal, TypeVar, cast, get_args
@@ -513,3 +513,42 @@ def load_grid(path: str | Path) -> GridConfig:
     )
   except KeyError as exc:
     raise ValueError(f"Missing required [grid] key: {exc}.") from exc
+
+
+def select_estimators(grid: GridConfig, labels: Sequence[str]) -> GridConfig:
+  """``grid`` restricted to the estimators named in ``labels``.
+
+  A cell's data hashes the cell and each estimator's torch seed hashes that
+  estimator's own spec, never the rest of the grid, so a restricted run fits
+  each estimator it keeps exactly as the full grid's run does. Its resume
+  signature hashes only the kept estimators, so a shard or aggregation pass
+  given another selection is refused.
+
+  Parameters
+  ----------
+  grid : GridConfig
+      The grid as loaded.
+  labels : sequence of str
+      Labels of estimators in ``grid``.
+
+  Returns
+  -------
+  GridConfig
+      A copy of ``grid`` with only those estimators, in the grid's order.
+
+  Raises
+  ------
+  EstimatorConfigError
+      If a label names no estimator of ``grid``.
+  """
+  known = [e.label for e in grid.estimators]
+  unknown = sorted(set(labels) - set(known))
+  if unknown:
+    raise EstimatorConfigError(
+      f"labels must name estimators of the grid; got {unknown}, which are "
+      f"not among {known}"
+    )
+  keep = set(labels)
+  return replace(
+    grid, estimators=[e for e in grid.estimators if e.label in keep]
+  )

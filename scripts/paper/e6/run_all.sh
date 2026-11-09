@@ -7,9 +7,24 @@
 # while another process holds the GPU or the one-minute load average is 2 or
 # more, and into an output folder that already exists. Each step logs to
 # <out>/logs/; the last one writes timings.csv and timings_summary.csv.
+#
+# E6_REUSE_R=<earlier E6 folder> copies that run's R competitor timings
+# (r_gamcopula/, r_boostcopula_cv/) instead of rerunning them: they time the
+# R scripts alone, which no npcc change touches, and each keeps the commit
+# its own provenance.jsonl records.
 set -euo pipefail
 OUT=${1:-results/e6_timing}
 PY=(uv run --no-sync python)
+R_METHODS=(gamcopula boostcopula_cv)
+
+if [ -n "${E6_REUSE_R:-}" ]; then
+  for r in "${R_METHODS[@]}"; do
+    if [ ! -f "$E6_REUSE_R/r_$r/runtime.parquet" ]; then
+      echo "E6_REUSE_R must hold r_$r/runtime.parquet; got none in $E6_REUSE_R" >&2
+      exit 1
+    fi
+  done
+fi
 
 if nvidia-smi --query-compute-apps=pid --format=csv,noheader | grep -q .; then
   echo "E6 needs an idle GPU; another process holds it" >&2
@@ -30,6 +45,7 @@ mkdir -p "$OUT/logs"
   echo "npcc_commit $(git rev-parse HEAD)"
   echo "uncommitted $(git status --porcelain src configs scripts r_methods | wc -l)"
   echo "started $(date -Is)"
+  echo "r_reused_from ${E6_REUSE_R:-none}"
 } > "$OUT/logs/provenance.txt"
 step() { echo "== $1 $(date -Is)" | tee -a "$OUT/logs/steps.log"; }
 one_thread=(OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1)
@@ -43,7 +59,12 @@ env "${one_thread[@]}" "${PY[@]}" scripts/paper/e6/timing.py bivariate \
   --labels lightgbm-logit xgboost-logit catboost-logit --gb-threads 1 \
   --tag gb1 --out "$OUT" > "$OUT/logs/bivariate_gb1.log" 2>&1
 
-for r in gamcopula boostcopula_cv; do
+for r in "${R_METHODS[@]}"; do
+  if [ -n "${E6_REUSE_R:-}" ]; then
+    step "R competitor $r, reused from $E6_REUSE_R"
+    cp -r "$E6_REUSE_R/r_$r" "$OUT/r_$r"
+    continue
+  fi
   step "R competitor $r, one thread"
   env CUDA_VISIBLE_DEVICES="" "${one_thread[@]}" uv run --no-sync \
     npcc-simstudy --config "configs/e6_timing_$r.toml" --out "$OUT/r_$r" \

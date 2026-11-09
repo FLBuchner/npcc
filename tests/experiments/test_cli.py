@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+import torch
 
+from npcc.core import RosenblattBicop
 from npcc.experiments import cli
+
+if TYPE_CHECKING:
+  from pyvinecopulib.core import ControlsLike
 
 _TOML = """
 [grid]
@@ -24,6 +31,14 @@ n_rep = 1
 label = "normal-logit"
 backend = "normal-quantile"
 transform = "logit"
+"""
+
+#: A second estimator for the grid above, told apart by its transform.
+_PROBIT = """
+[[grid.estimators]]
+label = "normal-probit"
+backend = "normal-quantile"
+transform = "probit"
 """
 
 _TABLES = (
@@ -228,3 +243,69 @@ def test_a_shard_outside_its_count_is_refused(
 
   with pytest.raises(ValueError, match="0 <= I < K"):
     RunConfig(out=tmp_path, shard=shard)
+
+
+def test_a_run_restricted_by_labels_fits_as_the_full_run_does(
+  register_hermetic_backends: None,
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """``--labels`` refits some of a grid's estimators into a fresh folder.
+
+  The analysis swaps such a run's rows in for the full run's, so each kept
+  estimator must see the same data and the same torch seed as in the full
+  grid. One seeded by its position among the estimators would replace fits
+  it never matched.
+  """
+  fits: list[tuple[str, str, int]] = []
+  original_fit = RosenblattBicop.fit
+
+  def record_fit(
+    self: RosenblattBicop,
+    uv: torch.Tensor,
+    /,
+    controls: ControlsLike | None = None,
+    *,
+    var_types: list[str] | None = None,
+    x: torch.Tensor | None = None,
+  ) -> RosenblattBicop:
+    data = uv if x is None else torch.column_stack([uv, x])
+    digest = hashlib.sha256(data.cpu().numpy().tobytes()).hexdigest()
+    fits.append((self.transform, digest, torch.initial_seed()))
+    return original_fit(self, uv, controls, var_types=var_types, x=x)
+
+  monkeypatch.setattr(RosenblattBicop, "fit", record_fit)
+  config = tmp_path / "study.toml"
+  config.write_text(_TOML.replace("n_rep = 1", "n_rep = 2") + _PROBIT)
+  common = ["--config", str(config), "--workers", "1", "--format", "csv"]
+
+  assert cli.main([*common, "--out", str(tmp_path / "full")]) == 0
+  full = sorted(f for f in fits if f[0] == "probit")
+  fits.clear()
+  part = tmp_path / "part"
+  assert (
+    cli.main([*common, "--out", str(part), "--labels", "normal-probit"]) == 0
+  )
+
+  assert full
+  assert sorted(fits) == full
+  echo = json.loads((part / "config.json").read_text())
+  assert [e["label"] for e in echo["grid"]["estimators"]] == ["normal-probit"]
+  assert "normal-logit" not in (part / "metrics_by_x.csv").read_text()
+
+
+def test_an_aggregation_pass_without_the_shards_labels_is_refused(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """Shards run under ``--labels`` must be aggregated under the same labels.
+
+  Otherwise the pass would echo the full grid's estimators over a subset's
+  cells. The resume signature hashes the kept estimators, so it refuses.
+  """
+  config = tmp_path / "study.toml"
+  config.write_text(_TOML + _PROBIT)
+  common = ["--config", str(config), "--out", str(tmp_path / "part")]
+  common += ["--workers", "1", "--format", "csv", "--resume"]
+  assert cli.main([*common, "--shard", "0/1", "--labels", "normal-probit"]) == 0
+  with pytest.raises(ValueError, match="grid signature must match"):
+    cli.main(common)

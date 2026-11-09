@@ -108,6 +108,13 @@ def main() -> None:
     default=[],
     help="Further runs on the same grid, e.g. the R competitors.",
   )
+  p.add_argument(
+    "--replacing",
+    type=Path,
+    nargs="*",
+    default=[],
+    help="Runs whose estimators replace the same ones in the others.",
+  )
   p.add_argument("--labels", nargs="+", required=True)
   p.add_argument("--against", nargs="+", required=True)
   p.add_argument(
@@ -120,7 +127,7 @@ def main() -> None:
   )
   a = p.parse_args()
 
-  metrics = load([a.run, *a.extra])["metrics"]
+  metrics = load([a.run, *a.extra], replacing=a.replacing)["metrics"]
   pdf = metrics[metrics["quantity"] == "pdf"]
   per_cell = (
     pdf.groupby(["label", "group", *CELL])[METRICS].mean().reset_index()

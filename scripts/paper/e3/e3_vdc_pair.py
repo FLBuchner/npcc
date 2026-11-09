@@ -10,7 +10,7 @@ grid-held one, :class:`pyvinecopulib.torch.TorchTllBicop`, built directly from
 a grid. VDC, TLL and NPCC then run in the same vine machinery, so their
 likelihoods and timings differ only through the pair-copula estimator.
 
-**The adaptation** (as in PR #217): VDC's ``64 x 64`` density is cell-centred
+**The adaptation** (as in PR #217): VDC's ``64 x 64`` density is cell-centered
 on ``(i + 0.5) / 64``. It is replicate-padded to ``66 x 66`` on
 ``[0, 0.5/64, ..., 63.5/64, 1]`` and handed to ``TorchTllBicop`` with
 ``norm_maxiter=0``, which keeps the values exactly as given. VDC's Sinkhorn
@@ -129,7 +129,7 @@ class VdcServer:
 
 
 def replicate_pad(density: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-  """Pad a cell-centred ``(m, m)`` density to ``(m + 2, m + 2)`` on ``[0, 1]``.
+  """Pad a cell-centered ``(m, m)`` density to ``(m + 2, m + 2)`` on ``[0, 1]``.
 
   The grid points are ``[0, 0.5/m, 1.5/m, ..., (m - 0.5)/m, 1]`` and the new
   first and last rows and columns repeat their neighbors (PR #217's

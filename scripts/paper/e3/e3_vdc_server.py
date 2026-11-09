@@ -7,7 +7,7 @@ keeps VDC's code in its own interpreter while the vine machinery runs in
 pyvinecopulib 1.0. Not meant to be run by hand.
 
 **What it computes.** For each request, an ``(n, 2)`` float64 sample of
-pseudo-observations, it returns the ``64 x 64`` cell-centred density grid of
+pseudo-observations, it returns the ``64 x 64`` cell-centered density grid of
 the released ``vdc-denoiser-m64-v1``, exactly as VDC's Table 1 runner computes
 it: ``estimate_pair_density_from_samples(bundle, u, m=64,
 projection_iters=k)`` under ``torch.no_grad()``, then ``grid /= grid.mean()``.

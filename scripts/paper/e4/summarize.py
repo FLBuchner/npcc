@@ -25,6 +25,9 @@ from pathlib import Path
 
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import readout
+
 
 def mean_se(df: pd.DataFrame, by: list[str], cols: list[str]) -> pd.DataFrame:
   per_rep = df.groupby([*by, "rep"])[cols].mean()
@@ -54,6 +57,7 @@ def read_parts(run: Path, parts: list[Path], extra: list[str]) -> pd.DataFrame:
   A part copied or rerun into a second folder would be averaged in twice.
   """
   df = pd.concat((pd.read_csv(p) for p in parts), ignore_index=True)
+  readout.check(df["npcc_commit"], f"the parts under {run}")
   key = ["label", "family", "tau_scenario", "n", "rep", "diagnostic", "x"]
   dup = df.duplicated([*key, *extra]).sum()
   if dup:
@@ -115,6 +119,7 @@ def main() -> None:
     projection_grid(run, grids)
   if costs:
     cost = pd.concat((pd.read_csv(p) for p in costs), ignore_index=True)
+    readout.check(cost["npcc_commit"], f"the cost parts under {run}")
     cost["multiplier"] = cost["time_projected_s"] / cost["time_unprojected_s"]
     cost.to_csv(run / "projection_cost.csv", index=False)
   if parts:

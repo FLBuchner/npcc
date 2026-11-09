@@ -17,17 +17,29 @@ from npcc.experiments._study import (
   study_parser,
   write_tables,
 )
-from npcc.experiments.config import load_grid
+from npcc.experiments.config import load_grid, select_estimators
 from npcc.experiments.runner import aggregate_study_outputs, run_study
 
 logger = logging.getLogger("npcc.experiments")
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  return study_parser(
+  p = study_parser(
     "npcc-simstudy",
     "Run the npcc Rosenblatt pair-copula simulation study.",
   )
+  p.add_argument(
+    "--labels",
+    nargs="+",
+    default=None,
+    metavar="LABEL",
+    help=(
+      "Run only these estimators of the config, into a fresh --out: each is "
+      "fitted exactly as in the full grid's run. Pass the same labels to "
+      "every shard and to the aggregation pass."
+    ),
+  )
+  return p
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
   args = _build_parser().parse_args(argv)
   run = start(args)
   grid = load_grid(args.config)
+  if args.labels:
+    grid = select_estimators(grid, args.labels)
 
   metric_df, quantity_df, diagnostic_df, runtime_df, wall = run_study(
     grid, run, resume=args.resume

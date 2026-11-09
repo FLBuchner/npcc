@@ -34,11 +34,15 @@ import glob
 import math
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+  from collections.abc import Sequence
 
 mpl.use("Agg")
 
@@ -133,12 +137,46 @@ QUANTITIES = (
 )
 
 
-def load(runs: list[Path]) -> dict[str, pd.DataFrame]:
+#: The per-cell tables a run checkpoints; each row carries its ``label``.
+TABLES = ("metrics", "diagnostics", "quantities", "runtime")
+
+
+def load(
+  runs: list[Path], replacing: Sequence[Path] = ()
+) -> dict[str, pd.DataFrame]:
   """Concatenate one table over every finished cell of one or more runs.
 
   Runs on the same grid share cell keys and data seeds, so their rows join on
-  the cell: E1b's R competitors fit exactly E1's data.
+  the cell: E1b's R competitors fit exactly E1's data. A run in
+  ``replacing`` refits some of the estimators of ``runs`` -- ``npcc-simstudy
+  --labels`` after a code change -- and its rows take the place of theirs. It
+  must cover the same cells, or the replaced estimators would be scored on
+  fewer cells than the rest.
   """
+  tables = _finished(runs)
+  for run in replacing:
+    new = _finished([run])
+    cells = set(tables["cells"]["cell"])
+    if set(new["cells"]["cell"]) != cells:
+      odd = sorted(cells.symmetric_difference(new["cells"]["cell"]))
+      raise SystemExit(
+        f"{run} must cover the cells of the runs it replaces; got "
+        f"{len(odd)} in only one, e.g. {odd[0]}"
+      )
+    labels = set(new["metrics"]["label"])
+    for name in TABLES:
+      old = tables[name]
+      if not old.empty:
+        old = old[~old["label"].isin(labels)]
+      parts = [df for df in (old, new[name]) if not df.empty]
+      tables[name] = (
+        pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+      )
+  return tables
+
+
+def _finished(runs: list[Path]) -> dict[str, pd.DataFrame]:
+  """Every table over the finished cells of ``runs``, rows concatenated."""
   done = sorted(
     Path(p).parent
     for run in runs
@@ -147,7 +185,7 @@ def load(runs: list[Path]) -> dict[str, pd.DataFrame]:
   if not done:
     raise SystemExit(f"{runs} have no finished cells yet")
   tables = {}
-  for name in ("metrics", "diagnostics", "quantities", "runtime"):
+  for name in TABLES:
     # A run with no surface families writes no quantities table.
     files = [d / f"{name}.parquet" for d in done]
     parts = [pd.read_parquet(f) for f in files if f.exists()]
@@ -474,6 +512,17 @@ def main() -> None:
     default=[],
     help="Further runs on the same grid, e.g. E1b's R competitors.",
   )
+  p.add_argument(
+    "--replacing",
+    type=Path,
+    nargs="*",
+    default=[],
+    help=(
+      "Runs that refit some estimators of the others (npcc-simstudy "
+      "--labels); their rows replace those estimators' rows. Pass --out "
+      "too, so the base run's own analysis is not overwritten."
+    ),
+  )
   p.add_argument("--tabpfn", default="v3", help="Main-text TabPFN version.")
   p.add_argument("--transform", default="logit", help="Main-text transform.")
   p.add_argument(
@@ -486,7 +535,7 @@ def main() -> None:
   out = a.out or a.run / "analysis"
   out.mkdir(parents=True, exist_ok=True)
 
-  t = load([a.run, *a.extra])
+  t = load([a.run, *a.extra], replacing=a.replacing)
   overall = summarize(t["metrics"], [])
   by_n = summarize(t["metrics"], ["n"])
   ranks, agreement = ranking(t["metrics"])

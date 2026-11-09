@@ -97,8 +97,10 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import e3_common as common  # noqa: E402
 import e3_npcc  # noqa: E402
+import readout  # noqa: E402
 
 E1_COMMIT = "2f8fa94"
 PROVENANCE_COLUMNS = [
@@ -193,6 +195,18 @@ def role_of(experiment: str, method: str) -> tuple[str, str]:
     return ROLES[experiment][method]
   except KeyError:
     raise KeyError(f"{experiment} method {method!r} must have a role; add it to ROLES") from None
+
+
+def readout_check(long: pd.DataFrame, experiment: str) -> pd.DataFrame:
+  """``long``, once every NPCC row in it is known to use the current read-out.
+
+  The cross-check arm fits CatBoost through the read-out too. VDC, TLL and the
+  parametric fits do not touch it and keep the commits they ran at.
+  """
+  method = long["method"].astype(str)
+  npcc = method.str.startswith("npcc-") | (method == "rosenblatt-vinecop-check")
+  readout.check(long.loc[npcc, "npcc_commit"], f"{experiment}'s NPCC rows")
+  return long
 
 
 def read_long(folder: Path, experiment: str, cells: str | None = None) -> pd.DataFrame:
@@ -825,7 +839,7 @@ def main() -> None:
   a_dir = out / "e3a"
   if (a_dir / "vdc_side.csv").exists():
     a_long = read_long(a_dir, "E3a")
-    frames["E3a"] = a_long
+    frames["E3a"] = readout_check(a_long, "E3a")
     a_long.to_csv(out / "e3a_long.csv", index=False)
     a_sum, a_case = summarize_e3a(a_long)
     a_sum.to_csv(out / "e3a_summary.csv", index=False)
@@ -857,7 +871,7 @@ def main() -> None:
   b_dir = out / "e3b"
   if (b_dir / "vdc_side.csv").exists():
     b_long = read_long(b_dir, "E3b")
-    frames["E3b"] = b_long
+    frames["E3b"] = readout_check(b_long, "E3b")
     b_long.to_csv(out / "e3b_long.csv", index=False)
     b_sum = summarize_e3b(b_long)
     b_sum.to_csv(out / "e3b_summary.csv", index=False)
@@ -883,7 +897,7 @@ def main() -> None:
   if c_frames:
     c_long = pd.concat(c_frames, ignore_index=True, sort=False)
     c_long = common_set(c_long, "E3c", E3C_FOLDERS)
-    frames["E3c"] = c_long
+    frames["E3c"] = readout_check(c_long, "E3c")
     c_long.to_csv(out / "e3c_long.csv", index=False)
     c_sum = summarize_e3c(c_long)
     c_sum.to_csv(out / "e3c_summary.csv", index=False)
@@ -905,7 +919,7 @@ def main() -> None:
     # VDC's own rows are in vdc_side.csv; cells/vdc/ holds only its densities.
     d_long = common_set(read_long(E3D_RESULTS, "E3d", cells="cells/*/*.json"), "E3d",
                         {"decay": E3D_RESULTS, "strong": E3D_RESULTS})
-    frames["E3d"] = d_long
+    frames["E3d"] = readout_check(d_long, "E3d")
     d_long.to_csv(E3D_RESULTS / "e3d_long.csv", index=False)
     d_sum = summarize_e3d(d_long)
     d_sum.to_csv(E3D_RESULTS / "e3d_summary.csv", index=False)

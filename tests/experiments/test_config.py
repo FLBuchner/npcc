@@ -17,6 +17,7 @@ from npcc.experiments.config import (
   GridConfig,
   RunConfig,
   load_grid,
+  select_estimators,
 )
 
 _TOML = """
@@ -403,3 +404,28 @@ def test_the_misspecification_configs_share_one_grid(
       "r_methods/fit_boostcopula_smooth_cv.R",
     ),
   ]
+
+
+def test_selecting_an_unknown_label_is_refused(tmp_path: Path) -> None:
+  """A mistyped ``--labels`` entry must not run fewer estimators silently."""
+  grid = load_grid(_write(tmp_path, _TOML))
+  with pytest.raises(EstimatorConfigError, match="quant-logti"):
+    select_estimators(grid, ["quant-identity", "quant-logti"])
+
+
+def test_selecting_estimators_leaves_every_other_axis_alone(
+  tmp_path: Path,
+) -> None:
+  """A restricted run must refit its estimators on the full run's grid.
+
+  Dropping or resetting any other field -- the projection grid, the
+  evaluation grids, the diagnostics -- would score the kept estimators on
+  different terms than the rows they replace.
+  """
+  grid = load_grid(_write(tmp_path, _TOML))
+  kept = select_estimators(grid, ["quant-identity"])
+  assert [e.label for e in kept.estimators] == ["quant-identity"]
+  assert kept.estimators[0] == grid.estimators[1]
+  for f in fields(GridConfig):
+    if f.name != "estimators":
+      assert getattr(kept, f.name) == getattr(grid, f.name), f.name
