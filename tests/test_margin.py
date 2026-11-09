@@ -587,7 +587,10 @@ def test_a_repeated_row_reaches_the_backend_once(
   got = getattr(margin, method)(values, x=x)
 
   assert sum(seen) == distinct.shape[0]
-  torch.testing.assert_close(got, expected, rtol=0.0, atol=0.0)
+  # A misrouted row is off by order one; the tolerance only absorbs the
+  # smoother's matrix product rounding differently for one row than for
+  # twelve, which some BLAS builds do.
+  torch.testing.assert_close(got, expected, rtol=1e-12, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------
