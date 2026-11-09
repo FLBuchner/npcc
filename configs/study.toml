@@ -74,9 +74,12 @@ projection_grid_size = 30
 # Inner-backend inference chunk. Omitted = the device-aware default, 2000 on
 # CUDA and 400 on CPU, which is sized for an 8 GB laptop card. On a large
 # accelerator a bigger chunk cuts the number of forward passes; it is the
-# first knob to tune there. It changes throughput and not results, so it is
-# absent from the `--resume` signature and re-tuning it keeps every cell
-# already computed.
+# first knob to tune there. It changes throughput, and results only at the
+# rounding level: the gradient-boosting backends are bitwise unchanged, and
+# TabPFN, whose output depends slightly on which rows share a forward pass,
+# moves E1's metrics in the fifth decimal (scripts/qt_ab/bitwise_dedupe.py,
+# tabpfn_chunking.py). So it is absent from the `--resume` signature and
+# re-tuning it keeps every cell already computed.
 # batch_size = 8192
 
 # Conditional metric grid: 20x20 uv points and 10 x slices.
