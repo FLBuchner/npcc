@@ -216,25 +216,40 @@ def write_tables(
 
 
 def _write_shard(
-  cell_dir: Path, tables: Sequence[str], rows: Sequence[Rows], fmt: str
+  cell_dir: Path,
+  tables: Sequence[str],
+  frames: Sequence[pd.DataFrame],
+  fmt: str,
 ) -> None:
-  """Persist one cell's row tables, then a ``DONE`` marker written last.
+  """Persist one cell's tables, then a ``DONE`` marker written last.
 
   The marker-last ordering makes the shard atomic: a crash mid-write leaves no
   ``DONE``, so the cell reads as pending and recomputes.
   """
   cell_dir.mkdir(parents=True, exist_ok=True)
-  for name, cell_rows in zip(tables, rows, strict=True):
-    if cell_rows:
-      write_table(pd.DataFrame(cell_rows), cell_dir / name, fmt)
+  for name, frame in zip(tables, frames, strict=True):
+    if not frame.empty:
+      write_table(frame, cell_dir / name, fmt)
   (cell_dir / "DONE").write_text("")
 
 
-def _read_shard(cell_dir: Path, tables: Sequence[str], fmt: str) -> list[Rows]:
-  return [
-    cast("Rows", read_table(cell_dir / name, fmt).to_dict("records"))
-    for name in tables
-  ]
+def _read_shard(
+  cell_dir: Path, tables: Sequence[str], fmt: str
+) -> list[pd.DataFrame]:
+  return [read_table(cell_dir / name, fmt) for name in tables]
+
+
+def _stack(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
+  """Cells' frames as one table, typed as if built from all their rows at once.
+
+  A column that is ``None`` in every row of one cell has no values there, so
+  that cell's frame types it ``object``, and ``pd.concat`` keeps ``object``
+  for the whole column. ``infer_objects`` gives back the type one frame over
+  every row would have inferred, ``float64`` for a numeric column.
+  """
+  if not frames:
+    return pd.DataFrame()
+  return pd.concat(frames, ignore_index=True).infer_objects()
 
 
 def guard_manifest(
@@ -278,7 +293,7 @@ def sweep(
   signature: str,
   study: str,
   resume: bool,
-) -> tuple[list[Rows], float]:
+) -> tuple[list[pd.DataFrame], float]:
   """Run every cell of a study, checkpointing each as it finishes.
 
   Each cell's rows go to ``run.out/cells/<cell.key>/`` the moment it finishes,
@@ -306,8 +321,11 @@ def sweep(
 
   Returns
   -------
-  rows : list of list of dict
-      Every cell's rows, one list per table.
+  frames : list of pandas.DataFrame
+      Every cell's rows, one table per entry of ``tables``. Each cell's rows
+      become a frame as soon as they are computed or read back, rather than a
+      dict per row: on a quarter of E1's cells, frames read back in a fifth
+      of the time and with two thirds of the memory.
   wall : float
       Seconds spent computing the pending cells.
   """
@@ -336,11 +354,12 @@ def sweep(
     len(done),
   )
 
-  out: list[Rows] = [[] for _ in tables]
+  parts: list[list[pd.DataFrame]] = [[] for _ in tables]
 
-  def accumulate(cell_rows: Sequence[Rows]) -> None:
-    for acc, rows in zip(out, cell_rows, strict=True):
-      acc.extend(rows)
+  def accumulate(frames: Sequence[pd.DataFrame]) -> None:
+    for acc, frame in zip(parts, frames, strict=True):
+      if not frame.empty:
+        acc.append(frame)
 
   for cell in cells:
     if cell in done:
@@ -348,12 +367,12 @@ def sweep(
 
   t0 = perf_counter()
 
-  def do(cell: CellT) -> Sequence[Rows]:
+  def do(cell: CellT) -> list[pd.DataFrame]:
     logger.debug("cell start: %s", cell)
-    cell_rows = compute(cell)
-    _write_shard(cells_root / cell.key, tables, cell_rows, run.fmt)
+    frames = [pd.DataFrame(rows) for rows in compute(cell)]
+    _write_shard(cells_root / cell.key, tables, frames, run.fmt)
     logger.info("cell done: %s", cell)
-    return cell_rows
+    return frames
 
   if run.workers <= 1:
     for cell in pending:
@@ -367,7 +386,7 @@ def sweep(
 
   wall = perf_counter() - t0
   logger.info("%s study finished in %.1fs", study, wall)
-  return out, wall
+  return [_stack(acc) for acc in parts], wall
 
 
 # ---------------------------------------------------------------------------
@@ -654,18 +673,16 @@ def code_provenance(
   }
 
 
-def sorted_frame(
-  rows: Sequence[Mapping[str, object]], by: list[str]
-) -> pd.DataFrame:
-  """Rows as a table sorted on ``by``, or an empty table when there are none.
+def sorted_frame(frame: pd.DataFrame, by: list[str]) -> pd.DataFrame:
+  """A table sorted on ``by``, or the empty table when it has no rows.
 
   A shard can own no cells -- a run with more shards than cells -- and an
   empty table has none of the columns there are to sort on.
 
   Parameters
   ----------
-  rows : sequence of mapping
-      One mapping per row.
+  frame : pandas.DataFrame
+      The table.
   by : list of str
       The columns to sort on, in order.
 
@@ -674,7 +691,6 @@ def sorted_frame(
   pandas.DataFrame
       The rows, sorted and renumbered from 0.
   """
-  frame = pd.DataFrame(rows)
   if frame.empty:
     return frame
   return frame.sort_values(by).reset_index(drop=True)

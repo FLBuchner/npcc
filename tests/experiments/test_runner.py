@@ -263,6 +263,38 @@ def test_projection_summary_pairs_pdf_accuracy_and_margin_deltas(
   }.issubset(projection.columns)
 
 
+def test_projection_summary_holds_only_the_estimators_that_ran(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """Each estimator's projection deltas, and no row for one that never ran.
+
+  A pivot table keeping its empty rows reindexes on the product of the
+  estimator axes, so two estimators that differ in label, transform and id
+  come back as eight, six of them all-``NaN``. The product grows with every
+  axis: for E1 it was some 80 million rows and over 20 GB, built even where
+  nothing was projected.
+  """
+  grid = _small_grid(
+    n_rep=1,
+    normalize=(None, 2),
+    estimators=[
+      _normal("normal-logit"),
+      _normal("normal-identity", transform="identity"),
+    ],
+  )
+  metric_df, _, diagnostic_df, runtime_df, _ = run_study(
+    grid, RunConfig(out=tmp_path, workers=1)
+  )
+
+  projection = aggregate_study_outputs(metric_df, diagnostic_df, runtime_df)[
+    "projection_summary"
+  ]
+
+  ran = metric_df[["label", "transform", "estimator_id"]].drop_duplicates()
+  assert len(projection) == len(ran) == 2
+  assert projection["KL_delta"].notna().all()
+
+
 def test_tau_diagnostics_can_be_disabled(
   register_hermetic_backends: None, tmp_path: Path
 ) -> None:
@@ -324,6 +356,44 @@ def test_resume_skips_completed_cells(
 
   assert seen == [cells[0]]
   assert len(metric2) == len(metric1)
+
+
+def test_a_resumed_run_returns_the_fresh_run_tables(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """Tables read back from the shards must equal the ones a fresh run returns.
+
+  Every sharded run writes its tables from a pass that computes nothing and
+  reads every cell back, so a difference in rows, column order or dtype
+  between the two routes would reach every published table unseen.
+  """
+  grid = _small_grid(n_rep=2, surface_families=("clayton",))
+  run = RunConfig(out=tmp_path, workers=1)
+  fresh = run_study(grid, run)
+  resumed = run_study(grid, run, resume=True)
+
+  for got, want in zip(resumed[:4], fresh[:4], strict=True):
+    pd.testing.assert_frame_equal(got, want)
+
+
+def test_stacked_cells_keep_the_type_of_one_table() -> None:
+  """A column missing in all of one cell's rows must stay numeric.
+
+  That cell's frame holds the column as ``object``, all ``None``, and
+  ``pd.concat`` keeps ``object`` for the whole column, where one frame built
+  from every row reads ``float64`` with ``NaN``. An ``object`` column
+  aggregates differently and writes another Parquet type.
+  """
+  rows: list[list[dict[str, object]]] = [
+    [{"label": "a", "KL": None}],
+    [{"label": "b", "KL": 0.5}, {"label": "c", "KL": 1.5}],
+  ]
+
+  stacked = _study._stack([pd.DataFrame(cell) for cell in rows])
+
+  one_table = pd.DataFrame([row for cell in rows for row in cell])
+  pd.testing.assert_frame_equal(stacked, one_table)
+  assert stacked["KL"].dtype == "float64"
 
 
 def test_resume_grid_signature_mismatch_raises(

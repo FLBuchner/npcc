@@ -790,7 +790,7 @@ def run_study(
     len(grid.estimators),
     len(grid.normalize),
   )
-  rows, wall = sweep(
+  (metrics, quantities, diagnostics, runtimes), wall = sweep(
     grid.cells(),
     lambda cell: summarize_one_cell(
       cell, grid, base_seed=run.base_seed, device=run.device
@@ -801,8 +801,6 @@ def run_study(
     study="bivariate",
     resume=resume,
   )
-  metric_rows, quantity_rows, diagnostic_rows, runtime_rows = rows
-
   sort_axes = [
     "family",
     "tau_scenario",
@@ -812,15 +810,13 @@ def run_study(
     "n",
     "rep",
   ]
-  metric_df = sorted_frame(
-    metric_rows, [*sort_axes, "normalize", "quantity", "x"]
-  )
+  metric_df = sorted_frame(metrics, [*sort_axes, "normalize", "quantity", "x"])
   quantity_df = sorted_frame(
-    quantity_rows,
+    quantities,
     [*sort_axes, "normalize", "quantity", "target_tau", "x", "u", "v"],
   )
-  diagnostic_df = sorted_frame(diagnostic_rows, [*sort_axes, "normalize", "x"])
-  runtime_df = sorted_frame(runtime_rows, sort_axes)
+  diagnostic_df = sorted_frame(diagnostics, [*sort_axes, "normalize", "x"])
+  runtime_df = sorted_frame(runtimes, sort_axes)
   return metric_df, quantity_df, diagnostic_df, runtime_df, wall
 
 
@@ -874,57 +870,47 @@ def _tau_summary(diagnostic_df: pd.DataFrame) -> pd.DataFrame:
 def _projection_summary(
   metric_df: pd.DataFrame, diagnostic_df: pd.DataFrame
 ) -> pd.DataFrame:
-  pair_axes = [*_ESTIMATOR_AXES, "rep", "x", "tau_true"]
   pdf = metric_df[metric_df["quantity"] == "pdf"]
-  metric_wide = pdf.pivot_table(
-    index=pair_axes,
-    columns="normalize",
-    values=list(_METRIC_NAMES),
-    aggfunc="mean",
-    dropna=False,
-  )
-  if "none" not in metric_wide.columns.get_level_values(1):
+  labels = set(pdf["normalize"])
+  projected = sorted(labels - {"none"})
+  if "none" not in labels or not projected:
     return pd.DataFrame()
 
+  pair_axes = [*_ESTIMATOR_AXES, "rep", "x", "tau_true"]
   diag_metrics = [
     "row_mean_abs_err",
     "row_max_abs_err",
     "col_mean_abs_err",
     "col_max_abs_err",
   ]
-  diag_wide = diagnostic_df.pivot_table(
-    index=pair_axes,
-    columns="normalize",
-    values=diag_metrics,
-    aggfunc="mean",
-    dropna=False,
+  values = [*_METRIC_NAMES, *diag_metrics]
+
+  # One row per evaluation that ran, one column per (value, normalize). A
+  # pivot table keeping its empty rows would reindex on the product of the ten
+  # axes instead, pairing every label with every backend and estimator id:
+  # rows for estimates that never ran, some 80 million of them for E1.
+  def wide(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    means = df.groupby([*pair_axes, "normalize"], dropna=False)[cols].mean()
+    return cast("pd.DataFrame", means.unstack("normalize"))
+
+  table = (
+    wide(pdf, list(_METRIC_NAMES))
+    .join(wide(diagnostic_df, diag_metrics), how="left")
+    .reindex(columns=pd.MultiIndex.from_product([values, ["none", *projected]]))
   )
 
-  rows: list[dict[str, object]] = []
-  projected = sorted(
-    label
-    for label in metric_wide.columns.get_level_values(1).unique()
-    if label != "none"
-  )
-  for projected_label in projected:
-    for idx in metric_wide.index:
-      row = dict(zip(pair_axes, idx, strict=True))
-      row["projected_normalize"] = projected_label
-      for metric in _METRIC_NAMES:
-        none_val = metric_wide.loc[idx, (metric, "none")]
-        proj_val = metric_wide.loc[idx, (metric, projected_label)]
-        row[f"{metric}_none"] = float(none_val)
-        row[f"{metric}_projected"] = float(proj_val)
-        row[f"{metric}_delta"] = float(proj_val - none_val)
-      for metric in diag_metrics:
-        none_val = diag_wide.loc[idx, (metric, "none")]
-        proj_val = diag_wide.loc[idx, (metric, projected_label)]
-        row[f"{metric}_none"] = float(none_val)
-        row[f"{metric}_projected"] = float(proj_val)
-        row[f"{metric}_delta"] = float(proj_val - none_val)
-      rows.append(row)
-
-  paired = pd.DataFrame(rows)
+  parts: list[pd.DataFrame] = []
+  for label in projected:
+    part = pd.DataFrame(index=table.index)
+    part["projected_normalize"] = label
+    for value in values:
+      none_val = table[(value, "none")]
+      proj_val = table[(value, label)]
+      part[f"{value}_none"] = none_val
+      part[f"{value}_projected"] = proj_val
+      part[f"{value}_delta"] = proj_val - none_val
+    parts.append(part.reset_index())
+  paired = pd.concat(parts, ignore_index=True)
   if paired.empty:
     return paired
 
