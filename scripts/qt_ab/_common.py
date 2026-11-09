@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -27,7 +28,9 @@ from npcc.experiments._study import derive_seed
 from npcc.experiments.config import Cell, EstimatorSpec
 
 ROOT = Path(__file__).resolve().parents[2]
-RESULTS = ROOT / "results" / "qt_ab"
+#: Where the single checks write their CSV; ``QT_AB_RESULTS`` moves it, so that
+#: a stamped rerun goes to a fresh folder.
+RESULTS = Path(os.environ.get("QT_AB_RESULTS", ROOT / "results" / "qt_ab"))
 
 BASE_SEED = 317
 UV_GRID_N, X_GRID_N, TAU_N = 20, 10, 1000

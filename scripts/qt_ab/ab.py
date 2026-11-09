@@ -13,8 +13,9 @@ every fitted model.
   the fit: each grid is its own fit.
 
 Output: one parquet per cell under ``--out``. Rows carry ``kind`` (``metric``
-/ ``diag`` / ``holdout`` / ``time`` / ``fit``), the read-out ``arm`` and the
-``grid``.
+/ ``diag`` / ``holdout`` / ``time`` / ``fit``), the read-out ``arm``, the
+``grid``, and the ``commit`` they were produced from (``dirty`` if tracked
+files differed from it).
 
 Examples::
 
@@ -49,6 +50,7 @@ from _common import (
   Store,
   cap_gpu_memory,
   cells,
+  commit,
   evaluate,
   holdout,
 )
@@ -196,8 +198,9 @@ def run_cell(
       if device != "cpu":
         torch.cuda.empty_cache()
 
+  head, dirty = commit()
   tmp = path.with_suffix(".tmp")
-  pd.DataFrame(rows).to_parquet(tmp)
+  pd.DataFrame(rows).assign(commit=head, dirty=dirty).to_parquet(tmp)
   tmp.rename(path)
 
 

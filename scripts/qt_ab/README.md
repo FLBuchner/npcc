@@ -8,8 +8,10 @@ fitted models held fixed, and check the read-out on exact quantiles where the
 truth is known.
 
 All commands run from the repository root. Outputs go under
-`results/qt_ab/`, which is not tracked; each CSV records the commit it was
-produced from.
+`results/qt_ab/`, which is not tracked; `QT_AB_RESULTS` moves the single
+checks' CSVs elsewhere, and `ab.py` writes where `--out` says. Every row of
+every output, CSV or parquet, records the commit it was produced from, and
+whether tracked files differed from it.
 
 ## The paired A/B on E1's cells
 
@@ -48,6 +50,10 @@ current tails and with modeled-scale ones, on three grids: 21 levels at
 
 `report.py` prints each arm minus a baseline arm, paired by fitted model, on
 the held-out reps 5-9; with `--select` it first ranks every arm on reps 0-4.
+`readout_choice.py` writes the one table the paper cites: per backend, n and
+arm, the arm minus E1's read-out on the held-out reps, the tree backends
+pooled over both transforms; `--reference` lists every sign that flips
+against an earlier table.
 
 ```bash
 uv run --no-sync python scripts/qt_ab/report.py --out results/qt_ab/gb \
@@ -55,6 +61,9 @@ uv run --no-sync python scripts/qt_ab/report.py --out results/qt_ab/gb \
 uv run --no-sync python scripts/qt_ab/report.py --out results/qt_ab/tabpfn \
   --baseline 'm21:ma1|current' --arms 'm21:wh0.65|current' \
   'm19:wh0.65|current' 'm21:ma0|current'
+uv run --no-sync python scripts/qt_ab/readout_choice.py \
+  --runs results/qt_ab/gb results/qt_ab/tabpfn results/qt_ab/icl \
+  --csv results/qt_ab/readout_choice.csv
 ```
 
 ### What it found
