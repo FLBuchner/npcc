@@ -561,8 +561,8 @@ def test_a_repeated_row_reaches_the_backend_once(
   """A conditioning row repeated across a query is predicted once.
 
   A pair copula's grid repeats each conditioning row once per point of the
-  other axis; predicting every repeat multiplied the backend's work by the
-  grid size. The answer must be the one the repeats would have given.
+  other axis; predicting every repeat would multiply the backend's work by
+  the grid size. The answer must be the one the repeats would have given.
   """
   margin = fitted_margin("logit")
   seen: list[int] = []

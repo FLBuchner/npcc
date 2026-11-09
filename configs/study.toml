@@ -77,9 +77,10 @@ projection_grid_size = 30
 # first knob to tune there. It changes throughput, and results only at the
 # rounding level: the gradient-boosting backends are bitwise unchanged, and
 # TabPFN, whose output depends slightly on which rows share a forward pass,
-# moves E1's metrics in the fifth decimal (scripts/qt_ab/bitwise_dedupe.py,
-# tabpfn_chunking.py). So it is absent from the `--resume` signature and
-# re-tuning it keeps every cell already computed.
+# moves E1's metrics in the fifth decimal (measured at cb04041 by
+# scripts/qt_ab/bitwise_dedupe.py and tabpfn_chunking.py). So it is absent
+# from the `--resume` signature and re-tuning it keeps every cell already
+# computed.
 # batch_size = 8192
 
 # Conditional metric grid: 20x20 uv points and 10 x slices.

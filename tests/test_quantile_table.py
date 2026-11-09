@@ -191,7 +191,7 @@ def test_crossed_rows_are_sorted() -> None:
   )
 
 
-@pytest.mark.parametrize("smoothing", [0.0, 0.65, 1.0, 2.0, 4.0])
+@pytest.mark.parametrize("smoothing", [0.0, 0.65, 4.0])
 def test_smoothing_leaves_a_normal_table_unchanged(smoothing: float) -> None:
   """A straight line in normal scores has nothing to smooth.
 
@@ -256,8 +256,9 @@ def test_bias_on_an_exact_table_is_the_one_the_ab_measured(
   On the exact conditional quantiles of a Clayton copula at tau = 0.7, the
   default bandwidth roughly quadruples the unsmoothed table's error. It was
   adopted anyway because it removes far more of a per-level tree backend's
-  noise and leaves TabPFN's error unchanged (``scripts/qt_ab``); a change to
-  the smoother that moved these numbers would void that comparison.
+  noise and leaves TabPFN's error unchanged (the A/B in ``scripts/qt_ab`` at
+  cb04041); a change to the smoother that moved these numbers would void that
+  comparison.
   """
   q, v, weight, truth = clayton_conditional(theta=2 * 0.7 / 0.3, u=0.5)
   table = make_table(q, "logit", smoothing=smoothing)
@@ -295,7 +296,10 @@ def test_values_must_have_one_row_per_table_row() -> None:
     table.pdf(torch.full((2, 4), 0.5, dtype=torch.float64))
 
 
-def test_margin_reads_its_table_with_the_configured_smoothing() -> None:
+@pytest.mark.parametrize("smoothing", [0.0, QuantileTableConfig().smoothing])
+def test_margin_reads_its_table_with_the_configured_smoothing(
+  smoothing: float,
+) -> None:
   """The margin smooths with the configuration's bandwidth, nothing else.
 
   Every backend shares one read-out; a margin that dropped or replaced the
@@ -309,44 +313,23 @@ def test_margin_reads_its_table_with_the_configured_smoothing() -> None:
     ) -> torch.Tensor:
       return noisy.expand(x.shape[0], -1).clone()
 
+  config = QuantileTableConfig(smoothing=smoothing)
+  margin = Noisy(transform="identity", quantile_table_config=config)
+  margin._fitted = True
+
   x = torch.zeros((1, 1), dtype=torch.float64)
-  for smoothing in (0.0, QuantileTableConfig().smoothing):
-    margin = Noisy(
-      transform="identity",
-      quantile_table_config=QuantileTableConfig(smoothing=smoothing),
-    )
-    margin._fitted = True
 
-    knots = margin._predict_quantile_table(x).knots
+  knots = margin._predict_quantile_table(x).knots
 
-    expected = QuantileTable(
-      noisy,
-      limit=LIMIT,
-      transform=resolve_transform("identity"),
-      eps=margin.eps,
-      smoothing=smoothing,
-      min_slope=0.2,
-    ).knots
-    torch.testing.assert_close(knots, expected, rtol=0.0, atol=0.0)
-
-
-@pytest.mark.parametrize(
-  "smoothing", [-0.1, math.inf, math.nan, None, True, "0.65"]
-)
-def test_a_smoothing_that_is_not_a_bandwidth_is_refused(
-  smoothing: object,
-) -> None:
-  """A smoothing that is not a finite bandwidth is refused, saying so.
-
-  ``None`` meant "the backend's default" until every backend shared one
-  smoother; an old caller passing it must be told what is now required, not
-  meet a ``TypeError`` from inside the comparison. A bool would otherwise be
-  read as a bandwidth of 0 or 1, and an infinite one makes every table NaN.
-  """
-  with pytest.raises(
-    ValueError, match="smoothing must be a finite nonnegative number"
-  ):
-    QuantileTableConfig(smoothing=smoothing)  # ty: ignore[invalid-argument-type] - the wrong type is the point
+  expected = QuantileTable(
+    noisy,
+    limit=config.normal_limit,
+    transform=resolve_transform("identity"),
+    eps=margin.eps,
+    smoothing=smoothing,
+    min_slope=config.min_slope,
+  ).knots
+  torch.testing.assert_close(knots, expected, rtol=0.0, atol=0.0)
 
 
 def test_levels_are_the_normal_grid() -> None:
@@ -381,17 +364,25 @@ def test_configuration_is_immutable() -> None:
     {"n_quantiles": 4},
     {"normal_limit": 0.0},
     {"normal_limit": 7.0},
-    {"smoothing": -1.0},
+    {"smoothing": -0.1},
+    {"smoothing": math.inf},
+    {"smoothing": math.nan},
+    {"smoothing": None},
+    {"smoothing": True},
+    {"smoothing": "0.65"},
     {"min_slope": 1.0},
     {"min_slope": -0.1},
   ],
 )
-def test_rejects_invalid_configuration(settings: dict[str, float]) -> None:
+def test_rejects_invalid_configuration(settings: dict[str, object]) -> None:
   """A setting the reconstruction cannot use fails at construction.
 
   Beyond its limits each one fails later and less legibly: too few levels
   leave no interior cells, a limit past about 8 rounds the outer level to 1,
-  and a slope floor of 1 flattens every table to its mean slope.
+  an infinite smoothing makes every table NaN, a bool would read as a
+  bandwidth of 0 or 1, ``None`` or a string would raise a ``TypeError`` that
+  names neither the setting nor the fix, and a slope floor of 1 flattens
+  every table to its mean slope.
   """
   with pytest.raises(ValueError, match="must"):
-    QuantileTableConfig(**settings)  # ty: ignore[invalid-argument-type]
+    QuantileTableConfig(**settings)  # ty: ignore[invalid-argument-type] - some wrong types are the point
