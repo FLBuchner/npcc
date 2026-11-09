@@ -3,16 +3,39 @@
 from __future__ import annotations
 
 import itertools
+import subprocess
+import types
+from typing import Protocol
 
 import numpy as np
 import torch
+from _common import ROOT
 from readouts import Readout, ReadoutTable
 
 from npcc.core._quantile_table import QuantileTable, normal_scores
-from npcc.core._transform import resolve_transform
+from npcc.core._transform import ResponseTransform, resolve_transform
 
 torch.set_num_threads(1)
 gen = torch.Generator().manual_seed(0)
+
+#: A commit whose read-out is the one E1 ran: the moving average of the
+#: slopes, unchanged from ad0dccf until the weighted smoother replaced it.
+E1_COMMIT = "87e0525"
+
+
+def e1_quantile_table() -> type:
+  """E1's ``QuantileTable``, compiled from its source at ``E1_COMMIT``."""
+  path = "src/npcc/core/_quantile_table.py"
+  source = subprocess.run(
+    ["git", "-C", str(ROOT), "show", f"{E1_COMMIT}:{path}"],
+    capture_output=True,
+    text=True,
+    check=True,
+  ).stdout
+  module = types.ModuleType("e1_quantile_table")
+  code = compile(source, f"{E1_COMMIT}:{path}", "exec")
+  exec(code, module.__dict__)  # noqa: S102 - this repository's own history
+  return module.QuantileTable
 
 
 def noisy_table(n: int, m: int, limit: float, noise: float) -> torch.Tensor:
@@ -21,10 +44,37 @@ def noisy_table(n: int, m: int, limit: float, noise: float) -> torch.Tensor:
   return base + noise * torch.randn(n, m, generator=gen, dtype=torch.float64)
 
 
+class Table(Protocol):
+  """What a read-out offers: its distribution's pdf, cdf and icdf."""
+
+  def pdf(self, y: torch.Tensor) -> torch.Tensor: ...
+  def cdf(self, y: torch.Tensor) -> torch.Tensor: ...
+  def icdf(self, p: torch.Tensor) -> torch.Tensor: ...
+
+
+def largest_difference(a: Table, b: Table, g: ResponseTransform) -> float:
+  """The largest gap between two tables' pdf, cdf and icdf."""
+  lo, hi = g.support
+  if np.isfinite(lo) and np.isfinite(hi):
+    y = torch.rand(500, 50, generator=gen, dtype=torch.float64)
+  elif np.isfinite(lo):
+    y = torch.exp(3 * torch.randn(500, 50, generator=gen, dtype=torch.float64))
+  else:
+    y = 4 * torch.randn(500, 50, generator=gen, dtype=torch.float64)
+  p = torch.rand(500, 50, generator=gen, dtype=torch.float64).clamp(
+    1e-9, 1 - 1e-9
+  )
+  return max(
+    (a.pdf(y) - b.pdf(y)).abs().max().item(),
+    (a.cdf(y) - b.cdf(y)).abs().max().item(),
+    (a.icdf(p) - b.icdf(p)).abs().max().item(),
+  )
+
+
+TRANSFORMS = ("logit", "probit", "identity", "log")
+
 # 1. wh|current is the library's read-out, bit for bit, at any bandwidth.
-for tr, width in itertools.product(
-  ("logit", "probit", "identity", "log"), (0.0, 0.65, 1.0, 2.0)
-):
+for tr, width in itertools.product(TRANSFORMS, (0.0, 0.65, 1.0, 2.0)):
   g = resolve_transform(tr)
   q = noisy_table(500, 21, 3.25, 0.3)
   lib = QuantileTable(
@@ -38,23 +88,32 @@ for tr, width in itertools.product(
     readout=Readout("whittaker", width, "current"),
     min_slope=0.2,
   )
-  lo, hi = g.support
-  if np.isfinite(lo) and np.isfinite(hi):
-    y = torch.rand(500, 50, generator=gen, dtype=torch.float64)
-  elif np.isfinite(lo):
-    y = torch.exp(3 * torch.randn(500, 50, generator=gen, dtype=torch.float64))
-  else:
-    y = 4 * torch.randn(500, 50, generator=gen, dtype=torch.float64)
-  p = torch.rand(500, 50, generator=gen, dtype=torch.float64).clamp(
-    1e-9, 1 - 1e-9
-  )
-  d = max(
-    (lib.pdf(y) - var.pdf(y)).abs().max().item(),
-    (lib.cdf(y) - var.cdf(y)).abs().max().item(),
-    (lib.icdf(p) - var.icdf(p)).abs().max().item(),
-  )
+  d = largest_difference(lib, var, g)
   assert d == 0.0, (tr, width, d)
 print("library reproduction: exact")
+
+# 1b. ma|current is the read-out E1 ran, bit for bit, at every width it used
+#     and on every grid the A/B compares.
+E1Table = e1_quantile_table()
+for tr, width, (m, limit), floor in itertools.product(
+  TRANSFORMS, (0.0, 1.0, 2.0), ((21, 3.25), (19, 2.925), (41, 3.25)), (0, 0.2)
+):
+  g = resolve_transform(tr)
+  q = noisy_table(500, m, limit, 0.3)
+  e1 = E1Table(
+    q, limit=limit, transform=g, eps=1e-6, smoothing=width, min_slope=floor
+  )
+  var = ReadoutTable(
+    q,
+    limit=limit,
+    transform=g,
+    eps=1e-6,
+    readout=Readout("ma", width, "current"),
+    min_slope=floor,
+  )
+  d = largest_difference(e1, var, g)
+  assert d == 0.0, (tr, width, m, floor, d)
+print(f"E1 reproduction ({E1_COMMIT}): exact")
 
 # 2. Every variant is a distribution: cdf(icdf(p)) = p, pdf = d cdf, cdf in
 #    [0, 1] and increasing, including in the tails.
