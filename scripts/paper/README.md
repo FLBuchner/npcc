@@ -215,3 +215,35 @@ the folder they came from.
 call with the device, CPU, thread settings and commit, and
 `timings_summary.csv`, the median seconds and the number of repetitions per
 section, method, setting, n, d, k, grid and stage.
+
+## E7a — choice of the read-out (supplement)
+
+The A/B that chose the quantile read-out, and its checks on exact quantiles,
+run from cb04041. Their scripts live in that commit's `scripts/qt_ab/`, whose
+README describes each one, and every output row records the commit. The
+exact-quantile checks and the tree and TabPFN runs come first (2026-11-09);
+the TabICLv2 and Nori run and `nori_probe.py` need the whole GPU and follow
+E6. Check the commit out to reproduce the four outputs the supplement cites,
+into `results/qt_ab_2026-11/`:
+
+```bash
+git checkout cb04041
+O=results/qt_ab_2026-11
+# Exact quantiles, on the CPU in seconds: exact_readout_bias.csv (the bias
+# each smoother adds) and exact_interpolation.csv (A.2, the interior).
+QT_AB_RESULTS=$O uv run --no-sync python scripts/qt_ab/exact_readout_bias.py
+QT_AB_RESULTS=$O uv run --no-sync python scripts/qt_ab/exact_interpolation.py
+# The paired A/B on E1's cells: the tree backends on the CPU, the in-context
+# learners on the GPU, then readout_choice.csv ("Choice of the read-out").
+OMP_NUM_THREADS=1 uv run --no-sync python scripts/qt_ab/ab.py \
+  --out $O/gb --workers 4
+uv run --no-sync python scripts/qt_ab/ab.py --out $O/tabpfn \
+  --estimators tabpfn-quantiles-v3-logit --device cuda --n 200 2000
+uv run --no-sync python scripts/qt_ab/ab.py --out $O/icl \
+  --estimators tabicl-logit nori-logit --device cuda --n 200 2000 \
+  --grids m21 m19 m41 --arms 'ma1|current' 'wh0.65|current'
+uv run --no-sync python scripts/qt_ab/readout_choice.py \
+  --runs $O/gb $O/tabpfn $O/icl --csv $O/readout_choice.csv
+# Nori's quantile head under the adopted read-out: nori_probe.csv (A.2).
+QT_AB_RESULTS=$O uv run --no-sync python scripts/qt_ab/nori_probe.py
+```

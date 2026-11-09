@@ -82,9 +82,10 @@ class QuantileTableConfig:
         f"normal_limit must lie in (0, 6]; got {self.normal_limit}"
       )
 
-    # A bool is an int, and None was once "the backend's default": both are
-    # refused by name rather than read as a bandwidth or left to fail on `>=`.
-    # An infinite bandwidth would multiply the penalty's zeros into NaNs.
+    # A bool is an int and would read as a bandwidth of 0 or 1; None or a
+    # string would fail inside the comparison with a TypeError that names
+    # neither the setting nor the fix. An infinite bandwidth would multiply
+    # the penalty's zeros into NaNs.
     if (
       isinstance(self.smoothing, bool)
       or not isinstance(self.smoothing, (int, float))
