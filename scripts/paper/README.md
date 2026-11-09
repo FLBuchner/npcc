@@ -219,10 +219,12 @@ section, method, setting, n, d, k, grid and stage.
 ## E7a — choice of the read-out (supplement)
 
 The A/B that chose the quantile read-out, and its checks on exact quantiles,
-ran from cb04041. Their scripts live in that commit's `scripts/qt_ab/`, whose
-README describes each one, and every output row records the commit. Check it
-out to reproduce the four outputs the supplement cites, into
-`results/qt_ab_2026-11/`:
+run from cb04041. Their scripts live in that commit's `scripts/qt_ab/`, whose
+README describes each one, and every output row records the commit. The
+exact-quantile checks and the tree and TabPFN runs come first (2026-11-09);
+the TabICLv2 and Nori run and `nori_probe.py` need the whole GPU and follow
+E6. Check the commit out to reproduce the four outputs the supplement cites,
+into `results/qt_ab_2026-11/`:
 
 ```bash
 git checkout cb04041
