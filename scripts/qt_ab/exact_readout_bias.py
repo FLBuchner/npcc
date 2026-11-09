@@ -2,16 +2,17 @@
 
 No backend is involved: the true quantiles of ``V | U = u`` (Clayton and
 Gaussian copulas, Kendall's tau 0.3 / 0.5 / 0.7, u = 0.05 / 0.5 / 0.95) at the
-21 normal-grid levels go through the library's ``QuantileTable`` under logit
-and probit, and its density is compared with the true conditional density.
+21 normal-grid levels are read out under logit and probit, and the density is
+compared with the true conditional density.
 
 Columns of ``results/qt_ab/exact_readout_bias.csv``:
 
 - ``iae_s{w}_f{f}``: integrated absolute error of the density over (0, 1) with
-  slope smoothing ``w`` normal-score units (0, 1, 2 = 1, 3, 7 cells) and slope
-  floor ``f`` (0 or 0.2);
-- ``iae_weighted0.65_f0.2``: the same with the weighted smoother at bandwidth
-  0.65, the gradient-boosting backends' default;
+  a moving average of the slopes over ``w`` normal-score units (0, 1, 2 = 1, 3,
+  7 cells: E1's read-out, vendored in ``readouts.py``) and slope floor ``f``
+  (0 or 0.2);
+- ``iae_weighted0.65_f0.2``: the same with the library's ``QuantileTable`` at
+  its default, the weighted smoother at bandwidth 0.65;
 - ``tail_kl_current`` / ``tail_kl_modeled``: the part of KL(true || read-out)
   beyond the outermost knots, with the library's tails (uniform on the copula
   scale) and with modeled-scale tails (exponential in logit z, linear in the
@@ -31,12 +32,16 @@ import numpy as np
 import pandas as pd
 import torch
 from _common import RESULTS, commit
+from readouts import Readout, ReadoutTable
 from scipy.stats import norm
 
 from npcc.core._quantile_table import QuantileTable
 from npcc.core._transform import resolve_transform
+from npcc.core.margin import QuantileTableConfig
 
 OUT = RESULTS / "exact_readout_bias.csv"
+#: The library's read-out at its defaults; its column is named for them.
+DEFAULT = QuantileTableConfig()
 
 L, M = 3.25, 21
 T = np.linspace(-L, L, M)
@@ -144,12 +149,12 @@ def rows() -> list[dict[str, object]]:
           }
           unsmoothed = np.empty(0)
           for width, floor in ((0.0, 0.0), (0.0, 0.2), (1.0, 0.2), (2.0, 0.2)):
-            table = QuantileTable(
+            table = ReadoutTable(
               torch.as_tensor(z)[None],
               limit=L,
               transform=g,
               eps=1e-12,
-              smoothing=width,
+              readout=Readout("ma", width, "current"),
               min_slope=floor,
             )
             est = table.pdf(torch.as_tensor(V)[None]).numpy()[0]
@@ -163,12 +168,12 @@ def rows() -> list[dict[str, object]]:
             limit=L,
             transform=g,
             eps=1e-12,
-            smoothing=0.65,
-            min_slope=0.2,
-            smoother="weighted",
+            smoothing=DEFAULT.smoothing,
+            min_slope=DEFAULT.min_slope,
           )
           est = weighted.pdf(torch.as_tensor(V)[None]).numpy()[0]
-          row["iae_weighted0.65_f0.2"] = float(np.sum(np.abs(est - truth) * DV))
+          name = f"iae_weighted{DEFAULT.smoothing:g}_f{DEFAULT.min_slope:g}"
+          row[name] = float(np.sum(np.abs(est - truth) * DV))
           tail = modeled_tail_density(z, tr)
           beyond = ~np.isnan(tail)
           row["tail_kl_current"] = float(
