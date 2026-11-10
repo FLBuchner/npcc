@@ -352,7 +352,7 @@ def run_vine_study(
     len(grid.arms),
     len(grid.estimators),
   )
-  (metric_rows, runtime_rows), wall = sweep(
+  (metrics, runtimes), wall = sweep(
     grid.cells(),
     lambda cell: summarize_one_cell(
       cell, grid, base_seed=run.base_seed, device=run.device
@@ -365,8 +365,8 @@ def run_vine_study(
   )
 
   sort_axes = ["d", "n", "arm", "label", "rep"]
-  metric_df = sorted_frame(metric_rows, [*sort_axes, "x"])
-  runtime_df = sorted_frame(runtime_rows, sort_axes)
+  metric_df = sorted_frame(metrics, [*sort_axes, "x"])
+  runtime_df = sorted_frame(runtimes, sort_axes)
   return metric_df, runtime_df, wall
 
 
