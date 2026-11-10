@@ -487,3 +487,131 @@ def test_shape_families_stay_out_of_the_registries_the_vine_draws_from() -> (
   assert not set(scenarios.SHAPE_FAMILIES) & set(scenarios.FAMILIES)
   assert scenarios.IMPLIED not in scenarios.TAU_SCENARIOS
   assert scenarios.IMPLIED not in vine_scenarios.REGIMES
+
+
+def _kendall_tau(u: torch.Tensor, v: torch.Tensor) -> float:
+  """Kendall's tau-a of a sample, by its pairwise concordance."""
+  du = torch.sign(u[:, None] - u[None, :])
+  dv = torch.sign(v[:, None] - v[None, :])
+  n = u.shape[0]
+  return float((du * dv).sum() / (n * (n - 1)))
+
+
+@pytest.mark.parametrize(
+  ("family", "scenario"),
+  [("clayton", "linear"), ("gumbel", "sin"), ("clayton-gumbel-mix", "implied")],
+)
+def test_holdout_draws_follow_the_copula_at_each_x(
+  family: str, scenario: str
+) -> None:
+  """The draws at each ``x`` must come from the true copula at that ``x``.
+
+  The Monte Carlo KL averages ``log c - log c_hat`` over them; draws from
+  another ``x``'s copula, or with ``u`` and ``v`` swapped on an asymmetric
+  family, would score every estimator against the wrong distribution, and
+  the KL would no longer be one.
+  """
+  x_axis = torch.tensor([0.1, 0.9], dtype=torch.float64)
+  grid = scenarios.holdout_grid(family, scenario, x_axis, 2000, [11, 12])
+  assert grid.shape == (2000, 2)
+  assert grid.x_flat is not None
+  u = grid.u_flat.reshape(grid.shape)
+  v = grid.v_flat.reshape(grid.shape)
+  x = grid.x_flat.reshape(grid.shape)
+  if family in scenarios.SHAPE_FAMILIES:
+    target = scenarios.SHAPE_FAMILIES[family].tau_of_x(x_axis)
+  else:
+    tau_of_x = scenarios.TAU_SCENARIOS[scenario].tau_of_x
+    assert tau_of_x is not None
+    target = tau_of_x(x_axis)
+  for j in range(2):
+    assert torch.equal(x[:, j], x_axis[j].expand(2000))
+    assert _kendall_tau(u[:, j], v[:, j]) == pytest.approx(
+      float(target[j]), abs=0.05
+    )
+  # The same seed at either x: the copula, not the stream, separates them.
+  same = scenarios.holdout_grid("clayton", "linear", x_axis, 2000, [11, 11])
+  tau_lo, tau_hi = (
+    _kendall_tau(*(t.reshape(same.shape)[:, j] for t in same.uv.T))
+    for j in range(2)
+  )
+  assert tau_hi - tau_lo > 0.3
+
+
+def test_holdout_draws_are_seeded_per_x() -> None:
+  """Each ``x``'s draws must depend on its own seed alone.
+
+  Every estimator of a cell is scored on the same draws, in E1 and E4 alike,
+  only if they are a function of the seeds; and an ``x`` whose draws moved
+  with another ``x``'s seed would move whenever the grid of ``x`` did.
+  """
+  x_axis = torch.tensor([0.2, 0.5, 0.8], dtype=torch.float64)
+  a = scenarios.holdout_grid("frank", "sin", x_axis, 50, [1, 2, 3])
+  b = scenarios.holdout_grid("frank", "sin", x_axis, 50, [1, 2, 3])
+  c = scenarios.holdout_grid("frank", "sin", x_axis, 50, [1, 9, 3])
+  assert torch.equal(a.uv, b.uv)
+  a_uv, c_uv = (g.uv.reshape(*g.shape, 2) for g in (a, c))
+  assert torch.equal(a_uv[:, [0, 2]], c_uv[:, [0, 2]])
+  assert not torch.equal(a_uv[:, 1], c_uv[:, 1])
+  assert ((a.uv > 0.0) & (a.uv < 1.0)).all()
+
+
+def test_ground_truth_reads_each_x_at_its_own_points() -> None:
+  """The truth at draws must be each ``x``'s copula at that ``x``'s pairs.
+
+  A product grid holds the same pairs at every ``x``, so evaluating every
+  column at the first one's pairs went unnoticed there; at draws it would
+  pair one ``x``'s density with another's points.
+  """
+  x_axis = torch.tensor([0.1, 0.6], dtype=torch.float64)
+  for family, scenario in (
+    ("joe", "quadratic"),
+    ("student-varying-nu", "implied"),
+  ):
+    grid = scenarios.holdout_grid(family, scenario, x_axis, 64, [5, 6])
+    truth = scenarios.ground_truth(family, scenario, grid)
+    uv = grid.uv.reshape(*grid.shape, 2)
+    for j, x in enumerate(x_axis.tolist()):
+      if family in scenarios.SHAPE_FAMILIES:
+        ((_, cop),) = scenarios.SHAPE_FAMILIES[family].components(x)
+      else:
+        tau_of_x = scenarios.TAU_SCENARIOS[scenario].tau_of_x
+        assert tau_of_x is not None
+        tau = float(tau_of_x(torch.tensor([x], dtype=torch.float64))[0])
+        cop = scenarios.bicop(scenarios.FAMILIES[family], tau)
+      expected = torch.from_numpy(cop.pdf(uv[:, j].contiguous().numpy()))
+      torch.testing.assert_close(truth["pdf"][:, j], expected)
+
+
+def test_an_unconditional_holdout_draws_from_its_one_copula() -> None:
+  """An unconditional scenario's draws need no covariate and one seed.
+
+  It is scored like the conditional ones, on one column of draws; a grid with
+  a covariate would hand every estimator an ``x`` it was not fitted on.
+  """
+  grid = scenarios.holdout_grid("gaussian", "uncond70", None, 2000, [3])
+  assert grid.shape == (2000,)
+  assert grid.x_flat is None
+  assert not grid.conditional
+  assert _kendall_tau(grid.u_flat, grid.v_flat) == pytest.approx(0.7, abs=0.05)
+
+
+@pytest.mark.parametrize(
+  ("x_axis", "n", "seeds", "match"),
+  [
+    (torch.tensor([0.5]), 1, [1], "n must be"),
+    (None, 10, [1], "x_axis must be given"),
+    (torch.tensor([0.2, 0.8]), 10, [1], "one seed per covariate value"),
+  ],
+)
+def test_holdout_grid_refuses_what_it_cannot_draw(
+  x_axis: torch.Tensor | None, n: int, seeds: list[int], match: str
+) -> None:
+  """A malformed request must fail before any draw, naming what is wrong.
+
+  One draw has no standard error, a conditional scenario without its
+  covariate would be drawn at no ``x``, and a missing seed would leave an
+  ``x`` without a stream of its own.
+  """
+  with pytest.raises(ValueError, match=match):
+    scenarios.holdout_grid("clayton", "linear", x_axis, n, seeds)

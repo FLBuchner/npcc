@@ -24,12 +24,18 @@ from npcc.core.controls import FitControlsRosenblattBicop
 from npcc.core.errors import EstimatorConfigError
 from npcc.experiments import _external, _study, cli, metrics, scenarios
 from npcc.experiments.config import (
+  Cell,
   EstimatorSpec,
   GridConfig,
   RunConfig,
   load_grid,
 )
-from npcc.experiments.runner import _grid_signature, run_study
+from npcc.experiments.runner import (
+  _cell_seed,
+  _grid_signature,
+  holdout_points,
+  run_study,
+)
 from npcc.experiments.vine_config import VineGridConfig
 from tests.conftest import hermetic_backend
 
@@ -198,7 +204,7 @@ def test_a_backend_estimator_keeps_its_id_and_signature(tmp_path: Path) -> None:
   # Pinned: a backend-only grid hashes no field an external estimator adds.
   assert (
     _grid_signature(grid, RunConfig(out=tmp_path))
-    == "193ed1911aa344dfe95686dbb77381ade99d46b96cef6fe41f5f795b0d2f48a5"
+    == "87aa36a6d4d8f61d2262ea10fd6ce32786c939a9599bc31471b43272bc3a2a11"
   )
 
 
@@ -483,15 +489,18 @@ def _table(run: Path, name: str, label: str = "independence") -> pd.DataFrame:
   return cast("pd.DataFrame", df[df["label"] == label].reset_index(drop=True))
 
 
-def test_one_script_run_predicts_both_grids(external_run: Path) -> None:
-  """Each cell must run the script once, with both grids in the one run.
+def test_one_script_run_predicts_every_grid(external_run: Path) -> None:
+  """Each cell must run the script once, with every grid in the one run.
 
-  A second run would refit the method, so the stored surfaces would come from
-  another model than the one the metrics score.
+  A second run would refit the method, so the stored surfaces, or the
+  densities the Monte Carlo KL scores, would come from another model than the
+  one the grid metrics score.
   """
   calls = (external_run / "stand_in.calls").read_text().splitlines()
   assert len(calls) == 2
-  assert all(call.split()[1:] == ["30", "metric", "surface"] for call in calls)
+  assert all(
+    call.split()[1:] == ["30", "metric", "holdout", "surface"] for call in calls
+  )
   assert len({call.split()[0] for call in calls}) == 2
 
 
@@ -535,6 +544,28 @@ def test_external_predictions_are_scored_against_the_truth(
     assert at["pred"].to_numpy() == pytest.approx(at[argument].to_numpy())
 
 
+def test_external_kl_is_scored_at_the_cells_draws(external_run: Path) -> None:
+  """A script's density at the draws must be scored against the truth there.
+
+  The stand-in is the independence copula, whose Monte Carlo KL is the mean
+  true log density over the cell's draws: a density read back from another
+  grid, or a truth taken at other points, would show up as a wrong
+  ``KL_mc``.
+  """
+  scored = _table(external_run, "metrics_by_x")
+  pdf = scored[scored["quantity"] == "pdf"]
+  base_seed = RunConfig(out=external_run).base_seed
+  x_axis = scenarios.conditional_x_axis(3)
+  for rep in (0, 1):
+    cell = Cell(family="clayton", tau_scenario="linear", n=30, rep=rep)
+    grid, log_true = holdout_points(
+      cell, x_axis, 2000, _cell_seed(base_seed, cell)
+    )
+    expected = log_true.reshape(grid.shape).mean(dim=0)
+    got = pdf[pdf["rep"] == rep].sort_values("x")["KL_mc"].to_numpy()
+    assert got == pytest.approx(expected.numpy(), rel=1e-12)
+
+
 def test_external_rows_carry_the_scripts_tau_and_timings(
   external_run: Path,
 ) -> None:
@@ -559,7 +590,9 @@ def test_external_rows_carry_the_scripts_tau_and_timings(
     "h2_time": h2,
     "tau_time": tau,
     "surface_time": pdf + h1 + h2,
-    "total_estimator_time": fit + tau + 2 * (pdf + h1 + h2),
+    # The Monte Carlo KL reads only the density at the draws.
+    "holdout_time": pdf,
+    "total_estimator_time": fit + tau + 2 * (pdf + h1 + h2) + pdf,
   }
   assert len(runtime) == 2
   for column, seconds in expected.items():

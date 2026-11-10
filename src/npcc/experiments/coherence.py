@@ -7,7 +7,8 @@ finite sample they need not agree. Two diagnostics measure by how much, on a
 study's evaluation grid, one row per covariate value:
 
 - :func:`directional_rows` -- the IAE between the two directions' densities,
-  and each direction's IAE and KL against the truth next to the average's;
+  and each direction's IAE and KL against the truth next to the average's,
+  the KL on the grid and, given the cell's draws, by Monte Carlo;
 - :func:`hfunc_rows` -- the IAE between each direct h-function and the
   integral of the averaged density it should equal:
   ``h1(u, v) = int_0^v c(u, s) ds`` and ``h2(u, v) = int_0^u c(s, v) ds``.
@@ -38,7 +39,10 @@ def _columns(grid: EvalGrid) -> list[tuple[float, slice | int]]:
 
 
 def directional_rows(
-  model: RosenblattBicop, grid: EvalGrid, truth: torch.Tensor
+  model: RosenblattBicop,
+  grid: EvalGrid,
+  truth: torch.Tensor,
+  holdout: tuple[EvalGrid, torch.Tensor] | None = None,
 ) -> list[dict[str, float]]:
   """The two directions against each other, and each against the truth.
 
@@ -50,12 +54,19 @@ def directional_rows(
       The evaluation grid.
   truth : torch.Tensor
       The true density at the grid's points, in its flattened order.
+  holdout : tuple of EvalGrid and torch.Tensor, optional
+      The cell's draws from the true copula and the true log density at each,
+      from :func:`npcc.experiments.runner.holdout_points`, with the same
+      covariate values as ``grid``. Given, each density also gets its Monte
+      Carlo KL.
 
   Returns
   -------
   list of dict
       Per covariate value: ``iae_between_directions``, and ``IAE`` and ``KL``
-      against the truth for ``v_given_u``, ``u_given_v`` and ``average``.
+      against the truth for ``v_given_u``, ``u_given_v`` and ``average``, with
+      ``KL_mc``, ``KL_mc_se`` and ``KL_mc_floored`` for each when ``holdout``
+      is given.
   """
   v_given_u, u_given_v = model.pdf_by_direction(grid.uv, x=_covariates(grid))
   shape = grid.shape if grid.conditional else (grid.shape[0], 1)
@@ -65,6 +76,21 @@ def directional_rows(
   }
   dens["average"] = 0.5 * (dens["v_given_u"] + dens["u_given_v"])
   true = truth.cpu().reshape(shape)
+  by_x: dict[str, list[dict[str, float]]] = {}
+  if holdout is not None:
+    points, log_true = holdout
+    at_draws = dict(
+      zip(
+        ("v_given_u", "u_given_v"),
+        model.pdf_by_direction(points.uv, x=_covariates(points)),
+        strict=True,
+      )
+    )
+    at_draws["average"] = 0.5 * (at_draws["v_given_u"] + at_draws["u_given_v"])
+    by_x = {
+      name: metrics.holdout_kl_by_x(points, log_true, d)
+      for name, d in at_draws.items()
+    }
 
   rows = []
   for x, j in _columns(grid):
@@ -79,6 +105,8 @@ def directional_rows(
       m = metrics.grid_metrics(true[:, col], d[:, col], include_kl=True)
       row[f"{name}_IAE"] = m["IAE"]
       row[f"{name}_KL"] = m["KL"]
+      for key, value in by_x.get(name, [{}] * (col + 1))[col].items():
+        row[f"{name}_{key}"] = value
     rows.append(row)
   return rows
 

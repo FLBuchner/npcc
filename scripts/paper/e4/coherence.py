@@ -15,6 +15,11 @@ diagnostic into ``--out``:
   requested iteration count, with the wall time of the projected evaluation
   over the unprojected one.
 
+Every KL is scored twice: on the grid (``*_KL``) and by Monte Carlo
+(``*_KL_mc``, with ``*_KL_mc_se`` and ``*_KL_mc_floored``) at the cell's
+draws from the true copula, the same draws E1 scores the cell's estimators
+on. ``summarize.py`` reports the Monte Carlo one.
+
 ``--projection-grid`` replaces all three with the projection alone, scored on
 each given grid size from one fit per cell, into
 ``projection_grid_<I>of<K>.csv``; its ``proj_*`` columns are the projected
@@ -45,7 +50,7 @@ from npcc.core import FitControlsRosenblattBicop, RosenblattBicop
 from npcc.experiments import coherence, metrics, scenarios
 from npcc.experiments._study import derive_seed
 from npcc.experiments.config import Cell, load_grid
-from npcc.experiments.runner import _cell_seed
+from npcc.experiments.runner import _cell_seed, holdout_points
 
 PANELS = [(f, s) for f in ("clayton", "gaussian") for s in ("linear", "sin")]
 
@@ -60,8 +65,14 @@ def projection_rows(
   grid: scenarios.EvalGrid,
   truth: torch.Tensor,
   iters: list[int],
+  holdout: tuple[scenarios.EvalGrid, torch.Tensor],
 ) -> list[dict[str, object]]:
-  """Accuracy, mass and margins with and without the projection, per x."""
+  """Accuracy, mass and margins with and without the projection, per x.
+
+  ``holdout`` is the cell's draws and the true log density at each, from
+  :func:`holdout_points`; each density's Monte Carlo KL is scored there,
+  outside the timed evaluations.
+  """
   x = grid.x_flat
   t0 = perf_counter()
   model.pdf_by_projection(grid.uv, x=x, sinkhorn_iters=[None])
@@ -70,12 +81,17 @@ def projection_rows(
   out = model.pdf_by_projection(grid.uv, x=x, sinkhorn_iters=[None, *iters])
   all_time = perf_counter() - t0
 
+  points, log_true = holdout
+  at_draws = model.pdf_by_projection(
+    points.uv, x=points.x_flat, sinkhorn_iters=[None, *iters]
+  )
   shape = grid.shape
   true = truth.cpu().reshape(shape)
   nu, nv = grid.u_axis.shape[0], grid.v_axis.shape[0]
   rows = []
   for key, dens in out.items():
     d = dens.cpu().reshape(shape)
+    by_x = metrics.holdout_kl_by_x(points, log_true, at_draws[key])
     for j, xv in enumerate(grid.x_axis.tolist()):
       m = metrics.grid_metrics(true[:, j], d[:, j], include_kl=True)
       margins = metrics.marginal_diagnostics(
@@ -87,6 +103,7 @@ def projection_rows(
           "sinkhorn_iters": "none" if key is None else int(key),
           "pdf_IAE": m["IAE"],
           "pdf_KL": m["KL"],
+          **{f"pdf_{k}": v for k, v in by_x[j].items()},
           "mass": float(d[:, j].mean()),
           **margins,
           # The extra cost of every projected count over the unprojected
@@ -132,6 +149,7 @@ def projection_grid_rows(
   truth: torch.Tensor,
   iters: list[int],
   sizes: list[int],
+  holdout: tuple[scenarios.EvalGrid, torch.Tensor],
 ) -> list[dict[str, object]]:
   """:func:`projection_rows` on each projection grid size, from one fit.
 
@@ -151,7 +169,7 @@ def projection_grid_rows(
         **r,
         **on_grid[(cast("float", r["x"]), r["sinkhorn_iters"])],
       }
-      for r in projection_rows(model, grid, truth, iters)
+      for r in projection_rows(model, grid, truth, iters, holdout)
     ]
   return rows
 
@@ -280,6 +298,7 @@ def main() -> None:
       conditional_x_grid_n=grid_cfg.conditional_x_grid_n,
     )
     truth = scenarios.ground_truth(cell.family, cell.tau_scenario, eval_grid)
+    holdout = holdout_points(cell, eval_grid.x_axis, grid_cfg.holdout_n, seed)
     for label in a.labels:
       est = by_label[label]
       torch.manual_seed(derive_seed(seed, est.estimator_id))
@@ -325,19 +344,24 @@ def main() -> None:
         continue
       if a.projection_grid:
         sized = projection_grid_rows(
-          model, eval_grid, truth["pdf"], a.sinkhorn, a.projection_grid
+          model,
+          eval_grid,
+          truth["pdf"],
+          a.sinkhorn,
+          a.projection_grid,
+          holdout,
         )
         rows += [{**base, "diagnostic": "projection_grid", **r} for r in sized]
         continue
       for diag, part_rows in (
         (
           "directional",
-          coherence.directional_rows(model, eval_grid, truth["pdf"]),
+          coherence.directional_rows(model, eval_grid, truth["pdf"], holdout),
         ),
         ("hfunc", coherence.hfunc_rows(model, eval_grid, n_int=a.n_int)),
         (
           "projection",
-          projection_rows(model, eval_grid, truth["pdf"], a.sinkhorn),
+          projection_rows(model, eval_grid, truth["pdf"], a.sinkhorn, holdout),
         ),
       ):
         rows += [{**base, "diagnostic": diag, **r} for r in part_rows]

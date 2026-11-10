@@ -4,8 +4,10 @@ A *scenario* pairs a copula family with a Kendall's-tau regime and defines:
 
 - :func:`sample` — draw a training set ``(u, v[, x])`` from the known copula;
 - :func:`eval_grid` — the fixed points at which estimates are scored;
-- :func:`ground_truth` — the exact ``pdf`` / ``hfunc1`` / ``hfunc2`` on that
-  evaluation grid.
+- :func:`holdout_grid` — draws from the true copula at each covariate value,
+  at which the Monte Carlo KL is scored;
+- :func:`ground_truth` — the exact ``pdf`` / ``hfunc1`` / ``hfunc2`` at the
+  points of either.
 
 Everything is backed by :mod:`pyvinecopulib`: ``Bicop.tau_to_parameters`` maps a
 target Kendall's tau to the family's parameter, and ``Bicop.hinv1`` provides a
@@ -28,7 +30,7 @@ form. The shape families sit outside :data:`FAMILIES` and
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -114,7 +116,11 @@ class EvalGrid:
   length for conditional scenarios and ``None`` for unconditional ones.
   ``shape`` is ``(n_pairs, n_x)`` (conditional) or ``(n_points,)``
   (unconditional) so the runner can reshape per-quantity ground truth and
-  predictions consistently.
+  predictions consistently: point ``i * n_x + j`` is pair ``i`` at
+  ``x_axis[j]``. On a grid from :func:`eval_grid` every ``x`` holds the same
+  pairs, the product of ``u_axis`` and ``v_axis``; on one from
+  :func:`holdout_grid` each ``x`` holds its own draws, and both axes are
+  empty.
   """
 
   u_flat: torch.Tensor
@@ -361,6 +367,133 @@ def eval_grid_for_x(
   )
 
 
+def _copula_draws(
+  components: tuple[tuple[float, pv.Bicop], ...],
+  n: int,
+  generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor]:
+  """``n`` pairs from the mixture ``components``, by inverse Rosenblatt.
+
+  The stream is laid out as :func:`_sample_shape` lays out its own: ``u``,
+  the inverse-Rosenblatt noise ``w``, then ``r``, which picks each pair's
+  component, drawn for a one-component copula too. ``v`` is kept inside the
+  open unit interval, where every estimator is defined.
+  """
+  u = torch.rand(n, generator=generator, dtype=torch.float64).clamp(
+    _EPS, 1.0 - _EPS
+  )
+  w = torch.rand(n, generator=generator, dtype=torch.float64).clamp(
+    _EPS, 1.0 - _EPS
+  )
+  r = torch.rand(n, generator=generator, dtype=torch.float64)
+  bounds = torch.tensor(
+    [weight for weight, _ in components], dtype=torch.float64
+  ).cumsum(0)
+  # Rounding can leave the weights summing to just under one.
+  pick = torch.searchsorted(bounds, r, right=True).clamp(
+    max=len(components) - 1
+  )
+  v = torch.empty(n, dtype=torch.float64)
+  for k, (_, cop) in enumerate(components):
+    rows = pick == k
+    if rows.any():
+      uw = torch.column_stack([u[rows], w[rows]]).numpy()
+      v[rows] = torch.from_numpy(cop.hinv1(uw))
+  return u, v.clamp(_EPS, 1.0 - _EPS)
+
+
+def holdout_grid(
+  family: str,
+  scenario: str,
+  x_axis: torch.Tensor | None,
+  n: int,
+  seeds: Sequence[int],
+) -> EvalGrid:
+  """``n`` draws from the true copula at each ``x``, as an :class:`EvalGrid`.
+
+  The points at which the Monte Carlo KL is scored: at ``x_axis[j]``, ``n``
+  pairs from the true conditional copula there, from a generator seeded with
+  ``seeds[j]``, so every estimator of a cell is scored on the same draws and
+  each ``x``'s draws do not depend on the others'. An unconditional scenario
+  takes ``x_axis=None`` and one seed.
+
+  Parameters
+  ----------
+  family : str
+      A key of :data:`FAMILIES` or :data:`SHAPE_FAMILIES`.
+  scenario : str
+      A key of :data:`TAU_SCENARIOS`, or :data:`IMPLIED`.
+  x_axis : torch.Tensor or None
+      The covariate values; ``None`` for an unconditional scenario.
+  n : int
+      The draws per covariate value.
+  seeds : sequence of int
+      One seed per covariate value, or one for an unconditional scenario.
+
+  Returns
+  -------
+  EvalGrid
+      ``shape`` ``(n, n_x)``, or ``(n,)`` unconditionally, with empty axes.
+  """
+  _check_pair(family, scenario)
+  if n < 2:
+    raise ValueError(f"n must be >= 2 draws per covariate value; got {n}")
+  conditional = is_conditional(scenario)
+  if conditional != (x_axis is not None):
+    raise ValueError(
+      f"x_axis must be given exactly when the scenario is conditional; got "
+      f"{'none' if x_axis is None else 'one'} for {scenario!r}"
+    )
+  xs = [float("nan")] if x_axis is None else x_axis.tolist()
+  if len(seeds) != len(xs):
+    raise ValueError(
+      f"seeds must hold one seed per covariate value; got {len(seeds)} for "
+      f"{len(xs)}"
+    )
+
+  def components(x: float) -> tuple[tuple[float, pv.Bicop], ...]:
+    if family in SHAPE_FAMILIES:
+      return SHAPE_FAMILIES[family].components(x)
+    spec = TAU_SCENARIOS[scenario]
+    if spec.conditional:
+      assert spec.tau_of_x is not None
+      tau = float(spec.tau_of_x(torch.tensor([x], dtype=torch.float64))[0])
+    else:
+      assert spec.tau is not None
+      tau = spec.tau
+    return ((1.0, bicop(FAMILIES[family], tau)),)
+
+  draws = [
+    _copula_draws(components(x), n, torch.Generator().manual_seed(seed))
+    for x, seed in zip(xs, seeds, strict=True)
+  ]
+  u = torch.stack([d[0] for d in draws], dim=1)
+  v = torch.stack([d[1] for d in draws], dim=1)
+  empty = torch.empty(0, dtype=torch.float64)
+  if x_axis is None:
+    return EvalGrid(
+      u_flat=u.reshape(-1),
+      v_flat=v.reshape(-1),
+      x_flat=None,
+      shape=(n,),
+      conditional=False,
+      x_axis=None,
+      u_axis=empty,
+      v_axis=empty,
+    )
+  x_axis = x_axis.to(dtype=torch.float64)
+  return EvalGrid(
+    u_flat=u.reshape(-1),
+    v_flat=v.reshape(-1),
+    x_flat=x_axis.repeat(n).reshape(-1, 1),
+    shape=(n, x_axis.shape[0]),
+    conditional=True,
+    x_axis=x_axis,
+    u_axis=empty,
+    v_axis=empty,
+  )
+
+
 def _quantities(cop: pv.Bicop, uv: torch.Tensor) -> dict[str, torch.Tensor]:
   """Every scored quantity of ``cop`` at the points ``uv``."""
   uv_host = uv.contiguous().numpy()
@@ -387,20 +520,21 @@ def ground_truth(
 ) -> dict[str, torch.Tensor]:
   """Exact pdf/hfunc1/hfunc2 on ``grid`` for ``(family, scenario)``.
 
-  Conditional: one ``Bicop`` per evaluation ``x``, evaluated at every uv pair,
-  stacked into ``(n_pairs, n_x)`` grids.  Unconditional: a single ``Bicop``
-  evaluated on the flattened uv grid. A shape family is conditional, and at
-  each ``x`` mixes its components' quantities with their weights. ``grid``
-  defaults to the scenario's :func:`eval_grid`.
+  Conditional: one ``Bicop`` per evaluation ``x``, evaluated at that ``x``'s
+  own pairs, stacked into ``(n_pairs, n_x)`` grids.  Unconditional: a single
+  ``Bicop`` evaluated on the flattened points. A shape family is conditional,
+  and at each ``x`` mixes its components' quantities with their weights.
+  ``grid`` defaults to the scenario's :func:`eval_grid`; it may also come from
+  :func:`holdout_grid`, whose pairs differ from one ``x`` to the next.
   """
   _check_pair(family, scenario)
   grid = eval_grid(scenario) if grid is None else grid
   if family in SHAPE_FAMILIES:
     assert grid.x_axis is not None
-    pairs = grid.uv.reshape(*grid.shape, 2)[:, 0]
+    pairs = grid.uv.reshape(*grid.shape, 2)
     shape_cols = [
-      _mixture_quantities(SHAPE_FAMILIES[family], float(x), pairs)
-      for x in grid.x_axis
+      _mixture_quantities(SHAPE_FAMILIES[family], float(x), pairs[:, j])
+      for j, x in enumerate(grid.x_axis)
     ]
     return {
       q: torch.stack([c[q] for c in shape_cols], dim=1) for q in QUANTITIES
@@ -411,10 +545,10 @@ def ground_truth(
 
   if spec.conditional:
     assert spec.tau_of_x is not None and grid.x_axis is not None
-    pairs = grid.uv.reshape(*grid.shape, 2)[:, 0]
+    pairs = grid.uv.reshape(*grid.shape, 2)
     cols = [
-      _quantities(bicop(fam, float(tau)), pairs)
-      for tau in spec.tau_of_x(grid.x_axis)
+      _quantities(bicop(fam, float(tau)), pairs[:, j])
+      for j, tau in enumerate(spec.tau_of_x(grid.x_axis))
     ]
     return {q: torch.stack([c[q] for c in cols], dim=1) for q in QUANTITIES}
 

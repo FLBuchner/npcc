@@ -192,7 +192,7 @@ def test_summaries_group_over_reps(coverage_study: Tables) -> None:
   outputs = aggregate_study_outputs(metric_df, diagnostic_df, runtime_df)
   mc_summary = outputs["summary_by_x"]
   runtime_summary = outputs["runtime_summary"]
-  assert set(mc_summary["metric"].unique()) == {"IAE", "ISE", "KL"}
+  assert set(mc_summary["metric"].unique()) == {"IAE", "ISE", "KL", "KL_mc"}
   assert {"x", "tau_true"}.issubset(mc_summary.columns)
   assert not runtime_summary.empty
   assert {"fit_time_mean", "pdf_time_mean", "tau_time_mean"}.issubset(
@@ -324,6 +324,42 @@ def test_resume_skips_completed_cells(
 
   assert seen == [cells[0]]
   assert len(metric2) == len(metric1)
+
+
+def test_kl_mc_is_scored_at_the_cells_draws(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """The density at the cell's draws must be scored against the truth there.
+
+  The normal-quantile backend under probit reads out the independence copula
+  exactly, so its Monte Carlo KL is the mean true log density over the cell's
+  draws. Draws other than :func:`holdout_points`', a truth taken at other
+  points, or rows misaligned by ``x`` would each show up as a wrong
+  ``KL_mc``; and a second estimator in the cell must not move it, since every
+  estimator is scored on the same draws.
+  """
+  grid = _small_grid(
+    n_rep=1,
+    estimators=[
+      _normal("normal-probit", transform="probit"),
+      _normal("normal-identity", transform="identity"),
+    ],
+  )
+  run = RunConfig(out=tmp_path, workers=1)
+  metric_df = run_study(grid, run)[0]
+  (cell,) = grid.cells()
+  x_axis = scenarios.conditional_x_axis(grid.conditional_x_grid_n)
+  points, log_true = runner_mod.holdout_points(
+    cell, x_axis, grid.holdout_n, runner_mod._cell_seed(run.base_seed, cell)
+  )
+  expected = log_true.reshape(points.shape).mean(dim=0)
+
+  pdf = metric_df[metric_df["quantity"] == "pdf"]
+  probit = pdf[pdf["label"] == "normal-probit"].sort_values("x")
+  assert probit["KL_mc"].to_numpy() == pytest.approx(expected.numpy(), rel=1e-9)
+  assert (pdf["KL_mc"] > 0.0).all()
+  assert (pdf["KL_mc_se"] > 0.0).all()
+  assert metric_df.loc[metric_df["quantity"] != "pdf", "KL_mc"].isna().all()
 
 
 def test_resume_grid_signature_mismatch_raises(
@@ -524,7 +560,7 @@ def test_the_signature_hashes_shape_settings_only_where_a_grid_has_them(
   e1 = load_grid(Path(__file__).resolve().parents[2] / "configs" / "study.toml")
   assert (
     runner_mod._grid_signature(e1, run)
-    == "640cf74836793eccc93c7ed834afb0d028cad013818b7b1b5596659ef0910d04"
+    == "e68b81efd2fcb7d55dcff442ef676c1b778f4861b0a29c55264d3a60dbcdd802"
   )
 
   base = runner_mod._grid_signature(_shape_grid([0.1, 0.9]), run)

@@ -292,6 +292,9 @@ class GridConfig:
   surface_families: list[str] = field(default_factory=lambda: ["clayton"])
   enable_tau_diagnostics: bool = True
   tau_diagnostic_n: int = 1000
+  #: Draws from the true copula per evaluation ``x``, at which the Monte
+  #: Carlo KL (``KL_mc``) is scored; see :func:`scenarios.holdout_grid`.
+  holdout_n: int = 2000
   #: The ``x`` values to store surfaces at, in place of the ones
   #: ``surface_tau_levels`` picks; empty keeps that choice by tau. A shape
   #: family's tau need not pick out an ``x`` -- the Student family's is
@@ -341,6 +344,11 @@ class GridConfig:
     self._check_surface_x()
     if self.tau_diagnostic_n < 10:
       raise ValueError("tau_diagnostic_n must be >= 10.")
+    if self.holdout_n < 2:
+      raise ValueError(
+        "holdout_n must be >= 2, for the Monte Carlo KL's standard error; "
+        f"got {self.holdout_n}"
+      )
     self._check_external()
 
   def _check_shape(self) -> None:
@@ -484,6 +492,7 @@ _GRID_OPTIONAL: dict[str, Callable[[Any], object]] = {
   "surface_families": lambda v: [str(f) for f in v],
   "enable_tau_diagnostics": bool,
   "tau_diagnostic_n": int,
+  "holdout_n": int,
   "surface_x": lambda v: [float(x) for x in v],
 }
 

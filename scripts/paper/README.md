@@ -38,6 +38,26 @@ run exactly (`tests/experiments/test_cli.py`). Four processes fit a 20 GB GPU
 with TabPFN 3.5 at n = 2,000; wall-clock times from a sharded run are
 contaminated by the concurrency and are not reported (see E6).
 
+## The KL the bivariate studies report (E8)
+
+E1, E1b, E1c, the temperature ablation and E4 report a Monte Carlo KL. At
+each covariate value of the metric grid, `holdout_n` draws (default 2000, a
+`[grid]` key) come from the true conditional copula. They are the same draws
+for every estimator of a cell, E4's included: `runner.holdout_points` seeds
+them from the cell's seed and the position of the x. The KL is the mean of
+`log c - log c_hat` over the draws, with E3's floor of 1e-300 under both
+logs. Each pdf row of a run's metrics records it as `KL_mc`, with
+`KL_mc_se` (its Monte Carlo standard error) and `KL_mc_floored` (draws at
+the floor); E4's parts record `*_KL_mc` beside each KL. IAE stays on the
+grid.
+
+The grid KL stays in the tables as `KL` and is not reported. `analyze.py`,
+`paired.py` and E4's `summarize.py` report `KL_mc` under the name KL, and
+refuse a run without it. Every dated run below from before E8 therefore has
+to be rerun before it can be analyzed, the R competitors (E1b) included:
+their scripts take the draws as one more grid, but their fits are not
+stored.
+
 ## E1 — bivariate backend study (§3.2)
 
 - Config: `configs/study.toml` (16 estimators; 160 cells).

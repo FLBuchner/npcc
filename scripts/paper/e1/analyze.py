@@ -7,6 +7,11 @@ finished cells only, so a partial run can be previewed) and writes into
 - ``overall.csv`` -- pdf IAE and KL, h1 and h2 IAE by estimator. Each entry is
   the mean and standard error over repetitions of the per-repetition average
   over families, tau regimes, n and x (IAE already integrates the grid).
+
+Every KL here is the Monte Carlo KL (E8), the mean of ``log c - log c_hat``
+over draws from the true copula at each x, which a run records as ``KL_mc``;
+IAE stays on the grid. The grid KL is kept as ``KL_grid`` and not reported,
+and a run without ``KL_mc`` is refused rather than reported on the grid.
 - ``by_n.csv`` -- the same by estimator and n.
 - ``ranking.csv`` -- each estimator's rank by pdf KL within every family x
   regime panel next to its overall rank, and ``ranking_agreement.csv`` with
@@ -192,8 +197,30 @@ def _finished(runs: list[Path]) -> dict[str, pd.DataFrame]:
     tables[name] = (
       annotate(pd.concat(parts, ignore_index=True)) if parts else pd.DataFrame()
     )
+  tables["metrics"] = monte_carlo_kl(tables["metrics"])
   tables["cells"] = pd.DataFrame({"cell": sorted({d.name for d in done})})
   return tables
+
+
+def monte_carlo_kl(metrics: pd.DataFrame) -> pd.DataFrame:
+  """``KL`` as the Monte Carlo KL, the grid's kept as ``KL_grid``.
+
+  Every pdf row must carry ``KL_mc``: a run from before it has none, and its
+  grid KL must not be reported under the name. The refusal names the runs.
+  """
+  pdf = metrics["quantity"] == "pdf"
+  lacking = pdf & (
+    metrics["KL_mc"].isna()
+    if "KL_mc" in metrics
+    else pd.Series(True, metrics.index)
+  )
+  if lacking.any():
+    labels = sorted(metrics.loc[lacking, "label"].unique())
+    raise SystemExit(
+      "every pdf row must carry the Monte Carlo KL (KL_mc); the runs of "
+      f"{labels} predate it, so rerun them with this npcc"
+    )
+  return metrics.rename(columns={"KL": "KL_grid", "KL_mc": "KL"})
 
 
 def annotate(df: pd.DataFrame) -> pd.DataFrame:

@@ -429,3 +429,25 @@ def test_selecting_estimators_leaves_every_other_axis_alone(
   for f in fields(GridConfig):
     if f.name != "estimators":
       assert getattr(kept, f.name) == getattr(grid, f.name), f.name
+
+
+def test_holdout_n_is_read_from_the_grid_and_refused_below_two(
+  tmp_path: Path,
+) -> None:
+  """``holdout_n`` must reach the grid from TOML, and one draw must be refused.
+
+  A key the loader dropped would score every study on the default count
+  whatever its config says; a single draw per ``x`` has no standard error.
+  """
+  config = tmp_path / "study.toml"
+  body = (
+    '[grid]\nfamilies = ["clayton"]\ntau_scenarios = ["linear"]\n'
+    'normalize = ["none"]\nn = [30]\nn_rep = 1\nholdout_n = {n}\n\n'
+    '[[grid.estimators]]\nlabel = "lightgbm-probit"\nbackend = "lightgbm"\n'
+    'transform = "probit"\n'
+  )
+  config.write_text(body.format(n=500))
+  assert load_grid(config).holdout_n == 500
+  config.write_text(body.format(n=1))
+  with pytest.raises(ValueError, match="holdout_n must be >= 2"):
+    load_grid(config)
