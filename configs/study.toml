@@ -106,24 +106,30 @@ tau_diagnostic_n = 1000
 # (py)vinecopulib, which is the one transform the paper presents (E8 in
 # `scripts/paper/README.md`). The library's default, logit, and its other
 # transforms stay available to any config that names them.
+#
+# Every TabPFN release runs at softmax temperature 1.0, no scaling, named
+# explicitly rather than left to the checkpoint: v2.5's and v3's default to
+# 0.9 and v3.5's stores 1.0, so the defaults would compare the releases at
+# different temperatures. configs/study_tabpfn_temperature.toml is the
+# ablation at 0.9.
 
 [[grid.estimators]]
 label = "tabpfn-quantiles-v2.5-probit"
 backend = "tabpfn-quantiles"
 transform = "probit"
-backend_kwargs = { model_version = "v2.5" }
+backend_kwargs = { model_version = "v2.5", model_kwargs = { softmax_temperature = 1.0 } }
 
 [[grid.estimators]]
 label = "tabpfn-quantiles-v3-probit"
 backend = "tabpfn-quantiles"
 transform = "probit"
-backend_kwargs = { model_version = "v3" }
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
 
 [[grid.estimators]]
 label = "tabpfn-quantiles-v3.5-probit"
 backend = "tabpfn-quantiles"
 transform = "probit"
-backend_kwargs = { model_version = "v3.5" }
+backend_kwargs = { model_version = "v3.5", model_kwargs = { softmax_temperature = 1.0 } }
 
 [[grid.estimators]]
 label = "nori-probit"

@@ -270,8 +270,8 @@ def annotate(df: pd.DataFrame) -> pd.DataFrame:
     df["label"],
     np.where(parsed["tabpfn"].notna(), "tabpfn", parsed["other"]),
   )
-  # A TabPFN temperature other than the checkpoint's default is part of the
-  # version's name, so the ablation's fits stay apart from E1's.
+  # A TabPFN temperature other than E1's 1.0 is part of the version's name,
+  # so the ablation's fits stay apart from E1's.
   df["version"] = parsed["version"].fillna("") + np.where(
     parsed["temp"].notna(), " (T=" + parsed["temp"].fillna("") + ")", ""
   )

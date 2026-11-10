@@ -33,6 +33,24 @@ estimators only. The commands name the probit ones. E7a's commands stay on
 logit: they check out cb04041, whose A/B scripts and labels are those of the
 run the supplement cites.
 
+## TabPFN at softmax temperature 1.0 (E8)
+
+Every TabPFN release in every paper config runs at softmax temperature 1.0,
+no scaling, stated in its `backend_kwargs` as `model_kwargs = {
+softmax_temperature = 1.0 }`. Left to the checkpoints, TabPFN 9.2.0 applies
+0.9 to v2.5 and v3, whose checkpoints store no temperature, and 1.0 to v3.5,
+whose checkpoint stores it, so E1 would compare the releases at different
+temperatures. The temperature A/B below tested 1.0 against v3's 0.9 before
+the probit rerun.
+
+A label names the release and the transform: `tabpfn-quantiles-v3-probit`
+is v3 at 1.0. A temperature other than 1.0 is named in the label, as in the
+ablation's `tabpfn-quantiles-v3-temp0.9-probit`. E3 reads its estimators
+from E1's config (`scripts/paper/e3/e3_npcc.py`'s `spec`), and E1c, E2, E4,
+the density slices and E6 name E1's labels with E1's estimator ids, so all
+of them run at 1.0. The runs from before E8 named below used the
+checkpoints' temperatures.
+
 ## Running a study on several processes
 
 `npcc-simstudy` runs cells as threads by default, which does not parallelize:
@@ -95,7 +113,8 @@ stays the raw mean over the evaluation grid.
 ## E1 — bivariate backend study (§3.2)
 
 - Config: `configs/study.toml` (8 estimators, all probit: the six backends
-  and TabPFN's v2.5 and v3.5 releases; 160 cells).
+  and TabPFN's v2.5 and v3.5 releases, every TabPFN at softmax temperature
+  1.0; 160 cells).
 - Run: the sharded commands above with `OUT=results/study_2026-11-05`.
 - Analysis: `uv run --no-sync python scripts/paper/e1/analyze.py
   results/study_2026-11-05 --tabpfn <version> --transform probit` writes
@@ -120,19 +139,18 @@ stays the raw mean over the evaluation grid.
   from 7000ae3 only read their checkpoints. The density metrics are
   unprojected. `projection_summary` predates the midpoint Sinkhorn projection
   (a26262c), so the projection results reported come from E4.
-- TabPFN temperature ablation (supplement): `configs/study_tabpfn_temperature.toml`
-  (v3 at temperature 1.0 and v3.5 at 0.9, probit; E1's cells for n in
-  {500, 2000}, reps 0-4) with the sharded commands above and
-  `OUT=results/study_2026-11-06_tabpfn_temperature`, from a clean worktree at
-  7567717. Each checkpoint's own temperature, which E1 used, is 0.9 for v3
-  and 1.0 for v3.5, so the ablation swaps them. Its fits pair with E1's on
-  identical data: `scripts/paper/e1/paired.py results/study_2026-11-05 --with
-  results/study_2026-11-06_tabpfn_temperature --labels
-  tabpfn-quantiles-v3-temp1.0-probit --against tabpfn-quantiles-v3-probit
-  --common-cells --out results/study_2026-11-06_tabpfn_temperature/analysis/v3`,
-  and likewise v3.5 at 0.9 against `tabpfn-quantiles-v3.5-probit` (into
-  `analysis/v3.5`) and against `tabpfn-quantiles-v3-probit` (into
-  `analysis/vs_v3`).
+- TabPFN temperature ablation (supplement):
+  `configs/study_tabpfn_temperature.toml` (v3 and v3.5 at 0.9, against E1's
+  1.0, probit; E1's cells for n in {500, 2000}, reps 0-4) with the sharded
+  commands above. Its fits pair with E1's on identical data, `E1` and `T`
+  being the two runs' folders: `scripts/paper/e1/paired.py $E1 --with $T
+  --labels tabpfn-quantiles-v3-temp0.9-probit --against
+  tabpfn-quantiles-v3-probit --common-cells --out $T/analysis/v3`, and
+  likewise `tabpfn-quantiles-v3.5-temp0.9-probit` against
+  `tabpfn-quantiles-v3.5-probit` (into `analysis/v3.5`) and against
+  `tabpfn-quantiles-v3-temp0.9-probit` (into `analysis/vs_v3`). The run from
+  before E8, `results/study_2026-11-06_tabpfn_temperature` from 7567717,
+  swapped the checkpoints' temperatures instead: v3 at 1.0 and v3.5 at 0.9.
 
 ## E1b — established competitors on E1's cells (§3.2)
 
@@ -362,4 +380,52 @@ uv run --no-sync python scripts/qt_ab/report.py --out $O/gb $O/tabpfn $O/icl \
 uv run --no-sync python scripts/qt_ab/readout_choice.py \
   --runs $O/gb $O/tabpfn $O/icl --baseline 'm21:ma0|current' \
   --arms 'm21:ma2|current' 'm21:wh0.65|current' --csv $O/readout_choice.csv
+```
+
+## The TabPFN temperature A/B (supplement, E8)
+
+TabPFN v3 at softmax temperature 1.0 against v3 at its checkpoint's 0.9,
+both under the adopted read-out (`m21:wh0.65|current`), on E1's cells for n
+in {200, 2000}, reps 0-9, probit. It runs from 42d8fda on `qt-ab-probit`,
+two scripts-only commits after ca4e52c: `ab.py`'s
+`tabpfn-quantiles-v3-temp1.0-probit`, and the rule below in `report.py
+--compare-labels`. `src` is the same at both commits, so E7a′'s
+`tabpfn-quantiles-v3-probit` rows are the 0.9 side as they stand.
+
+- **Rule** (fixed before reps 0-4 were read; `report.py`'s
+  `relative_labels`):
+  - for each n, the mean over pairs (cell, rep) of the held-out KL
+    difference, 1.0 minus 0.9, divided by the mean held-out KL at 0.9: a
+    ratio of means, so that a pair with a near-zero KL cannot dominate;
+  - its SE is that of the mean difference over the same mean;
+  - pooled over n with equal weight, SE `sqrt(sum se_n^2) / N`;
+  - 1.0 is adopted unless the pooled score is above +2 SE, that is, unless
+    it is clearly worse. pdf IAE and reps 5-9 are reported and do not
+    decide.
+- **Result** (`report_temperature.txt`), as relative changes for 1.0 with
+  SE in parentheses:
+
+  | | n = 200 | n = 2000 | pooled |
+  |---|---|---|---|
+  | held-out KL, reps 0-4 | +8.3% (1.2%) | −4.4% (3.1%) | +1.9% (1.7%) |
+  | held-out KL, reps 5-9 | +1.6% (1.8%) | +4.1% (5.9%) | +2.8% (3.1%) |
+  | pdf IAE, reps 0-4 | +2.9% (0.6%) | +0.4% (1.5%) | +1.7% (0.8%) |
+  | pdf IAE, reps 5-9 | +0.9% (0.9%) | +1.8% (2.6%) | +1.4% (1.4%) |
+
+  The pooled score is 1.2 SE above zero, so 1.0 is adopted. It is not clearly
+  worse, but no pooled figure favors it: the case for 1.0 is that it applies
+  no scaling to any release, not that it fits better. E1's temperature
+  ablation measures the difference on the full grid.
+
+About 13 min on an idle machine.
+
+```bash
+git checkout 42d8fda
+O=results/qt_ab_probit_2026-11
+uv run --no-sync python scripts/qt_ab/ab.py --out $O/tabpfn_temp1.0 \
+  --device cuda --n 200 2000 --grids m21 --arms 'wh0.65|current' \
+  --estimators tabpfn-quantiles-v3-temp1.0-probit
+uv run --no-sync python scripts/qt_ab/report.py --out $O/tabpfn \
+  $O/tabpfn_temp1.0 --baseline 'm21:wh0.65|current' --compare-labels \
+  tabpfn-quantiles-v3-probit tabpfn-quantiles-v3-temp1.0-probit
 ```

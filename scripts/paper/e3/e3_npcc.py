@@ -7,8 +7,9 @@ environment only (``uv run --no-sync python ...`` from ``/home/thibault/npcc``).
 transform, with E1's labels, so E3 rows join E1 on ``estimator``. Each is an
 :class:`npcc.experiments.config.EstimatorSpec`, the object E1 builds its
 controls from, so the backend, transform, ``backend_kwargs`` and per-fit
-torch seed (``derive_seed(<salt>, estimator_id)``) are built the same way.
-No backend hyperparameter is changed from E1's defaults.
+torch seed (``derive_seed(<salt>, estimator_id)``) are built the same way:
+:func:`spec` reads them from E1's config, which is where TabPFN's release and
+softmax temperature are set. No backend hyperparameter is changed from E1's.
 
 **Timing.** ``fit_s`` is the construction of :class:`RosenblattBicop` and its
 ``fit`` (both Rosenblatt directions); for TabPFN that includes building the
@@ -22,6 +23,8 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -29,7 +32,7 @@ from dotenv import load_dotenv
 
 from npcc import FitControlsRosenblattBicop, RosenblattBicop
 from npcc.experiments._study import derive_seed
-from npcc.experiments.config import EstimatorSpec
+from npcc.experiments.config import EstimatorSpec, load_grid
 
 # TabPFN reads TABPFN_TOKEN from the environment; an exported token wins.
 load_dotenv("/home/thibault/npcc/.env", override=False)
@@ -60,13 +63,29 @@ VINECOP_CHECK = "catboost-probit"
 PROJECTION_GRID_SIZE = 30
 
 
+#: E1's config, the source of every estimator's settings here.
+E1_CONFIG = Path(__file__).resolve().parents[3] / "configs" / "study.toml"
+
+
+@cache
+def _e1_estimators() -> dict[str, EstimatorSpec]:
+  return {e.label: e for e in load_grid(E1_CONFIG).estimators}
+
+
 def spec(label: str) -> EstimatorSpec:
-  """The E1 estimator called ``label``."""
+  """The E1 estimator called ``label``, as E1's config builds it."""
   backend, version, _ = ESTIMATORS[label]
-  kwargs = {} if version is None else {"model_version": version}
-  return EstimatorSpec(
-    label=label, backend=backend, transform=TRANSFORM, backend_kwargs=kwargs
-  )
+  est = _e1_estimators().get(label)
+  if est is None:
+    raise SystemExit(f"{label} must be an estimator of {E1_CONFIG}; it is not")
+  stated = (backend, TRANSFORM, version)
+  found = (est.backend, est.transform, est.backend_kwargs.get("model_version"))
+  if found != stated:
+    raise SystemExit(
+      f"{label} must be (backend, transform, model_version) {stated} in "
+      f"{E1_CONFIG}, as ESTIMATORS states; got {found}"
+    )
+  return est
 
 
 @dataclass
