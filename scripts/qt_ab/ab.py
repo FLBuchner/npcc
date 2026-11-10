@@ -78,6 +78,13 @@ ESTIMATORS: dict[str, tuple[str, str, dict[str, object]]] = {
     )
     for t in ("logit", "probit")
   },
+  # TabPFN v3 at softmax temperature 1.0 rather than its checkpoint's 0.9,
+  # with E1's temperature ablation's settings and so its estimator id.
+  "tabpfn-quantiles-v3-temp1.0-probit": (
+    "tabpfn-quantiles",
+    "probit",
+    {"model_version": "v3", "model_kwargs": {"softmax_temperature": 1.0}},
+  ),
 }
 TREES = [
   label

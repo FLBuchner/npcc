@@ -14,6 +14,8 @@ IAE and the tau error; plus the held-out KL from true to estimated density.
   backend, on the mean over backends of each backend's mean difference.
 - ``--relative-selection``: E7a′'s rule, one arm for every backend; see
   :func:`relative_selection`.
+- ``--compare-labels BASE OTHER``: two estimators under one read-out arm,
+  ``--baseline``; see :func:`relative_labels`.
 - ``--tau``: tau-hat at the strongest-dependence x of clayton / linear.
 
 Examples::
@@ -218,6 +220,56 @@ def relative_selection(
   )
 
 
+def relative_labels(
+  w: pd.DataFrame, base: str, other: str, arm: tuple[str, str]
+) -> None:
+  """Two estimators under one read-out: switch only on a clear gain.
+
+  For each pair (cell, rep) on reps 0-4, ``other``'s relative change in
+  held-out KL against ``base``, ``(KL_other - KL_base) / KL_base``, under the
+  read-out ``arm``; averaged over the pairs of each ``n``, then over the
+  ``n`` with equal weight, with :func:`pooled_mean_se`'s SE. The rule, fixed
+  before reps 0-4 are read: switch to ``other`` only if that score is below
+  ``-TIE_SE`` SE. Every ``n`` is printed, and the comparison again on reps
+  5-9.
+  """
+  at = w[(w.grid == arm[0]) & (w.arm == arm[1])]
+  cell = ["family", "tau_scenario", "n", "rep"]
+  kl = at[at.label.isin([base, other])].pivot_table(
+    index=cell, columns="label", values="holdout_kl"
+  )
+  missing = [lab for lab in (base, other) if lab not in kl.columns]
+  if missing:
+    raise SystemExit(
+      f"both labels must have rows under {arm}; got none for {missing}"
+    )
+  kl = kl.dropna()
+  rel = ((kl[other] - kl[base]) / kl[base]).rename("rel").reset_index()
+  rel["label"] = other
+  for name, part in (
+    ("reps 0-4", rel[rel.rep <= 4]),
+    ("reps 5-9", rel[rel.rep >= 5]),
+  ):
+    g = part.groupby("n")["rel"]
+    print(f"\n== {other} against {base} under {arm[0]}:{arm[1]}, {name} ==")
+    print(
+      pd.DataFrame(
+        {
+          "mean": g.mean(),
+          "se": g.std(ddof=1) / np.sqrt(g.count()),
+          "pairs": g.count(),
+        }
+      )
+      .round(4)
+      .to_string()
+    )
+    m, se = pooled_mean_se(part, "rel")
+    print(f"  pooled over n: {m:+.4f} ({se:.4f})")
+    if name == "reps 0-4":
+      switch = m < -TIE_SE * se
+      print(f"-- {'switch to ' + other if switch else 'keep ' + base} --")
+
+
 def main() -> None:
   """Print the report."""
   parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -237,6 +289,13 @@ def main() -> None:
     "--relative-selection",
     action="store_true",
     help="E7a′'s rule: --baseline, then --arms, simplest first",
+  )
+  parser.add_argument(
+    "--compare-labels",
+    nargs=2,
+    metavar=("BASE", "OTHER"),
+    default=None,
+    help="two estimators under the --baseline arm",
   )
   parser.add_argument("--tau", action="store_true")
   args = parser.parse_args()
@@ -285,6 +344,9 @@ def main() -> None:
 
   if args.relative_selection:
     relative_selection(w, args.baseline, args.arms)
+
+  if args.compare_labels:
+    relative_labels(w, *args.compare_labels, args.baseline)
 
   if args.tau:
     a = w[(w.family == "clayton") & (w.tau_scenario == "linear")]
