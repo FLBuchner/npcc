@@ -46,14 +46,14 @@ enable_tau_diagnostics = true
 tau_diagnostic_n = 1000
 
 # E1's backends at the probit transform, under E1's labels, so each
-# estimator_id is the one E1 reports. TabPFN's model version is a
-# backend_kwargs entry, as in E1.
+# estimator_id is the one E1 reports. TabPFN's model version and softmax
+# temperature are backend_kwargs entries, as in E1.
 
 [[grid.estimators]]
 label = "tabpfn-quantiles-v3-probit"
 backend = "tabpfn-quantiles"
 transform = "probit"
-backend_kwargs = { model_version = "v3" }
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
 
 [[grid.estimators]]
 label = "tabicl-probit"

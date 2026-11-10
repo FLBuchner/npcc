@@ -246,6 +246,36 @@ def test_shipped_study_config_loads() -> None:
   assert len(grid.cells()) == 2 * 2 * 4 * 10
 
 
+def _tabpfn_temperatures(name: str) -> dict[str, object]:
+  grid = load_grid(Path(__file__).resolve().parents[2] / "configs" / name)
+  found: dict[str, object] = {}
+  for e in grid.estimators:
+    if e.backend == "tabpfn-quantiles":
+      model_kwargs = dict(e.backend_kwargs).get("model_kwargs")
+      assert isinstance(model_kwargs, dict), e.label
+      found[e.label] = model_kwargs.get("softmax_temperature")
+  return found
+
+
+def test_paper_configs_state_one_tabpfn_temperature() -> None:
+  """E1 runs every TabPFN release at softmax temperature 1.0, stated.
+
+  Left to the checkpoints, v2.5 and v3 run at 0.9 and v3.5 at 1.0, so E1
+  would compare the releases at different temperatures. E1c and E2 inherit
+  E1's settings through its estimator ids, which their own tests pin. The
+  ablation is the one config at 0.9, on both releases it compares.
+  """
+  assert _tabpfn_temperatures("study.toml") == {
+    "tabpfn-quantiles-v2.5-probit": 1.0,
+    "tabpfn-quantiles-v3-probit": 1.0,
+    "tabpfn-quantiles-v3.5-probit": 1.0,
+  }
+  assert _tabpfn_temperatures("study_tabpfn_temperature.toml") == {
+    "tabpfn-quantiles-v3-temp0.9-probit": 0.9,
+    "tabpfn-quantiles-v3.5-temp0.9-probit": 0.9,
+  }
+
+
 def test_runconfig_validates_workers_and_fmt(tmp_path: Path) -> None:
   assert RunConfig(out=tmp_path).fmt == "parquet"
   assert RunConfig(out=tmp_path).gpu_mem_fraction is None
