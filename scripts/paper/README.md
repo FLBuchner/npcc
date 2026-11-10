@@ -264,3 +264,57 @@ uv run --no-sync python scripts/qt_ab/readout_choice.py \
 # Nori's quantile head under the adopted read-out: nori_probe.csv (A.2).
 QT_AB_RESULTS=$O uv run --no-sync python scripts/qt_ab/nori_probe.py
 ```
+
+## E7a′ — the read-out under probit (supplement, E8)
+
+The A/B of E7a again, probit only, to fix the read-out for the probit
+rerun. It runs from d1f3dca on branch `qt-ab-probit`: cb04041 with a
+scripts-only commit that adds the in-context learners' probit labels, a
+selection on any metric (`--rank-by`), one arm for every backend
+(`--pooled`) and a chosen baseline for `readout_choice.py`. cb04041's
+package has this branch's read-out: its `src` differs only by a comment in
+`margin.py` and the `--labels` option.
+
+- **Arms:** on E1's grid of 21 levels (`m21`), with the current tails:
+  - no smoothing (`ma0`), which still sorts each row and floors the slopes;
+  - the seven-cell moving average (`ma2`);
+  - the weighted smoother at bandwidth 0.65 (`wh0.65`, the library's).
+- **Backends:** the tree backends at n in {200, 500, 2000}; TabPFN v3,
+  TabICLv2 and Nori at n in {200, 2000}.
+- **Selection:** on reps 0-4, by held-out KL first and pdf IAE second; the
+  winner is reported on reps 5-9.
+- **Rules to fix first:** the pooling rule across backends and the tie rule
+  for IAE are fixed in the experiment plan before reps 0-4 are read.
+- **The held-out KL** is `_common.py`'s: 2000 draws, one per x on E1's
+  covariate range. It is not quite the runner's Monte Carlo KL, which takes
+  2000 draws at each of the 10 grid values of x, but both estimate the
+  x-averaged KL.
+
+Each run needs its own `--out` folder, since `ab.py` skips a cell whose file
+exists. Expected time on an idle machine: about 12 min for the trees on four
+cores, which can overlap the GPU runs; about 19 min for TabPFN and about
+23 min for TabICLv2 and Nori, one after the other.
+
+```bash
+git checkout d1f3dca
+O=results/qt_ab_probit_2026-11
+A=('ma0|current' 'ma2|current' 'wh0.65|current')
+# The ma arms are E1's read-out and wh the library's, bit for bit.
+uv run --no-sync python scripts/qt_ab/check_readouts.py
+OMP_NUM_THREADS=1 uv run --no-sync python scripts/qt_ab/ab.py \
+  --out $O/gb --workers 4 --grids m21 --arms "${A[@]}" \
+  --estimators lightgbm-probit xgboost-probit catboost-probit
+uv run --no-sync python scripts/qt_ab/ab.py --out $O/tabpfn --device cuda \
+  --n 200 2000 --grids m21 --arms "${A[@]}" \
+  --estimators tabpfn-quantiles-v3-probit
+uv run --no-sync python scripts/qt_ab/ab.py --out $O/icl --device cuda \
+  --n 200 2000 --grids m21 --arms "${A[@]}" \
+  --estimators tabicl-probit nori-probit
+# Selection on reps 0-4, one arm for every backend, then the table.
+uv run --no-sync python scripts/qt_ab/report.py --out $O/gb $O/tabpfn $O/icl \
+  --baseline 'm21:wh0.65|current' --arms 'm21:ma0|current' 'm21:ma2|current' \
+  --select --rank-by holdout_kl --pooled
+uv run --no-sync python scripts/qt_ab/readout_choice.py \
+  --runs $O/gb $O/tabpfn $O/icl --baseline 'm21:wh0.65|current' \
+  --arms 'm21:ma0|current' 'm21:ma2|current' --csv $O/readout_choice.csv
+```
