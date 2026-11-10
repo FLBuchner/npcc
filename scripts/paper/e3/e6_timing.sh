@@ -73,7 +73,9 @@ on_gpu() {
   OMP_NUM_THREADS=$GPU_THREADS MKL_NUM_THREADS=$GPU_THREADS OPENBLAS_NUM_THREADS=$GPU_THREADS \
     taskset -c "$GPU_CORES" "$@"
 }
-npcc() { uv run --no-sync python "$@"; }
+# An array rather than a function: on_cpu and on_gpu run it through taskset,
+# which executes a program and cannot see a shell function.
+NPCC=(uv run --no-sync python)
 
 step "start: CPU core $CPU_CORE; GPU methods on cores $GPU_CORES; E3a seeds $E3A_SEEDS (fits$E3A_ONLY)"
 
@@ -82,17 +84,17 @@ on_cpu "$VDC_PYTHON" $S/e3a_vdc_side.py --n-train 2000 \
   --reference-run results/e3_vdc/table1_rerun_cpu --out "$E3/e3a" > "$E3/logs/e3a_vdc_side.log" 2>&1
 
 step "E3a: NPCC with LightGBM, XGBoost and CatBoost (one core)"
-on_cpu npcc $S/e3a_npcc_fit.py --folder "$E3/e3a" --n-train 2000 --device cpu \
+on_cpu "${NPCC[@]}" $S/e3a_npcc_fit.py --folder "$E3/e3a" --n-train 2000 --device cpu \
   --estimators lightgbm-logit xgboost-logit catboost-logit --only $E3A_ONLY \
   > "$E3/logs/e3a_npcc_cpu.log" 2>&1
 
 step "E3a: NPCC with TabPFN v3, TabICL and Nori (GPU)"
-on_gpu npcc $S/e3a_npcc_fit.py --folder "$E3/e3a" --n-train 2000 --device cuda --gpu-is-free \
+on_gpu "${NPCC[@]}" $S/e3a_npcc_fit.py --folder "$E3/e3a" --n-train 2000 --device cuda --gpu-is-free \
   --estimators tabpfn-quantiles-v3-logit tabicl-logit nori-logit --only $E3A_ONLY \
   > "$E3/logs/e3a_npcc_gpu.log" 2>&1
 
 step "E3d: TLL and parametric, with and without selection (one core)"
-on_cpu npcc $S/e6_timing.py vines --part competitors --dims 5 10 --seeds $VINE_SEEDS \
+on_cpu "${NPCC[@]}" $S/e6_timing.py vines --part competitors --dims 5 10 --seeds $VINE_SEEDS \
   --out "$E3/e3d" > "$E3/logs/e3d_competitors.log" 2>&1
 
 step "E3d: VDC, with and without its order selection (VDC environment, one core)"
@@ -100,13 +102,13 @@ on_cpu "$VDC_PYTHON" $S/e6_timing_vdc.py --dims 5 10 --seeds $VINE_SEEDS \
   --out "$E3/e3d" > "$E3/logs/e3d_vdc.log" 2>&1
 
 step "E3d: NPCC with TabPFN v3, arm (a), d = 5 (GPU)"
-on_gpu npcc $S/e6_timing.py vines --part npcc --device cuda --gpu-is-free --dims 5 \
+on_gpu "${NPCC[@]}" $S/e6_timing.py vines --part npcc --device cuda --gpu-is-free --dims 5 \
   --seeds $VINE_SEEDS --out "$E3/e3d" > "$E3/logs/e3d_npcc_d5.log" 2>&1
 
 step "E3d: NPCC with TabPFN v3, arm (a), d = 10 (GPU)"
-on_gpu npcc $S/e6_timing.py vines --part npcc --device cuda --gpu-is-free --dims 10 \
+on_gpu "${NPCC[@]}" $S/e6_timing.py vines --part npcc --device cuda --gpu-is-free --dims 10 \
   --seeds $TABPFN_D10_SEEDS --out "$E3/e3d" > "$E3/logs/e3d_npcc_d10.log" 2>&1
 
 step "collect"
-npcc $S/e6_timing.py collect --root "$OUT" --e3a-seeds $E3A_SEEDS 2>&1 | tee "$E3/logs/collect.log"
+"${NPCC[@]}" $S/e6_timing.py collect --root "$OUT" --e3a-seeds $E3A_SEEDS 2>&1 | tee "$E3/logs/collect.log"
 step "done"
