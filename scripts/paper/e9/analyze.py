@@ -12,7 +12,9 @@ writes into ``<first run>/analysis/`` (or ``--out``):
 - ``kl_by_family.csv``: the same per family;
 - ``iae.csv``: the IAE of the density and both h-functions, as ``kl.csv``;
 - ``per_point.csv``: per family, scenario, ``n``, estimator and covariate
-  point, the KL and IAE averaged over repetitions, with the point's true tau.
+  point, the KL and IAE averaged over repetitions, with the point's true tau;
+- ``failures.csv``: every fit that failed, with its error. A failed fit is
+  missing from every mean, and every table counts it in ``failed``.
 
 Usage (from the npcc repository root)::
 
@@ -82,7 +84,10 @@ def load(runs: list[Path]) -> pd.DataFrame:
       f"each (cell, estimator, quantity, point) must come from one run; got "
       f"{int(duplicated.sum())} repeated rows for {labels}"
     )
-  pdf = metrics[metrics["quantity"] == "pdf"]
+  if "error" not in metrics.columns:
+    raise SystemExit("the runs must record each fit's error; got no column")
+  metrics["error"] = metrics["error"].fillna("").astype(str)
+  pdf = metrics[(metrics["quantity"] == "pdf") & (metrics["error"] == "")]
   bad = pdf[pdf["KL_mc"].isna()]
   if not bad.empty:
     raise SystemExit(
@@ -115,10 +120,15 @@ def per_rep(metrics: pd.DataFrame, quantity: str, value: str) -> pd.DataFrame:
   pandas.DataFrame
       One row per (cell, estimator), with ``value``.
   """
-  rows = metrics[metrics["quantity"] == quantity]
-  return rows.groupby([*CELL, "label", "estimator"], as_index=False)[
-    value
-  ].mean()
+  rows = metrics[metrics["quantity"] == quantity].assign(
+    failed=lambda d: d["error"] != ""
+  )
+  out = rows.groupby([*CELL, "label", "estimator"], as_index=False).agg(
+    value=(value, "mean"), failed=("failed", "any")
+  )
+  # A failed fit has no score: NaN, rather than a mean over what it lacks.
+  out.loc[out["failed"], "value"] = math.nan
+  return out.rename(columns={"value": value})
 
 
 def _mean_se(values: pd.Series) -> tuple[float, float]:
@@ -151,9 +161,12 @@ def paired(reps: pd.DataFrame, value: str, by: list[str]) -> pd.DataFrame:
   if BASELINE not in set(reps["label"]):
     raise SystemExit(f"the runs must hold {BASELINE!r}, the baseline; got none")
   unit = [*by, "rep"]
-  per = reps.groupby([*unit, "label", "estimator"], as_index=False)[
-    value
-  ].mean()
+  # A repetition with a failed fit in any family it averages is missing:
+  # the mean skips nothing.
+  per = reps.groupby([*unit, "label", "estimator"], as_index=False).agg(
+    value=(value, lambda v: v.mean(skipna=False)), failed=("failed", "any")
+  )
+  per = per.rename(columns={"value": value})
   base = per[per["label"] == BASELINE][[*unit, value]].rename(
     columns={value: "baseline"}
   )
@@ -161,8 +174,9 @@ def paired(reps: pd.DataFrame, value: str, by: list[str]) -> pd.DataFrame:
   joined["diff"] = joined[value] - joined["baseline"]
   rows = []
   for keys, group in joined.groupby([*by, "label", "estimator"]):
-    mean, se = _mean_se(group[value])
-    diff, diff_se = _mean_se(group["diff"])
+    scored = group.dropna(subset=[value, "baseline"])
+    mean, se = _mean_se(scored[value])
+    diff, diff_se = _mean_se(scored["diff"])
     rows.append(
       {
         **dict(zip([*by, "label", "estimator"], keys, strict=True)),
@@ -170,8 +184,9 @@ def paired(reps: pd.DataFrame, value: str, by: list[str]) -> pd.DataFrame:
         "se": se,
         "diff_vs_tabpfn": diff,
         "diff_se": diff_se,
-        "share_lower": float((group["diff"] < 0).mean()),
-        "reps": len(group),
+        "share_lower": float((scored["diff"] < 0).mean()),
+        "reps": len(scored),
+        "failed": int(group["failed"].sum()),
       }
     )
   return pd.DataFrame(rows)
@@ -190,7 +205,7 @@ def per_point(metrics: pd.DataFrame) -> pd.DataFrame:
   pandas.DataFrame
       One row per (family, scenario, n, estimator, point).
   """
-  pdf = metrics[metrics["quantity"] == "pdf"]
+  pdf = metrics[(metrics["quantity"] == "pdf") & (metrics["error"] == "")]
   return pdf.groupby(
     ["family", "scenario", "n", "label", "estimator", "point"], as_index=False
   ).agg(
@@ -229,6 +244,12 @@ def main() -> None:
   )
   iae.to_csv(out / "iae.csv", index=False)
   per_point(metrics).to_csv(out / "per_point.csv", index=False)
+  failures = (
+    metrics[metrics["error"] != ""]
+    .drop_duplicates([*CELL, "label"])[[*CELL, "label", "estimator", "error"]]
+    .sort_values([*CELL, "label"])
+  )
+  failures.to_csv(out / "failures.csv", index=False)
 
   table = kl.assign(
     cell=lambda d: (
@@ -247,6 +268,11 @@ def main() -> None:
     "KL_mc: mean over points, families and reps (difference from TabPFN v3 ± SE)"
   )
   print(table.to_string())
+  if failures.empty:
+    print("\nno fit failed")
+  else:
+    print(f"\n{len(failures)} fits failed; each is missing from every mean:")
+    print(failures.groupby(["label", "scenario", "n"]).size().to_string())
   print(f"\nwrote {out}")
 
 

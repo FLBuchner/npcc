@@ -314,3 +314,39 @@ transform = "probit"
   assert list(points.columns[2:17]) == list(cs.COVARIATES)
   echo = json.loads((out / "config.json").read_text())
   assert echo["grid"]["without_covariates"] == ["none"]
+
+
+def test_a_failed_script_is_a_result_not_a_dropped_row(
+  tmp_path: Path, stand_in: Path
+) -> None:
+  """A fit that fails must stay in the tables, scored as missing, with why.
+
+  Dropped, it would leave the mean over the other repetitions looking like
+  the method's whole record; raised, it would stop the shard's other cells.
+  """
+  stand_in.write_text(
+    "import sys\nsys.stderr.write('no family converged')\nsys.exit(1)\n"
+  )
+  grid = _grid(_external_spec(stand_in), _normal("all"))
+  metric_df, runtime_df, _ = run_covariate_study(grid, RunConfig(out=tmp_path))
+  failed = metric_df[metric_df["label"] == "independence"]
+  assert len(failed) == 2 * 3 * grid.n_points
+  assert failed["error"].str.contains("no family converged").all()
+  assert failed[["IAE", "ISE", "KL"]].isna().all().all()
+  assert failed.loc[failed["quantity"] == "pdf", "KL_mc"].isna().all()
+  assert (metric_df.loc[metric_df["label"] == "all", "error"] == "").all()
+  assert (
+    runtime_df.loc[runtime_df["label"] == "independence", "fit_time"]
+    .isna()
+    .all()
+  )
+
+
+def test_a_missing_interpreter_stops_the_run(
+  tmp_path: Path, stand_in: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """A machine without R must not record every R fit as the method failing."""
+  monkeypatch.setattr(_external, "RSCRIPT", str(tmp_path / "no-such-rscript"))
+  grid = _grid(_external_spec(stand_in))
+  with pytest.raises(RuntimeError, match="must be on PATH"):
+    run_covariate_study(grid, RunConfig(out=tmp_path / "out"))

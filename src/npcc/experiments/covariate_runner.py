@@ -204,6 +204,8 @@ def _base_row(
     "transform": est.transform,
     "backend": est.backend,
     "covariates": covariates,
+    # Empty unless the fit failed; see `_external_rows`.
+    "error": "",
   }
 
 
@@ -319,21 +321,68 @@ def _backend_rows(
   return _metric_rows(base, data, preds, holdout), [runtime]
 
 
+def _failed_rows(
+  base: Mapping[str, object], data: _CellData, error: str
+) -> tuple[Rows, Rows]:
+  """A failed fit's rows: every score missing, and the error that says why.
+
+  A failure is a result of the method, kept as rows so that a mean over the
+  cells cannot drop it without saying so.
+  """
+  failed = {**base, "error": error}
+  nan = float("nan")
+  rows = [
+    {
+      **failed,
+      "quantity": q,
+      "point": j,
+      "tau_true": float(data.tau_points[j]),
+      "IAE": nan,
+      "ISE": nan,
+      "KL": nan,
+      **({"KL_mc": nan} if q == "pdf" else {}),
+    }
+    for q in QUANTITIES
+    for j in range(data.metric_grid.shape[1])
+  ]
+  runtime = {
+    **failed,
+    "fit_time": nan,
+    "grid_time": nan,
+    "holdout_time": nan,
+    "total_time": nan,
+  }
+  return rows, [runtime]
+
+
 def _external_rows(
   cell: CovariateCell, est: EstimatorSpec, data: _CellData
 ) -> tuple[Rows, Rows]:
-  """Fit one external script on every covariate, and score it at every point."""
+  """Fit one external script on every covariate, and score it at every point.
+
+  A script that fails, or whose predictions the exchange refuses, yields
+  :func:`_failed_rows` rather than stopping the cell: a selection that finds
+  nothing, or a family whose fit does not converge, is the method's outcome
+  on that sample, and the analysis reports it as such.
+  """
   assert est.script is not None
   base = _base_row(cell, est, data.seed, "all")
-  fit = _external.fit_and_predict(
-    est.script,
-    (data.u, data.v, data.x),
-    {"metric": data.metric_grid, "holdout": data.holdout},
-    seed=derive_seed(data.seed, est.estimator_id),
-    name=f"{est.label} on {cell.key}",
-    covariates=cs.COVARIATES,
-    extra_args=(cell.scenario,),
-  )
+  try:
+    fit = _external.fit_and_predict(
+      est.script,
+      (data.u, data.v, data.x),
+      {"metric": data.metric_grid, "holdout": data.holdout},
+      seed=derive_seed(data.seed, est.estimator_id),
+      name=f"{est.label} on {cell.key}",
+      covariates=cs.COVARIATES,
+      extra_args=(cell.scenario,),
+    )
+  except (RuntimeError, ValueError) as exc:
+    # A missing interpreter is this machine's fault, not the method's.
+    if isinstance(exc.__cause__, FileNotFoundError):
+      raise
+    logger.warning("estimator %s [%s] failed: %s", est.label, cell.key, exc)
+    return _failed_rows(base, data, str(exc))
   holdout = metrics.holdout_kl_by_x(
     data.holdout, data.holdout_log_true, fit.predictions["holdout"]["pdf"]
   )
