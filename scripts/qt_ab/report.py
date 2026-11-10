@@ -12,6 +12,8 @@ IAE and the tau error; plus the held-out KL from true to estimated density.
   one reported on reps 5-9, so the reported gain is not the largest of many
   noisy comparisons. With ``--pooled``, one arm is also chosen for every
   backend, on the mean over backends of each backend's mean difference.
+- ``--relative-selection``: E7a′'s rule, one arm for every backend; see
+  :func:`relative_selection`.
 - ``--tau``: tau-hat at the strongest-dependence x of clayton / linear.
 
 Examples::
@@ -19,6 +21,12 @@ Examples::
     # the tree backends; their E1 read-out was the 7-cell average
     python scripts/qt_ab/report.py --out results/qt_ab/gb \
       --baseline 'm21:ma2|current' --select --arms 'm21:wh0.65|current'
+
+    # E7a', probit: ma0, ma2 and wh0.65, simplest first
+    python scripts/qt_ab/report.py --out results/qt_ab_probit/gb \
+      results/qt_ab_probit/tabpfn results/qt_ab_probit/icl \
+      --baseline 'm21:ma0|current' \
+      --arms 'm21:ma2|current' 'm21:wh0.65|current' --relative-selection
 
     # TabPFN; its E1 read-out was the 3-cell average
     python scripts/qt_ab/report.py --out results/qt_ab/tabpfn \
@@ -97,6 +105,119 @@ def summary(frame: pd.DataFrame, by: list[str]) -> pd.DataFrame:
   )
 
 
+#: How far apart two scores must be, in standard errors, to count as apart.
+TIE_SE = 2.0
+#: The relative worsening against a backend's own best arm that is flagged.
+FLAG_REL = 0.10
+
+
+def pooled_mean_se(pairs: pd.DataFrame, value: str) -> tuple[float, float]:
+  """The equal-weight mean over rows of each row's mean over its pairs.
+
+  A row is a ``(label, n)``; its pairs are its cells x reps. The rows are
+  independent samples, so the SE of their mean is
+  ``sqrt(sum_r s_r**2 / n_r) / R``, each row's variance taken over its pairs.
+  """
+  g = pairs.groupby(["label", "n"])[value]
+  means, var, count = g.mean(), g.var(ddof=1), g.count()
+  return float(means.mean()), float(np.sqrt((var / count).sum()) / len(means))
+
+
+def relative_selection(
+  w: pd.DataFrame, baseline: tuple[str, str], arms: list[tuple[str, str]]
+) -> None:
+  """E7a′'s rule: one arm for every backend, by relative held-out KL.
+
+  Fixed before any probit rep 0-4 was read (experiments.md, E8):
+
+  - **Score.** For each pair (estimator, cell, rep) on reps 0-4, probit only,
+    the arm's relative change in held-out KL against ``baseline``,
+    ``(KL_arm - KL_base) / KL_base``; averaged over the pairs of each
+    ``(label, n)`` row, then over the rows with equal weight. The SE is
+    :func:`pooled_mean_se`'s.
+  - **Pick.** The arm with the lowest score.
+  - **Tie.** The candidates in simplicity order are ``baseline`` and then
+    ``arms`` as given. The first whose paired difference from the best is
+    within :data:`TIE_SE` of its SE is taken. IAE does not enter.
+  - **Flags.** Each backend for which the pick's held-out KL exceeds that of
+    the backend's own best arm by more than :data:`TIE_SE` SE *and* by more
+    than :data:`FLAG_REL` relative is flagged: the case a per-backend
+    exception would have to make.
+
+  Every row's numbers are printed, and the pick's again on reps 5-9.
+  """
+  probit = w[w["transform"] == "probit"]
+  if probit.empty:
+    raise SystemExit("the relative selection needs probit rows; got none")
+  candidates = [baseline, *arms]
+  kl = probit.set_index([*KEYS, *ARM]).holdout_kl.unstack(ARM)
+  missing = [c for c in candidates if c not in kl.columns]
+  if missing:
+    raise SystemExit(f"every candidate must have rows; got none for {missing}")
+  names = [f"{g}:{a}" for g, a in candidates]
+  kl = kl[candidates].dropna()
+  kl.columns = names
+  rel = kl.sub(kl[names[0]], axis=0).div(kl[names[0]], axis=0).reset_index()
+  kl = kl.reset_index()
+  select, held = rel[rel.rep <= 4], rel[rel.rep >= 5]
+
+  print("\n== relative change in held-out KL against the baseline, ==")
+  print("== mean over pairs per row (SE), probit, reps 0-4 ==")
+  g = select.groupby(["label", "n"])[names]
+  table = (
+    g.mean().round(4).astype(str)
+    + " ("
+    + (g.std(ddof=1) / np.sqrt(g.count())).round(4).astype(str)
+    + ")"
+  )
+  print(table.to_string())
+
+  scores = {c: pooled_mean_se(select, c) for c in names}
+  print("\n== pooled score: mean over rows (SE) ==")
+  for c, (m, se) in scores.items():
+    print(f"  {c:>22}  {m:+.4f}  ({se:.4f})")
+  best = min(names, key=lambda c: scores[c][0])
+  pick = best
+  for c in names[: names.index(best)]:
+    gap = select.assign(d=select[c] - select[best])
+    m, se = pooled_mean_se(gap, "d")
+    print(f"  {c} minus {best}: {m:+.4f} ({se:.4f})")
+    if m <= TIE_SE * se:
+      pick = c
+      break
+  print(f"\n-- lowest score {best}; picked {pick} --")
+
+  print("\n== flags: the pick against each backend's own best, reps 0-4 ==")
+  flagged = []
+  kl_sel = kl[kl.rep <= 4]
+  for backend, rows in select.groupby("backend"):
+    own = min(names, key=lambda c: pooled_mean_se(rows, c)[0])
+    k = kl_sel[kl_sel.backend == backend]
+    worse = k.assign(d=(k[pick] - k[own]) / k[own])
+    m, se = pooled_mean_se(worse, "d")
+    flag = own != pick and m > TIE_SE * se and m > FLAG_REL
+    flagged += [backend] if flag else []
+    print(
+      f"  {backend:>17}: own best {own}; the pick is {m:+.4f} ({se:.4f}) "
+      f"relative{'  FLAG' if flag else ''}"
+    )
+  print(f"  flagged: {flagged or 'none'}")
+
+  print(f"\n== {pick} against the baseline, probit, reps 5-9 ==")
+  g = held.groupby(["label", "n"])[pick]
+  print(
+    pd.DataFrame(
+      {
+        "mean": g.mean(),
+        "se": g.std(ddof=1) / np.sqrt(g.count()),
+        "pairs": g.count(),
+      }
+    )
+    .round(4)
+    .to_string()
+  )
+
+
 def main() -> None:
   """Print the report."""
   parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -111,6 +232,11 @@ def main() -> None:
     "--pooled",
     action="store_true",
     help="--select one arm for every backend, each backend weighted equally",
+  )
+  parser.add_argument(
+    "--relative-selection",
+    action="store_true",
+    help="E7a′'s rule: --baseline, then --arms, simplest first",
   )
   parser.add_argument("--tau", action="store_true")
   args = parser.parse_args()
@@ -156,6 +282,9 @@ def main() -> None:
       r = held_out[(held_out.grid == grid) & (held_out.arm == arm)]
       print(f"\n-- selected {grid} {arm} for every backend, reps 5-9 --")
       print(summary(r, ["label", "n"]).to_string())
+
+  if args.relative_selection:
+    relative_selection(w, args.baseline, args.arms)
 
   if args.tau:
     a = w[(w.family == "clayton") & (w.tau_scenario == "linear")]
