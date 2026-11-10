@@ -268,10 +268,10 @@ QT_AB_RESULTS=$O uv run --no-sync python scripts/qt_ab/nori_probe.py
 ## E7a′ — the read-out under probit (supplement, E8)
 
 The A/B of E7a again, probit only, to fix the read-out for the probit
-rerun. It runs from d1f3dca on branch `qt-ab-probit`: cb04041 with a
-scripts-only commit that adds the in-context learners' probit labels, a
-selection on any metric (`--rank-by`), one arm for every backend
-(`--pooled`) and a chosen baseline for `readout_choice.py`. cb04041's
+rerun. It runs from ca4e52c on branch `qt-ab-probit`: cb04041 with two
+scripts-only commits. They add the in-context learners' probit labels, a
+chosen baseline for `readout_choice.py`, and E7a′'s selection rule
+(`report.py --relative-selection`). cb04041's
 package has this branch's read-out: its `src` differs only by a comment in
 `margin.py` and the `--labels` option.
 
@@ -281,10 +281,16 @@ package has this branch's read-out: its `src` differs only by a comment in
   - the weighted smoother at bandwidth 0.65 (`wh0.65`, the library's).
 - **Backends:** the tree backends at n in {200, 500, 2000}; TabPFN v3,
   TabICLv2 and Nori at n in {200, 2000}.
-- **Selection:** on reps 0-4, by held-out KL first and pdf IAE second; the
-  winner is reported on reps 5-9.
-- **Rules to fix first:** the pooling rule across backends and the tie rule
-  for IAE are fixed in the experiment plan before reps 0-4 are read.
+- **Selection** (fixed before any probit rep 0-4 was read; see
+  `report.py`'s `relative_selection`):
+  - the score is each pair's relative change in held-out KL against `ma0`,
+    averaged per backend and n, then over those rows with equal weight, on
+    probit reps 0-4;
+  - the lowest score wins, unless a simpler arm (`ma0`, then `ma2`, then
+    `wh0.65`) is within 2 SE of it; IAE does not enter;
+  - a backend that the pick makes worse than its own best arm by more than
+    2 SE and more than 10% is flagged;
+  - the pick is then reported on reps 5-9.
 - **The held-out KL** is `_common.py`'s: 2000 draws, one per x on E1's
   covariate range. It is not quite the runner's Monte Carlo KL, which takes
   2000 draws at each of the 10 grid values of x, but both estimate the
@@ -296,7 +302,7 @@ cores, which can overlap the GPU runs; about 19 min for TabPFN and about
 23 min for TabICLv2 and Nori, one after the other.
 
 ```bash
-git checkout d1f3dca
+git checkout ca4e52c
 O=results/qt_ab_probit_2026-11
 A=('ma0|current' 'ma2|current' 'wh0.65|current')
 # The ma arms are E1's read-out and wh the library's, bit for bit.
@@ -310,11 +316,12 @@ uv run --no-sync python scripts/qt_ab/ab.py --out $O/tabpfn --device cuda \
 uv run --no-sync python scripts/qt_ab/ab.py --out $O/icl --device cuda \
   --n 200 2000 --grids m21 --arms "${A[@]}" \
   --estimators tabicl-probit nori-probit
-# Selection on reps 0-4, one arm for every backend, then the table.
+# The selection on reps 0-4, one arm for every backend, then the table of
+# each arm against ma0 on reps 5-9.
 uv run --no-sync python scripts/qt_ab/report.py --out $O/gb $O/tabpfn $O/icl \
-  --baseline 'm21:wh0.65|current' --arms 'm21:ma0|current' 'm21:ma2|current' \
-  --select --rank-by holdout_kl --pooled
+  --baseline 'm21:ma0|current' \
+  --arms 'm21:ma2|current' 'm21:wh0.65|current' --relative-selection
 uv run --no-sync python scripts/qt_ab/readout_choice.py \
-  --runs $O/gb $O/tabpfn $O/icl --baseline 'm21:wh0.65|current' \
-  --arms 'm21:ma0|current' 'm21:ma2|current' --csv $O/readout_choice.csv
+  --runs $O/gb $O/tabpfn $O/icl --baseline 'm21:ma0|current' \
+  --arms 'm21:ma2|current' 'm21:wh0.65|current' --csv $O/readout_choice.csv
 ```
