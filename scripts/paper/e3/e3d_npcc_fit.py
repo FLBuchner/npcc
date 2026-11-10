@@ -7,11 +7,11 @@ Run in the NPCC environment, from the repository root, after ``e3d_truth.py``:
     OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
     taskset -c 11 nice -n 10 uv run --no-sync python scripts/paper/e3/e3d_npcc_fit.py \
         --arms parametric tll parametric_true tll_true vdc_true --vdc-core 11
-    ... e3d_npcc_fit.py --arms npcc-catboost-logit-random-ns npcc-catboost-logit-tll-ns \
-        npcc-catboost-logit-random-s npcc-catboost-logit-true-s
+    ... e3d_npcc_fit.py --arms npcc-catboost-probit-random-ns npcc-catboost-probit-tll-ns \
+        npcc-catboost-probit-random-s npcc-catboost-probit-true-s
     # GPU (main-text TabPFN v3), once allowed; d = 10 on the decay design and
     # five seeds only (the paper lead's scope):
-    ... e3d_npcc_fit.py --arms npcc-tabpfn-quantiles-v3-logit-random-ns ... --dims 5 --device cuda --gpu-is-free
+    ... e3d_npcc_fit.py --arms npcc-tabpfn-quantiles-v3-probit-random-ns ... --dims 5 --device cuda --gpu-is-free
     ... e3d_npcc_fit.py --arms ... --designs decay --dims 10 --seeds 101 202 303 404 505 --device cuda --gpu-is-free
 
 **Competitors**, each with its own default structure selection, as a user
@@ -24,7 +24,7 @@ would run them (``vdc``, VDC's own greedy D-vine, is ``e3d_vdc_side.py``):
 
 ``fit_s`` includes the structure selection.
 
-**NPCC**, with an E1 logit estimator, in ``npcc.RosenblattVinecop``:
+**NPCC**, with an E1 estimator, in ``npcc.RosenblattVinecop``:
 
 - ``npcc-<est>-random-ns``: a random R-vine structure drawn independently of
   the truth (``e3d_truth.py``), *non-simplified* -- each edge conditions on

@@ -8,8 +8,8 @@ Run in the NPCC environment, from the repository root, after
     OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
     taskset -c 13 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
         --arms vdc tll tll_cpp parametric --vdc-core 12
-    ... e3c_npcc_fit.py --arms npcc-lightgbm-logit          # one CPU backend per process
-    ... e3c_npcc_fit.py --arms npcc-catboost-logit rosenblatt-vinecop-check
+    ... e3c_npcc_fit.py --arms npcc-lightgbm-probit          # one CPU backend per process
+    ... e3c_npcc_fit.py --arms npcc-catboost-probit rosenblatt-vinecop-check
 
 **One vine machinery.** Every arm but the two C++ ones fits and evaluates a
 ``e3_vine.SharedVinecop``: pyvinecopulib 1.0's ``VinecopBase`` cascades on the
@@ -24,7 +24,7 @@ differ only in the pair copula each edge holds:
 - ``tll``: ``pyvinecopulib.torch.TorchTllBicop.from_data`` with
   ``FitControlsTorchBicop()`` -- pyvinecopulib's TLL defaults (constant,
   multiplier 1, a 30-point normal grid), no family selection;
-- ``npcc-<estimator>``: ``npcc.RosenblattBicop`` with an E1 logit backend,
+- ``npcc-<estimator>``: ``npcc.RosenblattBicop`` with an E1 estimator,
   no covariate.
 
 And, in pyvinecopulib 1.0's compiled vine (``Vinecop.from_data(train,
@@ -36,7 +36,7 @@ structure=..., controls=...)``) on the same structure:
   shared machinery's ``tll`` must reproduce to floating-point tolerance;
 - ``rosenblatt-vinecop-check`` (d = 5 only, CatBoost; a cross-check):
   ``npcc.RosenblattVinecop`` with a ``SimplifiedContext``, which must equal
-  ``npcc-catboost-logit`` in the shared vine.
+  ``npcc-catboost-probit`` in the shared vine.
 
 **Metrics.** Held-out log-likelihood = mean over the 20,000 test points of
 ``log c_hat`` (floored at ``log 1e-300``; a density the arm cannot evaluate,
@@ -210,7 +210,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
           from npcc import FitControlsRosenblattVinecop, RosenblattVinecop
           from pyvinecopulib.core import SimplifiedContext
 
-          est = e3_npcc.spec("catboost-logit")
+          est = e3_npcc.spec(e3_npcc.VINECOP_CHECK)
           torch.manual_seed(common_seed(d, seed, est))
           vine = RosenblattVinecop(None, structure, device="cpu", context=SimplifiedContext())
           controls = est.controls(FitControlsRosenblattVinecop, device="cpu",
@@ -222,7 +222,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
             t0 = time.perf_counter()
             lp = vine.logpdf(te_t).detach().cpu().numpy().astype(np.float64)
             inference_s = time.perf_counter() - t0
-          machinery, pair = "npcc", "npcc.RosenblattBicop (catboost-logit)"
+          machinery, pair = "npcc", f"npcc.RosenblattBicop ({est.label})"
         else:
           est = e3_npcc.spec(arm[len("npcc-"):])
           if not warmed:

@@ -6,17 +6,27 @@ from pathlib import Path
 
 import pytest
 
+from npcc.experiments.config import load_grid
 from npcc.experiments.vine_config import VineGridConfig, load_vine_grid
+
+_CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
 
 def test_shipped_vine_config_loads() -> None:
-  """The committed vine config must load and match the study design."""
-  cfg_path = Path(__file__).resolve().parents[2] / "configs" / "vine_study.toml"
-  grid = load_vine_grid(cfg_path)
+  """The committed vine config must load and fit E1's main-text estimator.
+
+  The vine study reports the backend and transform of E1's main text; one
+  that drifted from E1's estimator id would describe a different model.
+  """
+  grid = load_vine_grid(_CONFIGS / "vine_study.toml")
   assert grid.dims == [3, 5]
   assert grid.n_rep == 20
   assert grid.arms == ["oracle", "random", "tll"]
-  assert grid.estimators
+  assert [e.label for e in grid.estimators] == ["tabpfn-quantiles-v3-probit"]
+  e1 = load_grid(_CONFIGS / "study.toml")
+  assert {e.estimator_id for e in grid.estimators} <= {
+    e.estimator_id for e in e1.estimators
+  }
 
 
 @pytest.mark.parametrize(

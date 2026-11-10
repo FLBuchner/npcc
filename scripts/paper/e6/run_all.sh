@@ -56,7 +56,7 @@ step "bivariate, boosters on all cores"
 
 step "bivariate, boosters on one thread"
 env "${one_thread[@]}" "${PY[@]}" scripts/paper/e6/timing.py bivariate \
-  --labels lightgbm-logit xgboost-logit catboost-logit --gb-threads 1 \
+  --labels lightgbm-probit xgboost-probit catboost-probit --gb-threads 1 \
   --tag gb1 --out "$OUT" > "$OUT/logs/bivariate_gb1.log" 2>&1
 
 for r in "${R_METHODS[@]}"; do
@@ -76,13 +76,13 @@ step "vines"
   > "$OUT/logs/vines.log" 2>&1
 
 step "projection cost, TabPFN v3"
-"${PY[@]}" scripts/paper/e4/coherence.py --labels tabpfn-quantiles-v3-logit \
+"${PY[@]}" scripts/paper/e4/coherence.py --labels tabpfn-quantiles-v3-probit \
   --n 2000 --reps 1 --sinkhorn 20 --cost-only --projection-grid 30 60 \
   --cost-repeats 3 --out "$OUT/projection_cost/tabpfn" \
   > "$OUT/logs/projection_tabpfn.log" 2>&1
 
 step "projection cost, LightGBM"
-"${PY[@]}" scripts/paper/e4/coherence.py --labels lightgbm-logit \
+"${PY[@]}" scripts/paper/e4/coherence.py --labels lightgbm-probit \
   --n 2000 --reps 1 --sinkhorn 20 --cost-only --projection-grid 30 60 \
   --cost-repeats 5 --device cpu --out "$OUT/projection_cost/lightgbm" \
   > "$OUT/logs/projection_lightgbm.log" 2>&1

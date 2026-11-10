@@ -85,12 +85,12 @@ on_cpu "$VDC_PYTHON" $S/e3a_vdc_side.py --n-train 2000 \
 
 step "E3a: NPCC with LightGBM, XGBoost and CatBoost (one core)"
 on_cpu "${NPCC[@]}" $S/e3a_npcc_fit.py --folder "$E3/e3a" --n-train 2000 --device cpu \
-  --estimators lightgbm-logit xgboost-logit catboost-logit --only $E3A_ONLY \
+  --estimators lightgbm-probit xgboost-probit catboost-probit --only $E3A_ONLY \
   > "$E3/logs/e3a_npcc_cpu.log" 2>&1
 
 step "E3a: NPCC with TabPFN v3, TabICL and Nori (GPU)"
 on_gpu "${NPCC[@]}" $S/e3a_npcc_fit.py --folder "$E3/e3a" --n-train 2000 --device cuda --gpu-is-free \
-  --estimators tabpfn-quantiles-v3-logit tabicl-logit nori-logit --only $E3A_ONLY \
+  --estimators tabpfn-quantiles-v3-probit tabicl-probit nori-probit --only $E3A_ONLY \
   > "$E3/logs/e3a_npcc_gpu.log" 2>&1
 
 step "E3d: TLL and parametric, with and without selection (one core)"

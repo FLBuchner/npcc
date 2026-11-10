@@ -4,7 +4,7 @@
 # reps 0-4: cell seeds depend only on the cell, so these fits see exactly E1's
 # data. TabPFN's checkpoints default to different softmax temperatures (0.9
 # for v3, 1.0 for v3.5); swapping them shows whether E1's v3-over-v3.5 gap is
-# the model or that default. Logit only; no surfaces.
+# the model or that default. Probit only, as E1; no surfaces.
 #
 # Run as in scripts/paper/README.md, with OUT=results/study_2026-11-06_tabpfn_temperature.
 
@@ -57,13 +57,13 @@ tau_diagnostic_n = 1000
 # backends`; Nori via the fork, see pyproject.toml).
 
 [[grid.estimators]]
-label = "tabpfn-quantiles-v3-temp1.0-logit"
+label = "tabpfn-quantiles-v3-temp1.0-probit"
 backend = "tabpfn-quantiles"
-transform = "logit"
+transform = "probit"
 backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
 
 [[grid.estimators]]
-label = "tabpfn-quantiles-v3.5-temp0.9-logit"
+label = "tabpfn-quantiles-v3.5-temp0.9-probit"
 backend = "tabpfn-quantiles"
-transform = "logit"
+transform = "probit"
 backend_kwargs = { model_version = "v3.5", model_kwargs = { softmax_temperature = 0.9 } }

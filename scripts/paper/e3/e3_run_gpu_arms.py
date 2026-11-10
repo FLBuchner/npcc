@@ -57,7 +57,8 @@ def run(script: str, *args: str, log: Path | None = None) -> None:
 def main() -> None:
   p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
   p.add_argument("--main-tabpfn", required=True, choices=["v2.5", "v3", "v3.5"],
-                 help="the main-text TabPFN version, the only GPU arm at n_train = 10000")
+                 help="the main-text TabPFN version, at the probit transform as every E3 "
+                      "estimator (e3_npcc.ESTIMATORS); the only GPU arm at n_train = 10000")
   p.add_argument("--stages", nargs="+", default=["e3a", "e3b", "e3c"],
                  choices=["e3a", "e3b", "e3c"])
   p.add_argument("--designs", nargs="+", default=["decay", "strong"], choices=["decay", "strong"],
@@ -67,7 +68,7 @@ def main() -> None:
   a = p.parse_args()
 
   gpu = ("--device", "cuda", "--gpu-is-free")
-  main_tabpfn = f"tabpfn-quantiles-{a.main_tabpfn}-logit"
+  main_tabpfn = f"tabpfn-quantiles-{a.main_tabpfn}-probit"
   if "e3a" in a.stages:
     log = RESULTS / "e3a_npcc_gpu.log"
     run("e3a_npcc_fit.py", "--estimators", "gpu", "--n-train", "2000", *gpu, log=log)

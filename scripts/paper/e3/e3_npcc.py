@@ -3,8 +3,8 @@
 Imported by ``e3a_npcc_fit.py`` and ``e3b_npcc_fit.py``, in the NPCC
 environment only (``uv run --no-sync python ...`` from ``/home/thibault/npcc``).
 
-**Estimators.** The logit arms of E1 (``configs/study.toml``), with E1's
-labels, so E3 rows join E1 on ``estimator``. Each is an
+**Estimators.** E1's estimators (``configs/study.toml``), all at the probit
+transform, with E1's labels, so E3 rows join E1 on ``estimator``. Each is an
 :class:`npcc.experiments.config.EstimatorSpec`, the object E1 builds its
 controls from, so the backend, transform, ``backend_kwargs`` and per-fit
 torch seed (``derive_seed(<salt>, estimator_id)``) are built the same way.
@@ -34,19 +34,27 @@ from npcc.experiments.config import EstimatorSpec
 # TabPFN reads TABPFN_TOKEN from the environment; an exported token wins.
 load_dotenv("/home/thibault/npcc/.env", override=False)
 
+#: The transform of every estimator, as in E1: the paper presents probit only.
+TRANSFORM = "probit"
+
 #: label -> (backend, model_version or None, device class)
 ESTIMATORS: dict[str, tuple[str, str | None, str]] = {
-  "tabpfn-quantiles-v2.5-logit": ("tabpfn-quantiles", "v2.5", "gpu"),
-  "tabpfn-quantiles-v3-logit": ("tabpfn-quantiles", "v3", "gpu"),
-  "tabpfn-quantiles-v3.5-logit": ("tabpfn-quantiles", "v3.5", "gpu"),
-  "tabicl-logit": ("tabicl", None, "gpu"),
-  "nori-logit": ("nori", None, "gpu"),
-  "lightgbm-logit": ("lightgbm", None, "cpu"),
-  "xgboost-logit": ("xgboost", None, "cpu"),
-  "catboost-logit": ("catboost", None, "cpu"),
+  "tabpfn-quantiles-v2.5-probit": ("tabpfn-quantiles", "v2.5", "gpu"),
+  "tabpfn-quantiles-v3-probit": ("tabpfn-quantiles", "v3", "gpu"),
+  "tabpfn-quantiles-v3.5-probit": ("tabpfn-quantiles", "v3.5", "gpu"),
+  "tabicl-probit": ("tabicl", None, "gpu"),
+  "nori-probit": ("nori", None, "gpu"),
+  "lightgbm-probit": ("lightgbm", None, "cpu"),
+  "xgboost-probit": ("xgboost", None, "cpu"),
+  "catboost-probit": ("catboost", None, "cpu"),
 }
 CPU_ESTIMATORS = [k for k, v in ESTIMATORS.items() if v[2] == "cpu"]
 GPU_ESTIMATORS = [k for k, v in ESTIMATORS.items() if v[2] == "gpu"]
+
+#: The estimator of E3c's ``rosenblatt-vinecop-check``: fitted in
+#: ``npcc.RosenblattVinecop``, it must equal the shared vine's
+#: ``npcc-<estimator>`` arm.
+VINECOP_CHECK = "catboost-probit"
 
 #: E1's projection grid size; unused, since the Sinkhorn projection is off.
 PROJECTION_GRID_SIZE = 30
@@ -57,7 +65,7 @@ def spec(label: str) -> EstimatorSpec:
   backend, version, _ = ESTIMATORS[label]
   kwargs = {} if version is None else {"model_version": version}
   return EstimatorSpec(
-    label=label, backend=backend, transform="logit", backend_kwargs=kwargs
+    label=label, backend=backend, transform=TRANSFORM, backend_kwargs=kwargs
   )
 
 

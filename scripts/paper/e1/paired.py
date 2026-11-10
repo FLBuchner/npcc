@@ -17,7 +17,7 @@ Usage (from the npcc repository root)::
     uv run --no-sync python scripts/paper/e1/paired.py \
       results/study_misspec_2026-11-06 \
       --with results/study_misspec_2026-11-06_r \
-      --labels tabpfn-quantiles-v3-logit tabicl-logit best-gb \
+      --labels tabpfn-quantiles-v3-probit tabicl-probit best-gb \
       --against gamcopula boostcopula-smooth-cv
 """
 

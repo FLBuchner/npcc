@@ -45,37 +45,37 @@ surface_families = ["clayton-gumbel-mix", "student-varying-nu"]
 enable_tau_diagnostics = true
 tau_diagnostic_n = 1000
 
-# E1's backends at the logit transform, under E1's labels, so each
+# E1's backends at the probit transform, under E1's labels, so each
 # estimator_id is the one E1 reports. TabPFN's model version is a
 # backend_kwargs entry, as in E1.
 
 [[grid.estimators]]
-label = "tabpfn-quantiles-v3-logit"
+label = "tabpfn-quantiles-v3-probit"
 backend = "tabpfn-quantiles"
-transform = "logit"
+transform = "probit"
 backend_kwargs = { model_version = "v3" }
 
 [[grid.estimators]]
-label = "tabicl-logit"
+label = "tabicl-probit"
 backend = "tabicl"
-transform = "logit"
+transform = "probit"
 
 [[grid.estimators]]
-label = "nori-logit"
+label = "nori-probit"
 backend = "nori"
-transform = "logit"
+transform = "probit"
 
 [[grid.estimators]]
-label = "lightgbm-logit"
+label = "lightgbm-probit"
 backend = "lightgbm"
-transform = "logit"
+transform = "probit"
 
 [[grid.estimators]]
-label = "xgboost-logit"
+label = "xgboost-probit"
 backend = "xgboost"
-transform = "logit"
+transform = "probit"
 
 [[grid.estimators]]
-label = "catboost-logit"
+label = "catboost-probit"
 backend = "catboost"
-transform = "logit"
+transform = "probit"

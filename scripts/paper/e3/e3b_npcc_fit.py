@@ -14,7 +14,7 @@ Run in the NPCC environment, from the repository root, after
     uv run --no-sync python scripts/paper/e3/e3b_npcc_fit.py \
         --estimators gpu --device cuda --gpu-is-free
 
-**What it does.** For each requested E1 logit estimator (``e3_npcc.py``) and
+**What it does.** For each requested E1 estimator (``e3_npcc.py``) and
 each of the 20 fits (two cases x seeds 0-9) it fits
 :class:`npcc.RosenblattBicop` on the 2,000 training pairs ``(U2, U3)`` in two
 modes:

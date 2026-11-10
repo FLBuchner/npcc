@@ -125,7 +125,8 @@ ROLES = {
     "tll": ("arm", "TLL (pyvinecopulib defaults: constant, mult 1, 30-point grid) in the shared vine"),
     "parametric": ("arm", "parametric family selection (BIC) per edge, pyvinecopulib 1.0 compiled vine"),
     "tll_cpp": ("cross_check", "pyvinecopulib 1.0 compiled TLL vine (checks the shared machinery's TLL)"),
-    "rosenblatt-vinecop-check": ("cross_check", "npcc.RosenblattVinecop, SimplifiedContext, catboost-logit "
+    "rosenblatt-vinecop-check": ("cross_check", "npcc.RosenblattVinecop, SimplifiedContext, "
+                                                f"{e3_npcc.VINECOP_CHECK} "
                                                 "(checks the shared machinery's NPCC)"),
     "vdc_own": ("reference", "VDC's own vine implementation (D-vine on the true order, UCI-runner settings)"),
   },
@@ -517,7 +518,7 @@ def e3c_crosscheck(long: pd.DataFrame) -> pd.DataFrame | None:
   process that fitted it, not the common-set one, which is computed from the
   stored float32 log-densities and would hide a gap below about 1e-8.
   """
-  pairs = [("tll", "tll_cpp"), ("npcc-catboost-logit", "rosenblatt-vinecop-check")]
+  pairs = [("tll", "tll_cpp"), (f"npcc-{e3_npcc.VINECOP_CHECK}", "rosenblatt-vinecop-check")]
   col = "test_loglik_row" if "test_loglik_row" in long else "test_loglik"
   rows = []
   for a_m, b_m in pairs:
