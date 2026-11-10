@@ -7,7 +7,11 @@ method by one run of its script (:mod:`npcc.experiments._external`).
 
 Conditional scenarios are scored at fixed ``x`` values: errors are averaged over
 the uv grid first, and only then summarized over Monte-Carlo repetitions or
-conditioning values. This keeps KL as a fixed-``x`` copula-density metric.
+conditioning values. This keeps every metric a fixed-``x`` copula-density one.
+The density's KL is scored twice: on the grid (``KL``), and by Monte Carlo
+(``KL_mc``) at draws from the true copula at each ``x``, the same draws for
+every estimator of a cell (:func:`holdout_points`). The second is the one the
+paper reports; the grid's misses the band at the boundary and can be negative.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from time import perf_counter
 from typing import Any, NamedTuple, cast
 
@@ -124,6 +129,9 @@ def _grid_signature(grid: GridConfig, run: RunConfig) -> str:
     "surface_families": sorted(grid.surface_families),
     "enable_tau_diagnostics": grid.enable_tau_diagnostics,
     "tau_diagnostic_n": grid.tau_diagnostic_n,
+    # Always hashed: a cell scored before the Monte Carlo KL has no KL_mc, and
+    # a resume must not mix it with cells that do.
+    "holdout_n": grid.holdout_n,
     "base_seed": run.base_seed,
     "estimators": sorted(s.estimator_id for s in grid.estimators),
   }
@@ -195,8 +203,17 @@ def _metric_rows_for_quantity(
   *,
   normalize: str,
   include_kl: bool,
+  holdout: Sequence[Mapping[str, float]] = (),
 ) -> list[dict[str, object]]:
-  """Metric rows after averaging pointwise errors over uv at fixed x."""
+  """Metric rows after averaging pointwise errors over uv at fixed x.
+
+  ``holdout`` holds the Monte Carlo KL's columns per ``x``, in ``x_axis``
+  order (one entry for an unconditional grid), from
+  :func:`metrics.holdout_kl_by_x`; empty for a quantity it does not score.
+  """
+  per_x: Sequence[Mapping[str, float]] = holdout or [{}] * (
+    grid.shape[1] if grid.conditional else 1
+  )
   base = {
     **_base_row(cell, est, seed),
     "normalize": normalize,
@@ -216,13 +233,54 @@ def _metric_rows_for_quantity(
         **metrics.grid_metrics(
           truth_grid[:, x_idx], pred_grid[:, x_idx], include_kl=include_kl
         ),
+        **per_x[x_idx],
       }
       for x_idx, x_val in enumerate(grid.x_axis)
     ]
 
   stats = metrics.grid_metrics(truth, pred, include_kl=include_kl)
   tau = _tau_values(cell, None)[0]
-  return [{**base, "x": float("nan"), "tau_true": float(tau), **stats}]
+  return [
+    {**base, "x": float("nan"), "tau_true": float(tau), **stats, **per_x[0]}
+  ]
+
+
+def holdout_points(
+  cell: Cell, x_axis: torch.Tensor | None, n: int, seed: int
+) -> tuple[EvalGrid, torch.Tensor]:
+  """A cell's Monte Carlo KL draws, and the true log density at each.
+
+  At each ``x`` of ``x_axis``, ``n`` draws from the cell's true copula there,
+  seeded from the cell's ``seed`` and the ``x``'s position, so every estimator
+  of the cell, in E1 and E4 alike, is scored on the same draws.
+
+  Parameters
+  ----------
+  cell : Cell
+      The data cell.
+  x_axis : torch.Tensor or None
+      The metric grid's covariate values; ``None`` for an unconditional
+      scenario.
+  n : int
+      The draws per covariate value.
+  seed : int
+      The cell's seed, from which the draws' seeds derive.
+
+  Returns
+  -------
+  grid : EvalGrid
+      The draws, shaped ``(n, n_x)`` as :func:`scenarios.holdout_grid` lays
+      them out.
+  log_true : torch.Tensor
+      The true log density at each draw, in the grid's flattened order.
+  """
+  n_x = 1 if x_axis is None else x_axis.shape[0]
+  seeds = [derive_seed(seed, "holdout", j) for j in range(n_x)]
+  grid = scenarios.holdout_grid(
+    cell.family, cell.tau_scenario, x_axis, n, seeds
+  )
+  truth = scenarios.ground_truth(cell.family, cell.tau_scenario, grid)
+  return grid, metrics.log_density(truth["pdf"].reshape(-1))
 
 
 def _surface_x_rows(
@@ -511,6 +569,8 @@ class _CellData(NamedTuple):
   metric_grid: EvalGrid
   truth: dict[str, torch.Tensor]
   surface: _Surface | None
+  holdout: EvalGrid
+  holdout_log_true: torch.Tensor
 
 
 def _backend_rows(
@@ -522,7 +582,7 @@ def _backend_rows(
   device: str | None,
 ) -> tuple[Rows, Rows, Rows, Rows]:
   """Fit one registry-backend estimator on a cell's data and score it."""
-  seed, u, v, x, metric_grid, truth, surface = data
+  seed, u, v, x, metric_grid, truth, surface, holdout, holdout_log_true = data
   metric_rows: Rows = []
   quantity_rows: Rows = []
 
@@ -542,6 +602,15 @@ def _backend_rows(
 
   with torch.inference_mode():
     hfuncs, pdf_by_norm, timings = _predict(model, metric_grid, grid.normalize)
+    t0 = perf_counter()
+    holdout_pdfs = model.pdf_by_projection(
+      holdout.uv, x=holdout.x_flat, sinkhorn_iters=grid.normalize
+    )
+    holdout_by_norm = {
+      _norm_label(norm): metrics.holdout_kl_by_x(holdout, holdout_log_true, pdf)
+      for norm, pdf in holdout_pdfs.items()
+    }
+    holdout_time = perf_counter() - t0
     for q, pred in hfuncs.items():
       metric_rows += _metric_rows_for_quantity(
         cell,
@@ -565,6 +634,7 @@ def _backend_rows(
         metric_grid,
         normalize=norm_label,
         include_kl=True,
+        holdout=holdout_by_norm[norm_label],
       )
 
     diagnostic_rows, tau_time = _diagnostic_rows(
@@ -626,8 +696,9 @@ def _backend_rows(
     "h2_time": timings["hfunc2"],
     "tau_time": tau_time,
     "surface_time": surface_time,
+    "holdout_time": holdout_time,
     "total_estimator_time": (
-      fit_time + tau_time + surface_time + sum(timings.values())
+      fit_time + tau_time + surface_time + holdout_time + sum(timings.values())
     ),
     **memory,
   }
@@ -650,7 +721,7 @@ def _external_rows(
   """
   # `GridConfig` refuses an external estimator on an unconditional scenario.
   assert est.script is not None and data.x is not None
-  grids = {"metric": data.metric_grid}
+  grids = {"metric": data.metric_grid, "holdout": data.holdout}
   if data.surface is not None:
     grids["surface"] = data.surface.grid
   fit = _external.fit_and_predict(
@@ -662,6 +733,9 @@ def _external_rows(
   )
 
   metric = fit.predictions["metric"]
+  holdout = metrics.holdout_kl_by_x(
+    data.holdout, data.holdout_log_true, fit.predictions["holdout"]["pdf"]
+  )
   metric_rows: Rows = []
   for q in ("hfunc1", "hfunc2", "pdf"):
     metric_rows += _metric_rows_for_quantity(
@@ -674,6 +748,7 @@ def _external_rows(
       data.metric_grid,
       normalize="none",
       include_kl=q == "pdf",
+      holdout=holdout if q == "pdf" else (),
     )
 
   tau_hat = None
@@ -728,6 +803,9 @@ def _external_rows(
   timings = fit.timings["metric"]
   tau_time = timings["tau"] if grid.enable_tau_diagnostics else 0.0
   scored = timings["pdf"] + timings["hfunc1"] + timings["hfunc2"]
+  # The script evaluates every quantity at every point it is handed; only the
+  # density at the draws scores anything.
+  holdout_time = fit.timings["holdout"]["pdf"]
   runtime_row = {
     **_base_row(cell, est, data.seed),
     "fit_time": fit.fit_time,
@@ -736,7 +814,10 @@ def _external_rows(
     "h2_time": timings["hfunc2"],
     "tau_time": tau_time,
     "surface_time": surface_time,
-    "total_estimator_time": fit.fit_time + tau_time + surface_time + scored,
+    "holdout_time": holdout_time,
+    "total_estimator_time": (
+      fit.fit_time + tau_time + surface_time + holdout_time + scored
+    ),
     **memory,
   }
   return metric_rows, quantity_rows, diagnostic_rows, [runtime_row]
@@ -759,7 +840,20 @@ def summarize_one_cell(
     conditional_x_grid_n=grid.conditional_x_grid_n,
   )
   truth = scenarios.ground_truth(cell.family, cell.tau_scenario, metric_grid)
-  data = _CellData(seed, u, v, x, metric_grid, truth, _surface(cell, grid))
+  holdout, holdout_log_true = holdout_points(
+    cell, metric_grid.x_axis, grid.holdout_n, seed
+  )
+  data = _CellData(
+    seed,
+    u,
+    v,
+    x,
+    metric_grid,
+    truth,
+    _surface(cell, grid),
+    holdout,
+    holdout_log_true,
+  )
 
   tables: tuple[Rows, Rows, Rows, Rows] = ([], [], [], [])
   for est in grid.estimators:
@@ -820,7 +914,7 @@ def run_study(
   return metric_df, quantity_df, diagnostic_df, runtime_df, wall
 
 
-_METRIC_NAMES: tuple[str, ...] = ("IAE", "ISE", "KL")
+_METRIC_NAMES: tuple[str, ...] = ("IAE", "ISE", "KL", "KL_mc")
 _ESTIMATOR_AXES: tuple[str, ...] = (
   "family",
   "tau_scenario",
@@ -849,7 +943,8 @@ def _runtime_summary(runtime_df: pd.DataFrame) -> pd.DataFrame:
 
 def _selection_summary(summary_over_x: pd.DataFrame) -> pd.DataFrame:
   ranked = summary_over_x[
-    (summary_over_x["quantity"] == "pdf") & (summary_over_x["metric"] == "KL")
+    (summary_over_x["quantity"] == "pdf")
+    & (summary_over_x["metric"] == "KL_mc")
   ].copy()
   ranked = ranked.sort_values(
     ["rep_mean", "rep_median", "rep_p95", *_ESTIMATOR_AXES, "normalize"],

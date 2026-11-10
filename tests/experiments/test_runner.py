@@ -192,7 +192,7 @@ def test_summaries_group_over_reps(coverage_study: Tables) -> None:
   outputs = aggregate_study_outputs(metric_df, diagnostic_df, runtime_df)
   mc_summary = outputs["summary_by_x"]
   runtime_summary = outputs["runtime_summary"]
-  assert set(mc_summary["metric"].unique()) == {"IAE", "ISE", "KL"}
+  assert set(mc_summary["metric"].unique()) == {"IAE", "ISE", "KL", "KL_mc"}
   assert {"x", "tau_true"}.issubset(mc_summary.columns)
   assert not runtime_summary.empty
   assert {"fit_time_mean", "pdf_time_mean", "tau_time_mean"}.issubset(
@@ -203,6 +203,11 @@ def test_summaries_group_over_reps(coverage_study: Tables) -> None:
 def test_aggregate_study_outputs_have_paper_tables(
   projection_study: Tables,
 ) -> None:
+  """Every summary table is written, and the selection ranks by KL_mc.
+
+  The grid KL is not reported, so a selection ranked on it would order the
+  estimators by a number the paper does not show.
+  """
   metric_df, _, diagnostic_df, runtime_df, _ = projection_study
   outputs = aggregate_study_outputs(metric_df, diagnostic_df, runtime_df)
   assert {
@@ -218,7 +223,7 @@ def test_aggregate_study_outputs_have_paper_tables(
   assert "x" not in outputs["summary_over_x"].columns
   assert outputs["selection_summary"].iloc[0]["rank"] == 1
   assert set(outputs["selection_summary"]["quantity"].unique()) == {"pdf"}
-  assert set(outputs["selection_summary"]["metric"].unique()) == {"KL"}
+  assert set(outputs["selection_summary"]["metric"].unique()) == {"KL_mc"}
 
 
 def test_backend_axis_labels_rows_and_aggregates(backend_study: Tables) -> None:
@@ -394,6 +399,42 @@ def test_stacked_cells_keep_the_type_of_one_table() -> None:
   one_table = pd.DataFrame([row for cell in rows for row in cell])
   pd.testing.assert_frame_equal(stacked, one_table)
   assert stacked["KL"].dtype == "float64"
+
+
+def test_kl_mc_is_scored_at_the_cells_draws(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """The density at the cell's draws must be scored against the truth there.
+
+  The normal-quantile backend under probit reads out the independence copula
+  exactly, so its Monte Carlo KL is the mean true log density over the cell's
+  draws. Draws other than :func:`holdout_points`', a truth taken at other
+  points, or rows misaligned by ``x`` would each show up as a wrong
+  ``KL_mc``; and a second estimator in the cell must not move it, since every
+  estimator is scored on the same draws.
+  """
+  grid = _small_grid(
+    n_rep=1,
+    estimators=[
+      _normal("normal-probit", transform="probit"),
+      _normal("normal-identity", transform="identity"),
+    ],
+  )
+  run = RunConfig(out=tmp_path, workers=1)
+  metric_df = run_study(grid, run)[0]
+  (cell,) = grid.cells()
+  x_axis = scenarios.conditional_x_axis(grid.conditional_x_grid_n)
+  points, log_true = runner_mod.holdout_points(
+    cell, x_axis, grid.holdout_n, runner_mod._cell_seed(run.base_seed, cell)
+  )
+  expected = log_true.reshape(points.shape).mean(dim=0)
+
+  pdf = metric_df[metric_df["quantity"] == "pdf"]
+  probit = pdf[pdf["label"] == "normal-probit"].sort_values("x")
+  assert probit["KL_mc"].to_numpy() == pytest.approx(expected.numpy(), rel=1e-9)
+  assert (pdf["KL_mc"] > 0.0).all()
+  assert (pdf["KL_mc_se"] > 0.0).all()
+  assert metric_df.loc[metric_df["quantity"] != "pdf", "KL_mc"].isna().all()
 
 
 def test_resume_grid_signature_mismatch_raises(
@@ -594,7 +635,7 @@ def test_the_signature_hashes_shape_settings_only_where_a_grid_has_them(
   e1 = load_grid(Path(__file__).resolve().parents[2] / "configs" / "study.toml")
   assert (
     runner_mod._grid_signature(e1, run)
-    == "264af56f7b21c58eb85d79300c66d81fee20cb16dcb073a9153d9a02e529ad50"
+    == "9bd9492cba086614f0c53f3cd67840bdf83c68ed4a0e9be0844b97466703c318"
   )
 
   base = runner_mod._grid_signature(_shape_grid([0.1, 0.9]), run)

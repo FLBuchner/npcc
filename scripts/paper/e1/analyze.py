@@ -7,6 +7,11 @@ finished cells only, so a partial run can be previewed) and writes into
 - ``overall.csv`` -- pdf IAE and KL, h1 and h2 IAE by estimator. Each entry is
   the mean and standard error over repetitions of the per-repetition average
   over families, tau regimes, n and x (IAE already integrates the grid).
+
+Every KL here is the Monte Carlo KL (E8), the mean of ``log c - log c_hat``
+over draws from the true copula at each x, which a run records as ``KL_mc``;
+IAE stays on the grid. The grid KL is kept as ``KL_grid`` and not reported,
+and a run without ``KL_mc`` is refused rather than reported on the grid.
 - ``by_n.csv`` -- the same by estimator and n.
 - ``ranking.csv`` -- each estimator's rank by pdf KL within every family x
   regime panel next to its overall rank, and ``ranking_agreement.csv`` with
@@ -172,6 +177,7 @@ def load(
       tables[name] = (
         pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
       )
+  same_draws(tables["metrics"])
   return tables
 
 
@@ -188,12 +194,65 @@ def _finished(runs: list[Path]) -> dict[str, pd.DataFrame]:
   for name in TABLES:
     # A run with no surface families writes no quantities table.
     files = [d / f"{name}.parquet" for d in done]
-    parts = [pd.read_parquet(f) for f in files if f.exists()]
+    # A metric row names its run, which is cells/<cell>/ two levels down.
+    parts = [
+      pd.read_parquet(f).assign(run=str(f.parents[2]))
+      if name == "metrics"
+      else pd.read_parquet(f)
+      for f in files
+      if f.exists()
+    ]
     tables[name] = (
       annotate(pd.concat(parts, ignore_index=True)) if parts else pd.DataFrame()
     )
+  tables["metrics"] = monte_carlo_kl(tables["metrics"])
   tables["cells"] = pd.DataFrame({"cell": sorted({d.name for d in done})})
   return tables
+
+
+def monte_carlo_kl(metrics: pd.DataFrame) -> pd.DataFrame:
+  """``KL`` as the Monte Carlo KL, the grid's kept as ``KL_grid``.
+
+  Every pdf row must carry a finite ``KL_mc``. A run from before it has no
+  ``KL_mc_n``, and its grid KL must not be reported under the name; a row
+  that was scored but whose fitted density was not finite at some draw has
+  a NaN ``KL_mc``, which no mean may skip. Either refusal names the labels.
+  """
+  pdf = metrics["quantity"] == "pdf"
+  if "KL_mc_n" not in metrics:
+    metrics = metrics.assign(KL_mc=np.nan, KL_mc_n=np.nan, KL_mc_nonfinite=0.0)
+  unscored = pdf & metrics["KL_mc_n"].isna()
+  if unscored.any():
+    labels = sorted(metrics.loc[unscored, "label"].unique())
+    raise SystemExit(
+      "every pdf row must carry the Monte Carlo KL (KL_mc); the runs of "
+      f"{labels} predate it, so rerun them with this npcc"
+    )
+  nan = pdf & metrics["KL_mc"].isna()
+  if nan.any():
+    bad = metrics[nan]
+    raise SystemExit(
+      f"KL_mc must be finite; got NaN on {len(bad)} pdf rows of "
+      f"{sorted(bad['label'].unique())}, whose fitted density is not finite "
+      f"at {int(bad['KL_mc_nonfinite'].sum())} draws in all"
+    )
+  return metrics.rename(columns={"KL": "KL_grid", "KL_mc": "KL"})
+
+
+def same_draws(metrics: pd.DataFrame) -> None:
+  """Refuse runs scored on different numbers of draws per x.
+
+  The draws are a function of the cell's seed and of ``holdout_n``, so two
+  runs with different ``holdout_n`` score their estimators on different
+  draws, and pairing them would compare more than the estimators.
+  """
+  pdf = metrics[metrics["quantity"] == "pdf"]
+  per_run = pdf.groupby("run")["KL_mc_n"].unique()
+  if pdf["KL_mc_n"].nunique() > 1:
+    shown = {run: sorted(int(n) for n in ns) for run, ns in per_run.items()}
+    raise SystemExit(
+      f"every run must be scored on the same holdout_n; got {shown}"
+    )
 
 
 def annotate(df: pd.DataFrame) -> pd.DataFrame:

@@ -54,6 +54,44 @@ run exactly (`tests/experiments/test_cli.py`). Four processes fit a 20 GB GPU
 with TabPFN 3.5 at n = 2,000; wall-clock times from a sharded run are
 contaminated by the concurrency and are not reported (see E6).
 
+## The KL the bivariate studies report (E8)
+
+E1, E1b, E1c, the temperature ablation and E4 report a Monte Carlo KL. At
+each covariate value of the metric grid, `holdout_n` draws (default 2000, a
+`[grid]` key) come from the true conditional copula. They are the same draws
+for every estimator of a cell, E4's included: `runner.holdout_points` seeds
+them from the cell's seed and the position of the x. The KL is the mean of
+`log c - log c_hat` over the draws, with E3's floor of 1e-300 under both
+logs. Each pdf row of a run's metrics records it as `KL_mc`, with
+`KL_mc_se` (its Monte Carlo standard error) and `KL_mc_floored` (draws at
+the floor); E4's parts record `*_KL_mc` beside each KL. IAE stays on the
+grid.
+
+The grid KL stays in the tables as `KL` and is not reported. `analyze.py`,
+`paired.py`, `r_selection.py` and E4's `summarize.py` report `KL_mc` under
+the name KL. They refuse:
+
+- a run without it;
+- a NaN from a fitted density that is not finite at some draw, saying so
+  (`KL_mc_nonfinite` counts those draws);
+- runs scored on different `holdout_n`, whose draws differ (`KL_mc_n`
+  records it).
+
+Every dated run below from before E8 therefore has to be rerun before it can
+be analyzed, the R competitors (E1b) included: their scripts take the draws
+as one more grid, but their fits are not stored. With the same R and
+packages, a refit reproduces the stored grid metrics exactly.
+
+On E4's `projection` rows, every density, projected or not, is divided by
+its mass at that x before its Monte Carlo KL is scored: a projected density
+need not integrate to one, and against an unnormalized density the mean of
+`log c - log c_hat` is no divergence. The mass
+(`coherence.normal_score_mass`, recorded as `mass_normal_scores`) is the
+midpoint rule on 200 x 200 points in normal scores on [-6, 6]. A Clayton
+copula at tau 0.7 is unbounded at a corner, and 200 x 200 midpoints in u
+overstate its mass by 8e-3; in normal scores the error is 2e-9. `mass`
+stays the raw mean over the evaluation grid.
+
 ## E1 — bivariate backend study (§3.2)
 
 - Config: `configs/study.toml` (8 estimators, all probit: the six backends

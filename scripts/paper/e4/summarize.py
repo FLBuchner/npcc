@@ -12,6 +12,10 @@ and from a ``--projection-grid`` run ``projection_grid.csv``, each grid size's
 accuracy and margins, with ``projection_grid_change.csv``, their change from
 the same fit's unprojected density, paired per (cell, x).
 
+Every KL it reports is the Monte Carlo KL (E8): each part's ``*_KL_mc``
+column, reported under the ``*_KL`` name, with the grid KL kept as
+``*_KL_grid``. A part without it is refused rather than reported on the grid.
+
 Usage::
 
     uv run --no-sync python scripts/paper/e4/summarize.py results/e4_coherence
@@ -44,11 +48,46 @@ PROJECTION_COLS = [
   "pdf_IAE",
   "pdf_KL",
   "mass",
+  "mass_normal_scores",
   "row_max_abs_err",
   "col_max_abs_err",
   "row_mean_abs_err",
   "col_mean_abs_err",
 ]
+
+
+def monte_carlo_kl(df: pd.DataFrame, run: Path) -> pd.DataFrame:
+  """Each ``*_KL`` column as the Monte Carlo KL, the grid's as ``*_KL_grid``.
+
+  A row whose grid KL is set must have a finite Monte Carlo KL beside it. A
+  part from before the Monte Carlo KL has no ``*_KL_mc_n``, and its grid KL
+  must not be reported under the name; a NaN from a density that was not
+  finite at a draw must not be skipped by a mean; and parts scored on
+  different numbers of draws per x scored different draws.
+  """
+  grid_kl = [c for c in df.columns if c.endswith("_KL")]
+  for c in grid_kl:
+    scored = df[c].notna()
+    if f"{c}_mc_n" not in df or df.loc[scored, f"{c}_mc_n"].isna().any():
+      raise SystemExit(
+        f"the parts under {run} must carry a Monte Carlo KL beside {c}; "
+        "rerun them with this coherence.py"
+      )
+    nan = scored & df[f"{c}_mc"].isna()
+    if nan.any():
+      raise SystemExit(
+        f"{c}_mc must be finite; got NaN on {int(nan.sum())} rows under "
+        f"{run}, whose density is not finite at "
+        f"{int(df.loc[nan, f'{c}_mc_nonfinite'].sum())} draws in all"
+      )
+  draws = {n for c in grid_kl for n in df[f"{c}_mc_n"].dropna().unique()}
+  if len(draws) > 1:
+    raise SystemExit(
+      f"the parts under {run} must share one holdout_n; got "
+      f"{sorted(int(n) for n in draws)}"
+    )
+  df = df.rename(columns={c: f"{c}_grid" for c in grid_kl})
+  return df.rename(columns={f"{c}_mc": c for c in grid_kl})
 
 
 def read_parts(run: Path, parts: list[Path], extra: list[str]) -> pd.DataFrame:
@@ -58,6 +97,7 @@ def read_parts(run: Path, parts: list[Path], extra: list[str]) -> pd.DataFrame:
   """
   df = pd.concat((pd.read_csv(p) for p in parts), ignore_index=True)
   readout.check(df["npcc_commit"], f"the parts under {run}")
+  df = monte_carlo_kl(df, run)
   key = ["label", "family", "tau_scenario", "n", "rep", "diagnostic", "x"]
   dup = df.duplicated([*key, *extra]).sum()
   if dup:
