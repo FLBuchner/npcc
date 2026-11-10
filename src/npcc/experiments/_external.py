@@ -7,17 +7,26 @@ the one fit. The exchange is three CSV files and a seed, in this order::
 
     Rscript <script> <train.csv> <eval.csv> <pred.csv> <seed>
 
-- ``train.csv`` has the columns ``u1``, ``u2`` and ``x``, one row per
-  observation.
-- ``eval.csv`` has ``grid``, ``u1``, ``u2`` and ``x``, one row per evaluation
-  point; ``grid`` names the grid the point belongs to, such as ``metric`` or
-  ``surface``.
+- ``train.csv`` has the columns ``u1``, ``u2`` and the covariates, one row
+  per observation.
+- ``eval.csv`` has ``grid``, ``u1``, ``u2`` and the covariates, one row per
+  evaluation point; ``grid`` names the grid the point belongs to, such as
+  ``metric`` or ``surface``.
 - ``pred.csv``, which the script writes, has one row per evaluation row, in
-  the same order: the row's ``grid``, ``u1``, ``u2`` and ``x``, echoed; the
-  fitted ``pdf``, ``hfunc1``, ``hfunc2`` and ``tau`` at that point; and the
-  seconds the script's steps took -- ``fit_time``, the same on every row, and
-  ``pdf_time``, ``hfunc1_time``, ``hfunc2_time`` and ``tau_time``, each the
-  same within a grid.
+  the same order: the row's ``grid``, ``u1``, ``u2`` and covariates, echoed;
+  the fitted ``pdf``, ``hfunc1``, ``hfunc2`` and ``tau`` at that point; and
+  the seconds the script's steps took -- ``fit_time``, the same on every row,
+  and ``pdf_time``, ``hfunc1_time``, ``hfunc2_time`` and ``tau_time``, each
+  the same within a grid.
+
+The covariates are named by the caller. E1's studies have one, ``x``, and
+call the script with the four arguments above. E9's
+(:mod:`~npcc.experiments.covariate_scenarios`) has fifteen, ``b1``, ...,
+``b5`` (each 0 or 1), ``z1``, ..., ``z5`` and ``t1``, ..., ``t5``, and passes
+a fifth argument, the cell's scenario (``gampcc``, ``interaction`` or
+``null``), which a script fitting the true formula reads::
+
+    Rscript <script> <train.csv> <eval.csv> <pred.csv> <seed> <scenario>
 
 ``hfunc1`` is ``P(V <= v | U = u)``, the copula's derivative in ``u``, and
 ``hfunc2`` is ``P(U <= u | V = v)``, as everywhere in this package. The echoed
@@ -37,7 +46,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from time import perf_counter
 from typing import NamedTuple
@@ -75,7 +84,22 @@ class ExternalFit(NamedTuple):
   wall_time: float
 
 
-def _points(name: str, grid: EvalGrid) -> pd.DataFrame:
+def _columns(
+  x: torch.Tensor, covariates: Sequence[str], *, what: str
+) -> dict[str, np.ndarray]:
+  """The covariate matrix ``x`` as named columns."""
+  values = to_numpy(x, dtype=np.float64).reshape(x.shape[0], -1)
+  if values.shape[1] != len(covariates):
+    raise ValueError(
+      f"{what} must have one covariate column per name in {list(covariates)}; "
+      f"got {values.shape[1]}"
+    )
+  return {name: values[:, k] for k, name in enumerate(covariates)}
+
+
+def _points(
+  name: str, grid: EvalGrid, covariates: Sequence[str]
+) -> pd.DataFrame:
   """The evaluation rows of one grid, labeled with its name."""
   if grid.x_flat is None:
     raise ValueError(
@@ -87,7 +111,7 @@ def _points(name: str, grid: EvalGrid) -> pd.DataFrame:
       "grid": name,
       "u1": to_numpy(grid.u_flat),
       "u2": to_numpy(grid.v_flat),
-      "x": to_numpy(grid.x_flat).reshape(-1),
+      **_columns(grid.x_flat, covariates, what=f"grid {name!r}"),
     }
   )
 
@@ -141,7 +165,7 @@ def _read_predictions(
       f"rows for {len(points)} points"
     )
   # A point read and written back by another parser may move by an ulp.
-  coords = ["u1", "u2", "x"]
+  coords = [c for c in points.columns if c != "grid"]
   same = (pred["grid"].astype(str).to_numpy() == points["grid"].to_numpy()) & (
     np.isclose(
       pred[coords].to_numpy(dtype=np.float64),
@@ -174,6 +198,8 @@ def fit_and_predict(
   *,
   seed: int,
   name: str,
+  covariates: Sequence[str] = ("x",),
+  extra_args: Sequence[str] = (),
 ) -> ExternalFit:
   """Fit ``script`` on ``sample`` once and predict at every point of ``grids``.
 
@@ -182,13 +208,19 @@ def fit_and_predict(
   script : str
       The method's script, run under :data:`RSCRIPT`.
   sample : tuple of torch.Tensor
-      ``(u, v, x)``, the training sample; ``x`` has one column.
+      ``(u, v, x)``, the training sample; ``x`` has one column per entry of
+      ``covariates``.
   grids : mapping of str to EvalGrid
       The conditional grids to predict on, by name.
   seed : int
       Seeds the script's random number generator.
   name : str
       The run, as messages and logs name it.
+  covariates : sequence of str, default ("x",)
+      The covariate columns' names, in the column order of ``x`` and of every
+      grid's ``x_flat``.
+  extra_args : sequence of str, default ()
+      Arguments passed to the script after the seed.
 
   Returns
   -------
@@ -203,16 +235,21 @@ def fit_and_predict(
   ValueError
       If a grid is unconditional, or the predictions do not match the points.
   """
-  u, v, x = (to_numpy(t, dtype=np.float64).reshape(-1) for t in sample)
+  u, v = (to_numpy(t, dtype=np.float64).reshape(-1) for t in sample[:2])
+  train = {
+    "u1": u,
+    "u2": v,
+    **_columns(sample[2], covariates, what="the training covariates"),
+  }
   points = pd.concat(
-    [_points(grid_name, grid) for grid_name, grid in grids.items()],
+    [_points(grid_name, grid, covariates) for grid_name, grid in grids.items()],
     ignore_index=True,
   )
   with tempfile.TemporaryDirectory(prefix="npcc-external-") as tmp:
     train_csv, eval_csv, pred_csv = (
       Path(tmp) / f"{stem}.csv" for stem in ("train", "eval", "pred")
     )
-    pd.DataFrame({"u1": u, "u2": v, "x": x}).to_csv(train_csv, index=False)
+    pd.DataFrame(train).to_csv(train_csv, index=False)
     points.to_csv(eval_csv, index=False)
     t0 = perf_counter()
     _run(
@@ -223,6 +260,7 @@ def fit_and_predict(
         str(eval_csv),
         str(pred_csv),
         str(seed),
+        *extra_args,
       ],
       name=name,
     )

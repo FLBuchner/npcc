@@ -34,6 +34,7 @@ import pandas as pd
 import torch
 
 from npcc.experiments.config import GridConfig, RunConfig
+from npcc.experiments.covariate_config import CovariateGridConfig
 from npcc.experiments.vine_config import VineGridConfig
 
 logger = logging.getLogger(__name__)
@@ -697,13 +698,15 @@ def sorted_frame(frame: pd.DataFrame, by: list[str]) -> pd.DataFrame:
 
 
 def config_echo(
-  grid: GridConfig | VineGridConfig, run: RunConfig, wall: float
+  grid: GridConfig | VineGridConfig | CovariateGridConfig,
+  run: RunConfig,
+  wall: float,
 ) -> dict[str, Any]:
   """The resolved configuration of a finished run, as written to JSON.
 
   Parameters
   ----------
-  grid : GridConfig or VineGridConfig
+  grid : GridConfig, VineGridConfig or CovariateGridConfig
       The swept grid.
   run : RunConfig
       The run-level options.
