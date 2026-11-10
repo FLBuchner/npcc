@@ -7,9 +7,11 @@ IAE and the tau error; plus the held-out KL from true to estimated density.
 
 - ``--arms``: each listed arm minus the baseline, mean ± SE over the pairs and
   the share of pairs it improves, on the held-out reps 5-9 by estimator and n.
-- ``--select``: for each backend, every arm ranked by its mean paired pdf KL
-  on reps 0-4, and the best one reported on reps 5-9, so the reported gain is
-  not the largest of many noisy comparisons.
+- ``--select``: for each backend, every arm ranked by its mean paired
+  difference in ``--rank-by`` (pdf KL by default) on reps 0-4, and the best
+  one reported on reps 5-9, so the reported gain is not the largest of many
+  noisy comparisons. With ``--pooled``, one arm is also chosen for every
+  backend, on the mean over backends of each backend's mean difference.
 - ``--tau``: tau-hat at the strongest-dependence x of clayton / linear.
 
 Examples::
@@ -98,16 +100,28 @@ def summary(frame: pd.DataFrame, by: list[str]) -> pd.DataFrame:
 def main() -> None:
   """Print the report."""
   parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-  parser.add_argument("--out", type=Path, required=True)
+  parser.add_argument("--out", type=Path, nargs="+", required=True)
   parser.add_argument("--baseline", type=parse_arm, required=True)
   parser.add_argument("--arms", type=parse_arm, nargs="*", default=[])
   parser.add_argument("--select", action="store_true")
+  parser.add_argument(
+    "--rank-by", choices=METRICS, default="pdf_KL", help="--select's metric"
+  )
+  parser.add_argument(
+    "--pooled",
+    action="store_true",
+    help="--select one arm for every backend, each backend weighted equally",
+  )
   parser.add_argument("--tau", action="store_true")
   args = parser.parse_args()
   pd.set_option("display.width", 250, "display.max_rows", 500)
   pd.set_option("display.max_columns", 30)
 
-  frames = [pd.read_parquet(p) for p in sorted(args.out.glob("*.parquet"))]
+  frames = [
+    pd.read_parquet(p)
+    for out in args.out
+    for p in sorted(out.glob("*.parquet"))
+  ]
   w = per_rep(pd.concat(frames, ignore_index=True))
   diff = paired(w, args.baseline)
   held_out = diff[diff.rep >= 5]
@@ -125,8 +139,8 @@ def main() -> None:
     ranked = diff[diff.rep <= 4].groupby(["backend", *ARM])[METRICS].mean()
     for backend, frame in ranked.groupby(level="backend"):
       print(f"\n== {backend}: every arm minus baseline, reps 0-4 ==")
-      print(frame.droplevel("backend").sort_values("pdf_KL").round(4))
-      grid, arm = frame["pdf_KL"].idxmin()[1:]
+      print(frame.droplevel("backend").sort_values(args.rank_by).round(4))
+      grid, arm = frame[args.rank_by].idxmin()[1:]
       r = held_out[
         (held_out.backend == backend)
         & (held_out.grid == grid)
@@ -134,6 +148,14 @@ def main() -> None:
       ]
       print(f"\n-- selected {grid} {arm}, reported on reps 5-9 --")
       print(summary(r, ["transform", "n"]).to_string())
+    if args.pooled:
+      pooled = ranked.groupby(level=ARM).mean().sort_values(args.rank_by)
+      print("\n== every arm minus baseline, mean over backends, reps 0-4 ==")
+      print(pooled.round(4))
+      grid, arm = pooled[args.rank_by].idxmin()
+      r = held_out[(held_out.grid == grid) & (held_out.arm == arm)]
+      print(f"\n-- selected {grid} {arm} for every backend, reps 5-9 --")
+      print(summary(r, ["label", "n"]).to_string())
 
   if args.tau:
     a = w[(w.family == "clayton") & (w.tau_scenario == "linear")]

@@ -4,15 +4,20 @@ One row per backend x n x arm, on the held-out reps 5-9. Each arm is paired
 with A0, the read-out E1 ran for that backend (the 7-cell moving average for
 the tree backends, the 3-cell one for the others), on the same fitted model:
 
-- ``base_pdf_KL``: A0's pdf KL;
+- ``base_<metric>``: A0's pdf KL, pdf IAE and held-out KL;
 - ``d_<metric>`` / ``se_<metric>``: the arm minus A0 in pdf KL, pdf IAE and
   held-out KL, mean and standard error over the pairs, one per cell x rep.
   A backend run under several transforms (the tree backends, logit and
   probit) fits them on the same sample, so its differences are averaged over
   the transforms within each cell x rep first: counting them as separate
   pairs would understate the SE;
-- ``share_improved``: the share of pairs whose pdf KL the arm lowers;
+- ``share_improved`` / ``share_improved_holdout_kl``: the share of pairs
+  whose pdf KL / held-out KL the arm lowers;
 - ``commit``: the commits the runs were produced from.
+
+``--baseline`` pairs every backend with one arm instead of its E1 read-out,
+and ``--arms`` names the compared arms; a backend that did not run the
+baseline is refused rather than reported against nothing.
 
 With ``--reference``, the sign of every mean difference is compared with that
 table's, and the rows whose sign flips are listed.
@@ -34,7 +39,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
-from report import paired, per_rep
+from report import paired, parse_arm, per_rep
 
 TREES = ("lightgbm", "xgboost", "catboost")
 #: The read-out each backend ran in E1, the baseline of every comparison.
@@ -52,8 +57,15 @@ METRICS = ["pdf_KL", "pdf_IAE", "holdout_kl"]
 CELL_REP = ["family", "tau_scenario", "rep"]
 
 
-def table(runs: list[Path]) -> pd.DataFrame:
-  """The choice table from the parquet folders ``runs``."""
+def table(
+  runs: list[Path],
+  baseline: tuple[str, str] | None = None,
+  arms: list[tuple[str, str]] | None = None,
+) -> pd.DataFrame:
+  """The choice table from the parquet folders ``runs``.
+
+  ``baseline`` replaces every backend's A0, and ``arms`` the compared arms.
+  """
   frames = [pd.read_parquet(p) for run in runs for p in run.glob("*.parquet")]
   d = pd.concat(frames, ignore_index=True)
   # Outputs written before ab.py stamped its rows carry no commit.
@@ -64,12 +76,17 @@ def table(runs: list[Path]) -> pd.DataFrame:
   rows = []
   for backend, wb in w.groupby("backend"):
     trees = backend in TREES
-    base = A0["trees" if trees else "other"]
+    base = baseline or A0["trees" if trees else "other"]
+    a0 = wb[(wb.grid == base[0]) & (wb.arm == base[1]) & (wb.rep >= 5)]
+    if a0.empty:
+      raise SystemExit(
+        f"{backend} has no {base[0]}:{base[1]} rows to pair its arms with; "
+        "name a baseline it ran with --baseline"
+      )
     diff = paired(wb, base)
     held = diff[diff.rep >= 5]
-    a0 = wb[(wb.grid == base[0]) & (wb.arm == base[1]) & (wb.rep >= 5)]
-    for grid, arm in ARMS:
-      if arm.endswith("|modeled") and not trees:
+    for grid, arm in arms or ARMS:
+      if (arm.endswith("|modeled") and not trees) or (grid, arm) == base:
         continue
       for n, rt in held[(held.grid == grid) & (held.arm == arm)].groupby("n"):
         r = rt.groupby(CELL_REP)[METRICS].mean()
@@ -81,12 +98,14 @@ def table(runs: list[Path]) -> pd.DataFrame:
           "arm": arm,
           "a0": f"{base[0]}:{base[1]}",
           "pairs": len(r),
-          "base_pdf_KL": a0[a0.n == n].pdf_KL.mean(),
         }
+        for m in METRICS:
+          row[f"base_{m}"] = a0[a0.n == n][m].mean()
         for m in METRICS:
           row[f"d_{m}"] = r[m].mean()
           row[f"se_{m}"] = r[m].std(ddof=1) / np.sqrt(r[m].count())
         row["share_improved"] = float((r.pdf_KL < 0).mean())
+        row["share_improved_holdout_kl"] = float((r.holdout_kl < 0).mean())
         row["commit"] = commits
         rows.append(row)
   return pd.DataFrame(rows)
@@ -121,11 +140,15 @@ def main() -> None:
   parser.add_argument("--runs", type=Path, nargs="+", required=True)
   parser.add_argument("--csv", type=Path, required=True)
   parser.add_argument("--reference", type=Path, default=None)
+  parser.add_argument(
+    "--baseline", type=parse_arm, default=None, help="every backend's A0"
+  )
+  parser.add_argument("--arms", type=parse_arm, nargs="+", default=None)
   args = parser.parse_args()
   pd.set_option("display.width", 250, "display.max_rows", 500)
   pd.set_option("display.max_columns", 30)
 
-  out = table(args.runs)
+  out = table(args.runs, args.baseline, args.arms)
   args.csv.parent.mkdir(parents=True, exist_ok=True)
   out.to_csv(args.csv, index=False)
   print(out.round(4).to_string(index=False))

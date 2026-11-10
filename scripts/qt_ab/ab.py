@@ -67,16 +67,17 @@ from npcc.experiments.config import Cell, EstimatorSpec
 ESTIMATORS: dict[str, tuple[str, str, dict[str, object]]] = {
   **{
     f"{b}-{t}": (b, t, {})
-    for b in ("lightgbm", "xgboost", "catboost")
+    for b in ("lightgbm", "xgboost", "catboost", "tabicl", "nori")
     for t in ("logit", "probit")
   },
-  "tabpfn-quantiles-v3-logit": (
-    "tabpfn-quantiles",
-    "logit",
-    {"model_version": "v3"},
-  ),
-  "tabicl-logit": ("tabicl", "logit", {}),
-  "nori-logit": ("nori", "logit", {}),
+  **{
+    f"tabpfn-quantiles-v3-{t}": (
+      "tabpfn-quantiles",
+      t,
+      {"model_version": "v3"},
+    )
+    for t in ("logit", "probit")
+  },
 }
 TREES = [
   label
@@ -225,7 +226,11 @@ def main() -> None:
     "--grids", nargs="+", default=list(GRIDS), choices=list(GRIDS)
   )
   parser.add_argument(
-    "--arms", nargs="+", default=None, help="e.g. 'wh0.65|current'; default all"
+    "--arms",
+    nargs="+",
+    default=None,
+    choices=[rd.label for rd in READOUTS],
+    help="default all",
   )
   parser.add_argument(
     "--workers", type=int, default=1, help="CPU processes, at most 4"
