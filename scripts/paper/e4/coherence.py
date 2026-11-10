@@ -18,7 +18,14 @@ diagnostic into ``--out``:
 Every KL is scored twice: on the grid (``*_KL``) and by Monte Carlo
 (``*_KL_mc``, with ``*_KL_mc_se`` and ``*_KL_mc_floored``) at the cell's
 draws from the true copula, the same draws E1 scores the cell's estimators
-on. ``summarize.py`` reports the Monte Carlo one.
+on. ``summarize.py`` reports the Monte Carlo one. A projected density need
+not integrate to one -- its mass on the evaluation grid can pass 10 -- and
+``mean(log c - log c_hat)`` against an unnormalized ``c_hat`` is no
+divergence, and rewards a blow-up. So on the ``projection`` rows, every
+density, unprojected and projected alike, is divided by its mass at that
+``x`` before its Monte Carlo KL is scored; ``mass_normal_scores`` records
+that mass (``coherence.normal_score_mass``, 200 midpoints a side in normal
+scores), and ``mass`` stays the raw mean over the evaluation grid.
 
 ``--projection-grid`` replaces all three with the projection alone, scored on
 each given grid size from one fit per cell, into
@@ -71,7 +78,7 @@ def projection_rows(
 
   ``holdout`` is the cell's draws and the true log density at each, from
   :func:`holdout_points`; each density's Monte Carlo KL is scored there,
-  outside the timed evaluations.
+  after it is divided by its mass at that x, outside the timed evaluations.
   """
   x = grid.x_flat
   t0 = perf_counter()
@@ -82,16 +89,21 @@ def projection_rows(
   all_time = perf_counter() - t0
 
   points, log_true = holdout
+  assert grid.x_axis is not None and points.x_axis is not None
   at_draws = model.pdf_by_projection(
     points.uv, x=points.x_flat, sinkhorn_iters=[None, *iters]
   )
+  mass = coherence.normal_score_mass(model, grid.x_axis, [None, *iters])
   shape = grid.shape
   true = truth.cpu().reshape(shape)
   nu, nv = grid.u_axis.shape[0], grid.v_axis.shape[0]
   rows = []
   for key, dens in out.items():
     d = dens.cpu().reshape(shape)
-    by_x = metrics.holdout_kl_by_x(points, log_true, at_draws[key])
+    normalized = (
+      at_draws[key].cpu().reshape(points.shape) / mass[key]
+    ).reshape(-1)
+    by_x = metrics.holdout_kl_by_x(points, log_true, normalized)
     for j, xv in enumerate(grid.x_axis.tolist()):
       m = metrics.grid_metrics(true[:, j], d[:, j], include_kl=True)
       margins = metrics.marginal_diagnostics(
@@ -105,6 +117,7 @@ def projection_rows(
           "pdf_KL": m["KL"],
           **{f"pdf_{k}": v for k, v in by_x[j].items()},
           "mass": float(d[:, j].mean()),
+          "mass_normal_scores": float(mass[key][j]),
           **margins,
           # The extra cost of every projected count over the unprojected
           # evaluation, paid once for the whole sweep.

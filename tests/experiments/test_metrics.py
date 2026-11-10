@@ -64,3 +64,20 @@ def test_holdout_kl_floors_a_zero_density_and_counts_it() -> None:
     got = metrics.holdout_kl(log_true, pdf)
     assert got["KL_mc_floored"] == 2.0
     assert got["KL_mc"] == pytest.approx(expected)
+
+
+def test_holdout_kl_counts_its_draws_and_any_non_finite_density() -> None:
+  """A NaN KL must say why, and every KL must say on how many draws.
+
+  A fitted density that is NaN at one draw makes ``KL_mc`` NaN; the count
+  lets the analysis say so instead of calling the run outdated. The draw
+  count lets it refuse to pair runs scored on different draws.
+  """
+  log_true = torch.zeros(4, dtype=torch.float64)
+  pdf = torch.tensor([1.0, float("nan"), float("inf"), 1.0])
+
+  got = metrics.holdout_kl(log_true, pdf)
+
+  assert got["KL_mc_n"] == 4.0
+  assert got["KL_mc_nonfinite"] == 2.0
+  assert math.isnan(got["KL_mc"])

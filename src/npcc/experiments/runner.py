@@ -947,7 +947,8 @@ def _runtime_summary(runtime_df: pd.DataFrame) -> pd.DataFrame:
 
 def _selection_summary(summary_over_x: pd.DataFrame) -> pd.DataFrame:
   ranked = summary_over_x[
-    (summary_over_x["quantity"] == "pdf") & (summary_over_x["metric"] == "KL")
+    (summary_over_x["quantity"] == "pdf")
+    & (summary_over_x["metric"] == "KL_mc")
   ].copy()
   ranked = ranked.sort_values(
     ["rep_mean", "rep_median", "rep_p95", *_ESTIMATOR_AXES, "normalize"],

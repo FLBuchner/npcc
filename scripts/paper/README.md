@@ -52,11 +52,29 @@ the floor); E4's parts record `*_KL_mc` beside each KL. IAE stays on the
 grid.
 
 The grid KL stays in the tables as `KL` and is not reported. `analyze.py`,
-`paired.py` and E4's `summarize.py` report `KL_mc` under the name KL, and
-refuse a run without it. Every dated run below from before E8 therefore has
-to be rerun before it can be analyzed, the R competitors (E1b) included:
-their scripts take the draws as one more grid, but their fits are not
-stored.
+`paired.py`, `r_selection.py` and E4's `summarize.py` report `KL_mc` under
+the name KL. They refuse:
+
+- a run without it;
+- a NaN from a fitted density that is not finite at some draw, saying so
+  (`KL_mc_nonfinite` counts those draws);
+- runs scored on different `holdout_n`, whose draws differ (`KL_mc_n`
+  records it).
+
+Every dated run below from before E8 therefore has to be rerun before it can
+be analyzed, the R competitors (E1b) included: their scripts take the draws
+as one more grid, but their fits are not stored. With the same R and
+packages, a refit reproduces the stored grid metrics exactly.
+
+On E4's `projection` rows, every density, projected or not, is divided by
+its mass at that x before its Monte Carlo KL is scored: a projected density
+need not integrate to one, and against an unnormalized density the mean of
+`log c - log c_hat` is no divergence. The mass
+(`coherence.normal_score_mass`, recorded as `mass_normal_scores`) is the
+midpoint rule on 200 x 200 points in normal scores on [-6, 6]. A Clayton
+copula at tau 0.7 is unbounded at a corner, and 200 x 200 midpoints in u
+overstate its mass by 8e-3; in normal scores the error is 2e-9. `mass`
+stays the raw mean over the evaluation grid.
 
 ## E1 — bivariate backend study (§3.2)
 

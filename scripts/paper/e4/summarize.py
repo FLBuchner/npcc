@@ -48,6 +48,7 @@ PROJECTION_COLS = [
   "pdf_IAE",
   "pdf_KL",
   "mass",
+  "mass_normal_scores",
   "row_max_abs_err",
   "col_max_abs_err",
   "row_mean_abs_err",
@@ -58,21 +59,32 @@ PROJECTION_COLS = [
 def monte_carlo_kl(df: pd.DataFrame, run: Path) -> pd.DataFrame:
   """Each ``*_KL`` column as the Monte Carlo KL, the grid's as ``*_KL_grid``.
 
-  A row whose grid KL is set must have its Monte Carlo KL too: a part from
-  before the Monte Carlo KL has none, and its grid KL must not be reported
-  under the name.
+  A row whose grid KL is set must have a finite Monte Carlo KL beside it. A
+  part from before the Monte Carlo KL has no ``*_KL_mc_n``, and its grid KL
+  must not be reported under the name; a NaN from a density that was not
+  finite at a draw must not be skipped by a mean; and parts scored on
+  different numbers of draws per x scored different draws.
   """
   grid_kl = [c for c in df.columns if c.endswith("_KL")]
-  lacking = [
-    c
-    for c in grid_kl
-    if f"{c}_mc" not in df.columns
-    or df.loc[df[c].notna(), f"{c}_mc"].isna().any()
-  ]
-  if lacking:
+  for c in grid_kl:
+    scored = df[c].notna()
+    if f"{c}_mc_n" not in df or df.loc[scored, f"{c}_mc_n"].isna().any():
+      raise SystemExit(
+        f"the parts under {run} must carry a Monte Carlo KL beside {c}; "
+        "rerun them with this coherence.py"
+      )
+    nan = scored & df[f"{c}_mc"].isna()
+    if nan.any():
+      raise SystemExit(
+        f"{c}_mc must be finite; got NaN on {int(nan.sum())} rows under "
+        f"{run}, whose density is not finite at "
+        f"{int(df.loc[nan, f'{c}_mc_nonfinite'].sum())} draws in all"
+      )
+  draws = {n for c in grid_kl for n in df[f"{c}_mc_n"].dropna().unique()}
+  if len(draws) > 1:
     raise SystemExit(
-      f"the parts under {run} must carry a Monte Carlo KL beside {lacking}; "
-      "rerun them with this coherence.py"
+      f"the parts under {run} must share one holdout_n; got "
+      f"{sorted(int(n) for n in draws)}"
     )
   df = df.rename(columns={c: f"{c}_grid" for c in grid_kl})
   return df.rename(columns={f"{c}_mc": c for c in grid_kl})

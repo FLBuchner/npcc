@@ -85,17 +85,20 @@ def holdout_kl(
   Returns
   -------
   dict
-      ``KL_mc``, its Monte Carlo standard error ``KL_mc_se``, and
-      ``KL_mc_floored``, the number of draws whose fitted density is at or
-      under :data:`LOG_FLOOR`.
+      ``KL_mc``; its Monte Carlo standard error ``KL_mc_se``; ``KL_mc_n``,
+      the number of draws; ``KL_mc_floored``, the draws whose fitted density
+      is at or under :data:`LOG_FLOOR`; and ``KL_mc_nonfinite``, those whose
+      fitted density is not finite, which make ``KL_mc`` NaN.
   """
   ratio = log_true - log_density(pdf_hat)
   n = ratio.numel()
-  floored = pdf_hat.to(torch.float64) <= LOG_FLOOR
+  fitted = pdf_hat.to(torch.float64)
   return {
     "KL_mc": float(ratio.mean()),
     "KL_mc_se": float(ratio.std() / n**0.5),
-    "KL_mc_floored": float(floored.sum()),
+    "KL_mc_n": float(n),
+    "KL_mc_floored": float((fitted <= LOG_FLOOR).sum()),
+    "KL_mc_nonfinite": float((~fitted.isfinite()).sum()),
   }
 
 

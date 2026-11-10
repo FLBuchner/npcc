@@ -5,7 +5,8 @@ model formula and the smooth's effective degrees of freedom (EDF); the result
 tables carry only the metrics. This joins the two into
 ``<run>/analysis/r_selection.csv``: one row per estimator and cell, with the
 chosen family, whether it contains the truth, the EDF, and the mean pdf KL and
-IAE over x.
+IAE over x. The KL is the Monte Carlo KL, through ``analyze.monte_carlo_kl``,
+which refuses a run without it.
 
 Usage::
 
@@ -21,6 +22,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+from analyze import monte_carlo_kl
 
 _LINE = re.compile(
   r"(?P<label>[\w-]+) on (?P<family>[\w-]+?)__(?P<tau_scenario>[\w-]+?)"
@@ -57,6 +59,7 @@ def main() -> None:
     pd.read_parquet(p)
     for p in glob.glob(str(run / "cells" / "*" / "metrics.parquet"))
   )
+  metrics = monte_carlo_kl(metrics)
   pdf = metrics[metrics["quantity"] == "pdf"]
   acc = pdf.groupby(keys)[["KL", "IAE"]].mean().reset_index()
   out = sel.merge(acc, on=keys, how="left").sort_values(keys)

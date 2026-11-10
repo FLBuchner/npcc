@@ -13,10 +13,13 @@ study's evaluation grid, one row per covariate value:
   integral of the averaged density it should equal:
   ``h1(u, v) = int_0^v c(u, s) ds`` and ``h2(u, v) = int_0^u c(s, v) ds``.
 
-Both evaluate the unprojected density.
+Both evaluate the unprojected density. :func:`normal_score_mass` integrates a
+density, projected or not, over the unit square at each covariate value.
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 import torch
 
@@ -24,7 +27,7 @@ from npcc.core import RosenblattBicop
 from npcc.experiments import metrics
 from npcc.experiments.scenarios import EvalGrid
 
-__all__ = ["directional_rows", "hfunc_rows"]
+__all__ = ["directional_rows", "hfunc_rows", "normal_score_mass"]
 
 
 def _covariates(grid: EvalGrid) -> torch.Tensor | None:
@@ -109,6 +112,62 @@ def directional_rows(
         row[f"{name}_{key}"] = value
     rows.append(row)
   return rows
+
+
+def normal_score_mass(
+  model: RosenblattBicop,
+  x_axis: torch.Tensor,
+  sinkhorn_iters: Sequence[int | None],
+  *,
+  m: int = 200,
+  limit: float = 6.0,
+) -> dict[int | None, torch.Tensor]:
+  """The density's mass over the unit square at each ``x``, per iteration count.
+
+  The midpoint rule in normal scores: ``m`` midpoints a side on
+  ``[-limit, limit]``, at ``u = Phi(s)`` with weight ``phi(s) ds``. A copula
+  density that grows without bound at a corner, as Clayton's and Joe's do,
+  is smooth in normal scores, so this is accurate where a uniform grid of the
+  same size is not: for a Clayton copula at tau 0.7, ``m = 200`` gives the
+  mass to 2e-9, against 8e-3 for 200 x 200 midpoints in ``u``.
+
+  Parameters
+  ----------
+  model : RosenblattBicop
+      A fitted pair copula.
+  x_axis : torch.Tensor
+      The covariate values.
+  sinkhorn_iters : sequence of int or None
+      The iteration counts, as :meth:`RosenblattBicop.pdf_by_projection`
+      takes them; ``None`` is the unprojected density.
+  m : int, default 200
+      Midpoints a side.
+  limit : float, default 6.0
+      The normal-score range; ``Phi(-6)`` is about 1e-9.
+
+  Returns
+  -------
+  dict
+      Per iteration count, the mass at each ``x``, in ``x_axis`` order.
+  """
+  step = 2.0 * limit / m
+  s = -limit + (torch.arange(m, dtype=torch.float64) + 0.5) * step
+  normal = torch.distributions.Normal(0.0, 1.0)
+  axis = normal.cdf(s)
+  weight = normal.log_prob(s).exp() * step
+  uu, vv = torch.meshgrid(axis, axis, indexing="ij")
+  uv = torch.column_stack([uu.reshape(-1), vv.reshape(-1)])
+  cell = torch.outer(weight, weight).reshape(-1)
+  xs = x_axis.to(dtype=torch.float64).cpu()
+  out = model.pdf_by_projection(
+    uv.repeat(xs.shape[0], 1),
+    x=xs.repeat_interleave(m * m).reshape(-1, 1),
+    sinkhorn_iters=sinkhorn_iters,
+  )
+  return {
+    key: (dens.cpu().reshape(xs.shape[0], m * m) * cell).sum(dim=1)
+    for key, dens in out.items()
+  }
 
 
 def _cumulative(density: torch.Tensor, dim: int) -> torch.Tensor:

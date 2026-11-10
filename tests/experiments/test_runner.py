@@ -203,6 +203,11 @@ def test_summaries_group_over_reps(coverage_study: Tables) -> None:
 def test_aggregate_study_outputs_have_paper_tables(
   projection_study: Tables,
 ) -> None:
+  """Every summary table is written, and the selection ranks by KL_mc.
+
+  The grid KL is not reported, so a selection ranked on it would order the
+  estimators by a number the paper does not show.
+  """
   metric_df, _, diagnostic_df, runtime_df, _ = projection_study
   outputs = aggregate_study_outputs(metric_df, diagnostic_df, runtime_df)
   assert {
@@ -218,7 +223,7 @@ def test_aggregate_study_outputs_have_paper_tables(
   assert "x" not in outputs["summary_over_x"].columns
   assert outputs["selection_summary"].iloc[0]["rank"] == 1
   assert set(outputs["selection_summary"]["quantity"].unique()) == {"pdf"}
-  assert set(outputs["selection_summary"]["metric"].unique()) == {"KL"}
+  assert set(outputs["selection_summary"]["metric"].unique()) == {"KL_mc"}
 
 
 def test_backend_axis_labels_rows_and_aggregates(backend_study: Tables) -> None:
