@@ -23,8 +23,10 @@ eval_m = 1000
 
 projection_grid_size = 30
 
+# E1's main-text estimator, under E1's label: TabPFN v3 at the probit
+# transform, for the pair copulas. Margins use the identity transform.
 [[grid.estimators]]
-label = "tabpfn-quantiles-v3-logit"
+label = "tabpfn-quantiles-v3-probit"
 backend = "tabpfn-quantiles"
-transform = "logit"
+transform = "probit"
 backend_kwargs = { model_version = "v3" }

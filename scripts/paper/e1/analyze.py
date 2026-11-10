@@ -24,7 +24,7 @@ finished cells only, so a partial run can be previewed) and writes into
 Usage (from the npcc repository root)::
 
     uv run --no-sync python scripts/paper/e1/analyze.py \
-      results/study_2026-11-05 --tabpfn v3 --transform logit
+      results/study_2026-11-05 --tabpfn v3 --transform probit
 """
 
 from __future__ import annotations
@@ -524,7 +524,7 @@ def main() -> None:
     ),
   )
   p.add_argument("--tabpfn", default="v3", help="Main-text TabPFN version.")
-  p.add_argument("--transform", default="logit", help="Main-text transform.")
+  p.add_argument("--transform", default="probit", help="Main-text transform.")
   p.add_argument(
     "--out", type=Path, default=None, help="Default: <run>/analysis."
   )

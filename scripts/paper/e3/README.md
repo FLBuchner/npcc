@@ -46,7 +46,7 @@ pair copula of E3a's cross-check and of E3c — it gets it from
 | `e3_vdc_server.py` | VDC | VDC's density estimate as a service (started by `e3_vdc_pair.VdcServer`) |
 | `e3_vdc_pair.py` | npcc | The server client and `VdcBicop`: VDC's 64 x 64 grid replicate-padded and held by pyvinecopulib 1.0's `TorchTllBicop` with `norm_maxiter=0`, adapted from pyvinecopulib PR #217 |
 | `e3_vine.py` | npcc | `SharedVinecop`: a simplified pyvinecopulib 1.0 `VinecopBase` hosting any torch pair copula |
-| `e3_npcc.py` | npcc | E1's logit estimators (same labels and specs) and one timed fit |
+| `e3_npcc.py` | npcc | E1's estimators, at the probit transform (same labels and specs), and one timed fit |
 | `e3_collect.py` | npcc | Long tables, summaries, cross-checks, the common-set scoring, and the code check |
 | `e3_nan_diagnostics.py` | npcc | Which arms, trees and pair copulas give non-finite vine densities |
 | `e3_run_gpu_arms.py` | npcc | The pending GPU arms, once the GPU is free |
@@ -98,6 +98,10 @@ The download comes from Hugging Face, `hsafaai/vdc-denoiser-m64-v1`
 
 ## Commands, and the files they write
 
+Every NPCC arm is one of E1's estimators at the probit transform, the only
+one the paper presents (E8, in `../README.md`); `e3_npcc.py` lists them. The
+run recorded before E8 used the same commands with E1's logit estimators.
+
 Run everything from the npcc repository root. The CPU runs pin each process
 to one core and one BLAS/OpenMP thread, as VDC's runner times its methods;
 those are the settings below, with `nice -n 10` because the machine was
@@ -131,11 +135,11 @@ taskset -c 12 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3a_vdc_side.py \
     --reference-run results/e3_vdc/table1_rerun_cpu --out results/e3_vdc/e3a \
     > results/e3_vdc/e3a_vdc_side.log 2>&1
 taskset -c 12 nice -n 10 uv run --no-sync python scripts/paper/e3/e3a_npcc_fit.py \
-    --estimators lightgbm-logit --n-train 2000 10000 --device cpu \
+    --estimators lightgbm-probit --n-train 2000 10000 --device cpu \
     > results/e3_vdc/e3a_npcc_lightgbm.log 2>&1
 for est in catboost xgboost; do
   taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3a_npcc_fit.py \
-      --estimators $est-logit --n-train 2000 10000 --device cpu \
+      --estimators $est-probit --n-train 2000 10000 --device cpu \
       > results/e3_vdc/e3a_npcc_$est.log 2>&1
 done
 taskset -c 12 nice -n 10 uv run --no-sync python scripts/paper/e3/e3a_npcc_fit.py \
@@ -164,10 +168,10 @@ taskset -c 13 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3b_vdc_side.py \
     --out results/e3_vdc/e3b > results/e3_vdc/e3b_vdc_side.log 2>&1
 for est in lightgbm xgboost; do
   taskset -c 13 nice -n 10 uv run --no-sync python scripts/paper/e3/e3b_npcc_fit.py \
-      --estimators $est-logit --device cpu > results/e3_vdc/e3b_npcc_$est.log 2>&1
+      --estimators $est-probit --device cpu > results/e3_vdc/e3b_npcc_$est.log 2>&1
 done
 taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3b_npcc_fit.py \
-    --estimators catboost-logit --device cpu > results/e3_vdc/e3b_npcc_catboost.log 2>&1
+    --estimators catboost-probit --device cpu > results/e3_vdc/e3b_npcc_catboost.log 2>&1
 ```
 
 `e3b/` then holds `samples.npz`, `vdc_side.csv`, `vdc_side.json`,
@@ -186,11 +190,11 @@ F=results/e3_vdc/e3c_decay
 taskset -c 10 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py --folder $F \
     --arms tll tll_cpp parametric vdc --vdc-core 10 > results/e3_vdc/e3c_decay_npcc_competitors.log 2>&1
 taskset -c 11 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py --folder $F \
-    --arms npcc-lightgbm-logit > results/e3_vdc/e3c_decay_npcc_lightgbm.log 2>&1
+    --arms npcc-lightgbm-probit > results/e3_vdc/e3c_decay_npcc_lightgbm.log 2>&1
 taskset -c 12 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py --folder $F \
-    --arms npcc-xgboost-logit > results/e3_vdc/e3c_decay_npcc_xgboost.log 2>&1
+    --arms npcc-xgboost-probit > results/e3_vdc/e3c_decay_npcc_xgboost.log 2>&1
 taskset -c 13 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py --folder $F \
-    --arms npcc-catboost-logit rosenblatt-vinecop-check > results/e3_vdc/e3c_decay_npcc_catboost.log 2>&1
+    --arms npcc-catboost-probit rosenblatt-vinecop-check > results/e3_vdc/e3c_decay_npcc_catboost.log 2>&1
 ```
 
 For the `strong` stress variant (`results/e3_vdc/e3c/`, the default folder):
@@ -201,11 +205,11 @@ taskset -c 11 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3c_vdc_side.py \
 taskset -c 13 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
     --arms tll tll_cpp parametric vdc --vdc-core 13 > results/e3_vdc/e3c_npcc_competitors.log 2>&1
 taskset -c 11 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
-    --arms npcc-lightgbm-logit > results/e3_vdc/e3c_npcc_lightgbm.log 2>&1
+    --arms npcc-lightgbm-probit > results/e3_vdc/e3c_npcc_lightgbm.log 2>&1
 taskset -c 14 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
-    --arms npcc-xgboost-logit > results/e3_vdc/e3c_npcc_xgboost.log 2>&1
+    --arms npcc-xgboost-probit > results/e3_vdc/e3c_npcc_xgboost.log 2>&1
 taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3c_npcc_fit.py \
-    --arms npcc-catboost-logit rosenblatt-vinecop-check > results/e3_vdc/e3c_npcc_catboost.log 2>&1
+    --arms npcc-catboost-probit rosenblatt-vinecop-check > results/e3_vdc/e3c_npcc_catboost.log 2>&1
 ```
 
 Each design's folder then holds:
@@ -233,14 +237,14 @@ E=scripts/paper/e3/e3d_npcc_fit.py
 taskset -c 11 nice -n 10 uv run --no-sync python $E \
     --arms parametric tll parametric_true tll_true vdc_true --vdc-core 11
 for v in random-ns tll-ns random-s true-s; do
-  taskset -c 12 nice -n 10 uv run --no-sync python $E --arms npcc-catboost-logit-$v
+  taskset -c 12 nice -n 10 uv run --no-sync python $E --arms npcc-catboost-probit-$v
 done
 # GPU, main-text TabPFN (v3), arms (a) and (b) only (the paper lead's scope):
 # d = 5 on both designs, d = 10 on the decay design and five seeds.
 for v in random-ns tll-ns; do
-  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-logit-$v --dims 5 \
+  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-probit-$v --dims 5 \
       --device cuda --gpu-is-free >> results/e3d_unknown_structure_gpu.log 2>&1
-  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-logit-$v --designs decay --dims 10 \
+  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-probit-$v --designs decay --dims 10 \
       --seeds 101 202 303 404 505 --device cuda --gpu-is-free >> results/e3d_unknown_structure_gpu.log 2>&1
 done
 ```
@@ -291,7 +295,8 @@ running, or was stopped, appears up to its last finished cell, with
 
 ### The GPU arms
 
-The GPU arms run once the GPU is free, naming the main-text TabPFN version:
+The GPU arms run once the GPU is free, naming the main-text TabPFN version,
+whose estimator is `tabpfn-quantiles-<version>-probit`:
 - E3a at `n_train` = 2,000 runs every in-context learner (TabPFN v2.5, v3
   and v3.5, TabICL, Nori);
 - E3a at `n_train` = 10,000 runs the main TabPFN version only;

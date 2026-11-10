@@ -22,7 +22,7 @@ in the NPCC environment from the repository root:
   (the structure that selection returned, passed back as ``structure=``),
   so the two fits differ by the selection alone. Inference is ``pdf`` at the
   test points;
-- ``--part npcc``: ``npcc.RosenblattVinecop`` with an E1 logit estimator
+- ``--part npcc``: ``npcc.RosenblattVinecop`` with an E1 estimator
   (the main TabPFN v3 by default). It is fit on E3d's random structure,
   non-simplified: arm (a), which selects nothing. Controls and torch seeds
   are E3d's. Inference is ``logpdf`` at the test points.
@@ -78,7 +78,7 @@ import e3_common as common  # noqa: E402
 
 E3D = common.NPCC_REPO / "results" / "e3d_unknown_structure"
 ROOT = common.NPCC_REPO / "results" / "e6_timing"
-MAIN_TABPFN = "tabpfn-quantiles-v3-logit"
+MAIN_TABPFN = "tabpfn-quantiles-v3-probit"
 N_WARMUP_TEST = 2000
 COLUMNS = ["section", "method", "setting", "d", "n", "seed", "stage", "seconds", "device",
            "compute", "cpu", "threads", "npcc_commit", "case", "design", "n_test", "gpu",
@@ -254,7 +254,7 @@ def e3a_rows(folder: Path, seeds: set[int]) -> list[dict]:
     if r["seed"] not in seeds:
       continue
     for stage in ("fit", "inference"):
-      rows.append({**r, "setting": f"{r['estimator']} (E1 logit arm)", "stage": stage,
+      rows.append({**r, "setting": f"{r['estimator']} (E1 arm)", "stage": stage,
                    "seconds": r[f"{stage}_s"]})
   for r in rows:
     r.update({"section": "e3a", "d": 2, "warmup_excluded": True})

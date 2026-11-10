@@ -2,7 +2,7 @@
 
 Every result in the paper and its supplement comes from committed code and
 configs in this repository. This file lists, per experiment, what to run and
-where the output goes. The experiment plan itself (E1–E7) lives with the paper
+where the output goes. The experiment plan itself (E1–E8) lives with the paper
 (`paper/jcgs/experiments.md` in the paper repository).
 
 All commands run from the repository root, with the environment synced as
@@ -16,6 +16,22 @@ uv sync --frozen --extra cu130 --extra backends --extra experiments
 reported run. The E3 and E4 scripts also write it into every row, and from
 22e0da2 on, every process of a study run appends its commit, uncommitted
 files and options to `provenance.jsonl` in the run's folder.
+
+## Probit only (E8)
+
+The paper presents one transformation of the copula scale, probit: the
+normal scores behind TLL in (py)vinecopulib. Every paper config and script
+therefore names E1's probit estimators, `<backend>-probit` and TabPFN's
+`tabpfn-quantiles-<version>-probit`, with `tabpfn-quantiles-v3-probit` as
+the main-text TabPFN. The library keeps logit, its default, and its other
+transforms (top-level `README.md`, "Support transforms"); only the paper's
+configs leave them out.
+
+The commits and dated result folders named below are those of the runs made
+before E8: E1 fitted both transforms, and every other npcc run the logit
+estimators only. The commands name the probit ones. E7a's commands stay on
+logit: they check out cb04041, whose A/B scripts and labels are those of the
+run the supplement cites.
 
 ## Running a study on several processes
 
@@ -40,10 +56,11 @@ contaminated by the concurrency and are not reported (see E6).
 
 ## E1 — bivariate backend study (§3.2)
 
-- Config: `configs/study.toml` (16 estimators; 160 cells).
+- Config: `configs/study.toml` (8 estimators, all probit: the six backends
+  and TabPFN's v2.5 and v3.5 releases; 160 cells).
 - Run: the sharded commands above with `OUT=results/study_2026-11-05`.
 - Analysis: `uv run --no-sync python scripts/paper/e1/analyze.py
-  results/study_2026-11-05 --tabpfn <version> --transform <transform>` writes
+  results/study_2026-11-05 --tabpfn <version> --transform probit` writes
   the tables (`overall.csv`, `by_n.csv`, `ranking*.csv`, `margins.csv`) and the
   figures (`accuracy_by_n`, `conditional_tau`, each as PDF and PNG) into
   `results/study_2026-11-05/analysis/`.
@@ -55,7 +72,7 @@ contaminated by the concurrency and are not reported (see E6).
   rows replace those labels' rows of the other runs; pass `--out` as well,
   so the original analysis stays as it was.
 - Density slices (supplement): `scripts/paper/e1/density_slices.py fit
-  --tabpfn <version> --transform <transform> --out
+  --tabpfn <version> --transform probit --out
   results/study_2026-11-05/analysis/slices` (add `--part I/K` to split), then
   `... density_slices.py plot --out ...`. The refits use E1's cell and
   estimator seeds, so the models equal E1's up to GPU nondeterminism. Every
@@ -66,17 +83,17 @@ contaminated by the concurrency and are not reported (see E6).
   unprojected. `projection_summary` predates the midpoint Sinkhorn projection
   (a26262c), so the projection results reported come from E4.
 - TabPFN temperature ablation (supplement): `configs/study_tabpfn_temperature.toml`
-  (v3 at temperature 1.0 and v3.5 at 0.9, logit; E1's cells for n in
+  (v3 at temperature 1.0 and v3.5 at 0.9, probit; E1's cells for n in
   {500, 2000}, reps 0-4) with the sharded commands above and
   `OUT=results/study_2026-11-06_tabpfn_temperature`, from a clean worktree at
   7567717. Each checkpoint's own temperature, which E1 used, is 0.9 for v3
   and 1.0 for v3.5, so the ablation swaps them. Its fits pair with E1's on
   identical data: `scripts/paper/e1/paired.py results/study_2026-11-05 --with
   results/study_2026-11-06_tabpfn_temperature --labels
-  tabpfn-quantiles-v3-temp1.0-logit --against tabpfn-quantiles-v3-logit
+  tabpfn-quantiles-v3-temp1.0-probit --against tabpfn-quantiles-v3-probit
   --common-cells --out results/study_2026-11-06_tabpfn_temperature/analysis/v3`,
-  and likewise v3.5 at 0.9 against `tabpfn-quantiles-v3.5-logit` (into
-  `analysis/v3.5`) and against `tabpfn-quantiles-v3-logit` (into
+  and likewise v3.5 at 0.9 against `tabpfn-quantiles-v3.5-probit` (into
+  `analysis/v3.5`) and against `tabpfn-quantiles-v3-probit` (into
   `analysis/vs_v3`).
 
 ## E1b — established competitors on E1's cells (§3.2)
@@ -109,7 +126,7 @@ the sharded commands above with `--device cpu`.
   per n, how many stopped within 5% of it (`cv_stops_by_n.csv`), into the
   run's `analysis/`.
 - Paired comparison: `scripts/paper/e1/paired.py <run> --with <R run>
-  --labels tabpfn-quantiles-v3-logit tabicl-logit best-gb --against gamcopula
+  --labels tabpfn-quantiles-v3-probit tabicl-probit best-gb --against gamcopula
   boostcopula-smooth-cv` writes each estimator's pdf KL and IAE minus each
   competitor's, cell by cell, as mean, SE and wins over repetitions (overall,
   by family and by n) into `<run>/analysis/paired.csv`.
@@ -134,7 +151,7 @@ are from a clean worktree at 7567717.
 
 ## E2 — vine study (§3.4)
 
-- Config: `configs/vine_study.toml`: TabPFN v3 with the logit transform;
+- Config: `configs/vine_study.toml`: TabPFN v3 with the probit transform;
   oracle, random and TLL arms; d in {3, 5}, n in {500, 1000}, 20 reps; 80
   cells.
 - Run from a clean worktree at d10182b into `results/vine_2026-11-06`, as 4
@@ -161,11 +178,11 @@ the command behind every file in `results/e3_vdc/`.
 - Accuracy and coherence, as two runs that differ only in estimators and
   device; every row records the commit it ran from.
   - The gradient boosters on CPU, from 7909ed7: `uv run --no-sync python
-    scripts/paper/e4/coherence.py --labels lightgbm-logit xgboost-logit
-    catboost-logit --n 500 2000 --reps 5 --sinkhorn 5 20 50 --device cpu
+    scripts/paper/e4/coherence.py --labels lightgbm-probit xgboost-probit
+    catboost-probit --n 500 2000 --reps 5 --sinkhorn 5 20 50 --device cpu
     --part I/3 --out results/e4_coherence` for I in 0, 1, 2.
   - TabPFN on the GPU, from 7000ae3: the same with `--labels
-    tabpfn-quantiles-v3-logit`, no `--device`, `--part I/2` for I in 0, 1,
+    tabpfn-quantiles-v3-probit`, no `--device`, `--part I/2` for I in 0, 1,
     and `--out results/e4_coherence/tabpfn`. E1c's scenario code (2b319b7)
     was in the working tree but uncommitted; it reproduces 7000ae3's seeds,
     draws and truths for these cells bit for bit.

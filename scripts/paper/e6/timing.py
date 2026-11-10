@@ -50,12 +50,12 @@ from npcc.experiments.vine_runner import summarize_one_cell
 
 #: The main text's estimators, one per backend, as E1 labels them.
 MAIN_LABELS = [
-  "tabpfn-quantiles-v3-logit",
-  "tabicl-logit",
-  "nori-logit",
-  "lightgbm-logit",
-  "xgboost-logit",
-  "catboost-logit",
+  "tabpfn-quantiles-v3-probit",
+  "tabicl-probit",
+  "nori-probit",
+  "lightgbm-probit",
+  "xgboost-probit",
+  "catboost-probit",
 ]
 
 #: Backends whose model runs on the torch device; the gradient boosters

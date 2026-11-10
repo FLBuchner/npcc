@@ -524,7 +524,7 @@ def test_the_signature_hashes_shape_settings_only_where_a_grid_has_them(
   e1 = load_grid(Path(__file__).resolve().parents[2] / "configs" / "study.toml")
   assert (
     runner_mod._grid_signature(e1, run)
-    == "640cf74836793eccc93c7ed834afb0d028cad013818b7b1b5596659ef0910d04"
+    == "264af56f7b21c58eb85d79300c66d81fee20cb16dcb073a9153d9a02e529ad50"
   )
 
   base = runner_mod._grid_signature(_shape_grid([0.1, 0.9]), run)

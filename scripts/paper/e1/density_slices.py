@@ -21,7 +21,7 @@ Two steps, so the GPU part can be split across processes:
 Usage (from the npcc repository root)::
 
     uv run --no-sync python scripts/paper/e1/density_slices.py fit \
-      --tabpfn v3 --transform logit --out results/study_2026-11-05/analysis/slices
+      --tabpfn v3 --transform probit --out results/study_2026-11-05/analysis/slices
     uv run --no-sync python scripts/paper/e1/density_slices.py plot \
       --out results/study_2026-11-05/analysis/slices
 """
@@ -249,7 +249,7 @@ def main() -> None:
   f = sub.add_parser("fit")
   f.add_argument("--config", type=Path, default=Path("configs/study.toml"))
   f.add_argument("--tabpfn", required=True, help="Main-text TabPFN version.")
-  f.add_argument("--transform", required=True, help="Main-text transform.")
+  f.add_argument("--transform", default="probit", help="Main-text transform.")
   f.add_argument("--n", type=int, default=1000)
   f.add_argument("--u1", type=float, nargs="+", default=[0.25, 0.5, 0.75])
   f.add_argument("--tau", type=float, nargs="+", default=[0.4, 0.7])

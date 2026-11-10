@@ -9,14 +9,14 @@ Run in the NPCC environment, from the repository root, after
     # thread, as VDC's runner times VDC, TLL and parametric selection:
     OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
     taskset -c 13 nice -n 10 uv run --no-sync python scripts/paper/e3/e3a_npcc_fit.py \
-        --estimators lightgbm-logit --n-train 2000 10000 --device cpu
+        --estimators lightgbm-probit --n-train 2000 10000 --device cpu
     # The adapted VDC pair copula (a cross-check of VDC's own lookup):
     ... e3a_npcc_fit.py --estimators vdc-adapted --vdc-core 12 --device cpu
     # GPU arms, once the GPU is free (n_train 10000: main-text TabPFN only):
     uv run --no-sync python scripts/paper/e3/e3a_npcc_fit.py \
         --estimators gpu --n-train 2000 --device cuda --gpu-is-free
 
-**What it does.** For each requested E1 logit estimator (see ``e3_npcc.py``),
+**What it does.** For each requested E1 estimator (see ``e3_npcc.py``),
 each training size and each of the 45 fits (nine cases x five seeds) it fits
 :class:`npcc.RosenblattBicop` with no covariate on the training sample,
 evaluates the density at the 20,000 test points and on the ``200 x 200``

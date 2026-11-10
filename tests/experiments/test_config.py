@@ -220,7 +220,10 @@ def test_shipped_study_config_loads() -> None:
   assert grid.n == [200, 500, 1000, 2000]
   assert grid.n_rep == 10
   assert grid.normalize == [None]
-  assert len(grid.estimators) == 16
+  assert len(grid.estimators) == 8
+  # The paper presents the probit transform only, so a second transform
+  # here would put two estimators per backend into every table.
+  assert {e.transform for e in grid.estimators} == {"probit"}
   labels = [e.label for e in grid.estimators]
   assert len(labels) == len(set(labels))
   ids = [e.estimator_id for e in grid.estimators]
@@ -368,7 +371,7 @@ def test_the_misspecification_configs_share_one_grid(
 
   The two configs are compared estimator by estimator, so a data axis that
   drifted between them would compare the methods on different samples. The
-  backends must also be E1's, at the logit transform, with E1's estimator
+  backends must also be E1's, at the probit transform, with E1's estimator
   ids, which is what lets the two studies' tables be joined.
   """
   monkeypatch.chdir(_ROOT)
@@ -387,7 +390,7 @@ def test_the_misspecification_configs_share_one_grid(
   assert {e.estimator_id for e in backends.estimators} <= {
     e.estimator_id for e in e1.estimators
   }
-  assert {e.transform for e in backends.estimators} == {"logit"}
+  assert {e.transform for e in backends.estimators} == {"probit"}
   assert {e.backend for e in backends.estimators} == {
     "tabpfn-quantiles",
     "tabicl",

@@ -66,6 +66,11 @@ line, or $[0, \infty)$ -- and a margin accepts a declared `support` only
 when it is that one.  The transform machinery lives on the backend-neutral
 base class, so every backend gets it for free.
 
+The paper's experiments fit every pair copula with `transform="probit"`,
+the normal scores behind TLL in (py)vinecopulib, and their configs name no
+other transform (E8 in [`scripts/paper/README.md`](scripts/paper/README.md)).
+Logit stays the library's default.
+
 ---
 
 ## Pluggable backends

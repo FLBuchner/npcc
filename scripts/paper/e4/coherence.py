@@ -26,7 +26,7 @@ run can be split across processes; every part writes
 Usage (from the npcc repository root)::
 
     uv run --no-sync python scripts/paper/e4/coherence.py \
-      --labels tabpfn-quantiles-v3-logit lightgbm-logit \
+      --labels tabpfn-quantiles-v3-probit lightgbm-probit \
       --out results/e4_coherence
 """
 
