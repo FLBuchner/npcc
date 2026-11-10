@@ -220,54 +220,75 @@ def relative_selection(
   )
 
 
+def ratio_of_means(
+  pairs: pd.DataFrame, base: str, other: str
+) -> tuple[pd.DataFrame, float, float]:
+  """``other`` against ``base`` per ``n``, as a ratio of means, and pooled.
+
+  ``pairs`` holds one row per pair (cell, rep), with ``n`` and a column per
+  label. For each ``n``, the score is the mean over its pairs of
+  ``other - base`` divided by the mean of ``base``, and its SE the SE of that
+  mean difference over the same mean ``base``. The pooled score is the
+  equal-weight mean of the per-n scores; the ``n`` are independent samples,
+  so its SE is ``sqrt(sum_n se_n**2) / N``.
+  """
+  rows = {}
+  for n, part in pairs.groupby("n"):
+    d = part[other] - part[base]
+    scale = part[base].mean()
+    rows[n] = {
+      "score": d.mean() / scale,
+      "se": d.std(ddof=1) / np.sqrt(len(d)) / scale,
+      "mean_diff": d.mean(),
+      "mean_base": scale,
+      "pairs": len(d),
+    }
+  table = pd.DataFrame.from_dict(rows, orient="index").rename_axis("n")
+  pooled = float(table.score.mean())
+  se = float(np.sqrt((table.se**2).sum()) / len(table))
+  return table, pooled, se
+
+
 def relative_labels(
   w: pd.DataFrame, base: str, other: str, arm: tuple[str, str]
 ) -> None:
-  """Two estimators under one read-out: switch only on a clear gain.
+  """Two estimators under one read-out: adopt ``other`` unless clearly worse.
 
-  For each pair (cell, rep) on reps 0-4, ``other``'s relative change in
-  held-out KL against ``base``, ``(KL_other - KL_base) / KL_base``, under the
-  read-out ``arm``; averaged over the pairs of each ``n``, then over the
-  ``n`` with equal weight, with :func:`pooled_mean_se`'s SE. The rule, fixed
-  before reps 0-4 are read: switch to ``other`` only if that score is below
-  ``-TIE_SE`` SE. Every ``n`` is printed, and the comparison again on reps
-  5-9.
+  The rule, fixed before reps 0-4 are read (npcc-paper-27, E8): under the
+  read-out ``arm``, on reps 0-4, :func:`ratio_of_means` of the held-out KL,
+  ``other`` against ``base``. A ratio of means rather than a mean of per-pair
+  ratios, so that a pair whose ``base`` KL is near zero cannot dominate the
+  score. Adopt ``other`` unless the pooled score is above ``+TIE_SE`` SE.
+
+  The same comparison is printed for pdf IAE, and both again on reps 5-9;
+  neither decides.
   """
   at = w[(w.grid == arm[0]) & (w.arm == arm[1])]
   cell = ["family", "tau_scenario", "n", "rep"]
-  kl = at[at.label.isin([base, other])].pivot_table(
-    index=cell, columns="label", values="holdout_kl"
-  )
-  missing = [lab for lab in (base, other) if lab not in kl.columns]
-  if missing:
-    raise SystemExit(
-      f"both labels must have rows under {arm}; got none for {missing}"
+  for metric in ("holdout_kl", "pdf_IAE"):
+    wide = at[at.label.isin([base, other])].pivot_table(
+      index=cell, columns="label", values=metric
     )
-  kl = kl.dropna()
-  rel = ((kl[other] - kl[base]) / kl[base]).rename("rel").reset_index()
-  rel["label"] = other
-  for name, part in (
-    ("reps 0-4", rel[rel.rep <= 4]),
-    ("reps 5-9", rel[rel.rep >= 5]),
-  ):
-    g = part.groupby("n")["rel"]
-    print(f"\n== {other} against {base} under {arm[0]}:{arm[1]}, {name} ==")
-    print(
-      pd.DataFrame(
-        {
-          "mean": g.mean(),
-          "se": g.std(ddof=1) / np.sqrt(g.count()),
-          "pairs": g.count(),
-        }
+    missing = [lab for lab in (base, other) if lab not in wide.columns]
+    if missing:
+      raise SystemExit(
+        f"both labels must have rows under {arm}; got none for {missing}"
       )
-      .round(4)
-      .to_string()
-    )
-    m, se = pooled_mean_se(part, "rel")
-    print(f"  pooled over n: {m:+.4f} ({se:.4f})")
-    if name == "reps 0-4":
-      switch = m < -TIE_SE * se
-      print(f"-- {'switch to ' + other if switch else 'keep ' + base} --")
+    wide = wide.dropna().reset_index()
+    for name, part in (
+      ("reps 0-4", wide[wide.rep <= 4]),
+      ("reps 5-9", wide[wide.rep >= 5]),
+    ):
+      table, m, se = ratio_of_means(part, base, other)
+      print(
+        f"\n== {metric}: {other} against {base} under {arm[0]}:{arm[1]}, "
+        f"{name}, ratio of means =="
+      )
+      print(table.round(4).to_string())
+      print(f"  pooled over n: {m:+.4f} ({se:.4f})")
+      if metric == "holdout_kl" and name == "reps 0-4":
+        keep = m > TIE_SE * se
+        print(f"-- {'keep ' + base if keep else 'adopt ' + other} --")
 
 
 def main() -> None:
@@ -295,7 +316,7 @@ def main() -> None:
     nargs=2,
     metavar=("BASE", "OTHER"),
     default=None,
-    help="two estimators under the --baseline arm",
+    help="two estimators under the --baseline arm; adopt OTHER unless worse",
   )
   parser.add_argument("--tau", action="store_true")
   args = parser.parse_args()
