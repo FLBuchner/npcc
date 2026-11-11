@@ -1,0 +1,28 @@
+# E9's TabPFN v3.5 arm, for the supplement (scripts/paper/README.md, E9).
+#
+# E1's tabpfn-quantiles-v3.5-probit under E1's label and backend_kwargs, so
+# its estimator_id is E1's, fitted on every covariate. The [grid] block is
+# configs/e9_covariates.toml's, so the cells' data, the covariate points and
+# the Monte Carlo draws are those of every other E9 estimator, and
+# scripts/paper/e9/analyze.py pairs it with TabPFN v3 through --with. The main
+# text's TabPFN stays v3 whatever this arm shows: E1 fixed that before E9 ran.
+#
+# Run with npcc-covstudy, as configs/e9_covariates.toml.
+
+[grid]
+families = ["clayton", "gaussian"]
+scenarios = ["gampcc", "interaction", "constant"]
+n = [500, 2000]
+n_rep = 10
+
+# The scoring: covariate points per scenario, the uv grid's points per axis,
+# and the Monte Carlo KL's draws per point.
+n_points = 20
+uv_grid_n = 20
+holdout_n = 2000
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3.5-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3.5", model_kwargs = { softmax_temperature = 1.0 } }
