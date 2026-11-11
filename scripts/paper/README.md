@@ -504,7 +504,9 @@ with Clayton and Gaussian copulas:
 ## E3 — comparison with VDC (§3.4)
 
 See `scripts/paper/e3/README.md` for VDC's environment, the weight check and
-the command behind every file in `results/e3_vdc/`.
+the command behind every file in `results/e3_vdc/`. It also covers E3d,
+E3e (`results/e3e_simplification_2x2/`) and E10 on E3d's truths
+(`results/e10_e3d_2026-11-11/`).
 
 ## E4 — numerical coherence (§3.6)
 

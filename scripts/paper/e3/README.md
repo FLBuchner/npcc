@@ -366,7 +366,7 @@ taskset -c 5 nice -n 10 uv run --no-sync python $M --arms tll parametric --desig
     --dims 10 --out $O > $O/logs/tll_parametric_d10_decay.log 2>&1
 taskset -c 6 nice -n 10 uv run --no-sync python $M --arms vdc_shared --vdc-core 7 --designs decay strong \
     --dims 5 --out $O > $O/logs/vdc_shared_d5.log 2>&1
-taskset -c 8 nice -n 10 uv run --no-sync python $M --arms vdc_shared --vdc-core 9 --designs decay \
+taskset -c 6 nice -n 10 uv run --no-sync python $M --arms vdc_shared --vdc-core 7 --designs decay \
     --dims 10 --out $O > $O/logs/vdc_shared_d10_decay.log 2>&1
 # GPU, TabPFN v3, here: d = 5 on both designs.
 uv run --no-sync python $M --arms npcc-tabpfn-quantiles-v3-probit --designs decay strong --dims 5 \

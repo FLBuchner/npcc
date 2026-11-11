@@ -76,7 +76,9 @@ member in ``cells/<arm>/members/<key>_m<j>.json`` and ``.npy`` (float64);
 ``mixture_<arm>.csv`` (the rows); and ``summary.csv``, one row per cell and
 method over every arm under ``--out``: the mixture's, member 1's, the
 members' mean and the best member's excess NLL on the mixture's points, and
-the number of distinct structures.
+the number of distinct structures, and, where E3d fitted the cell, how far
+member 1 lies from the E3d arm it refits (``tll`` for ``tll``, ``tll-ns`` for
+NPCC; 0 when it reproduces it bit for bit in float32).
 
 **Seeds.** ``--seeds`` takes an explicit list (at d = 10 the GPU runs go in
 two batches, 101-505 then 606-1010), and every run resumes by cell: a cell
@@ -250,11 +252,20 @@ SUMMARY = {"design": "design", "d": "d", "seed": "seed", "method": "method", "k"
            "fit_s": "fit_s", "inference_s": "inference_s", "device": "device"}
 
 
-def write_summary(out: Path) -> None:
+def e3d_arm(method: str) -> str | None:
+  """E3d's arm that member 1 refits: same structure, pairs and seed; ``None`` if none does."""
+  if method == "tll":
+    return "tll"
+  return f"{method}-tll-ns" if method.startswith("npcc-") else None
+
+
+def write_summary(out: Path, e3d: Path | None = None) -> None:
   """``summary.csv``: every finished cell under ``out``, one row per cell and method.
 
   Cells copied in from another machine are compared here too: every method of
-  a cell must have mixed the same structures.
+  a cell must have mixed the same structures. With ``e3d``, E3d's folder, each
+  row also gives the largest difference between member 1's log-densities and
+  those of the E3d arm it refits (:func:`e3d_arm`), where E3d has that cell.
   """
   rows, seen = [], {}
   for path in sorted(out.glob("cells/*/*.json")):
@@ -264,8 +275,19 @@ def write_summary(out: Path) -> None:
     if json.loads(first[1]) != json.loads(r["structure_matrices"]):
       raise SystemExit(f"{cell}: {r['method']} must have mixed the structures {first[0]} "
                        f"mixed; they differ")
-    rows.append({col: (json.loads(r["member_recovery_overall"])[0] if src is None else r[src])
-                 for col, src in SUMMARY.items()})
+    row = {col: (json.loads(r["member_recovery_overall"])[0] if src is None else r[src])
+           for col, src in SUMMARY.items()}
+    arm = e3d_arm(r["method"])
+    ref = None if e3d is None or arm is None else e3d / "cells" / arm / f"{path.stem}.npy"
+    if ref is not None and ref.exists():
+      ours = np.load(path.parent / f"{path.stem}_members.npy")[0].astype(np.float64)
+      theirs = np.load(ref).astype(np.float64)
+      both = np.isfinite(ours) & np.isfinite(theirs)
+      same_nan = bool(np.array_equal(np.isfinite(ours), np.isfinite(theirs)))
+      row["member1_e3d_arm"] = arm
+      row["member1_max_abs_diff_vs_e3d"] = (float(np.max(np.abs(ours - theirs)[both]))
+                                            if same_nan else float("nan"))
+    rows.append(row)
   if not rows:
     return
   rows.sort(key=lambda r: (r["design"], r["d"], r["method"], r["seed"]))
@@ -503,7 +525,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
     rows = [json.loads(q.read_text()) for q in sorted((a.out / "cells" / arm).glob("*.json"))]
     if rows:
       common.write_csv(rows, a.out / f"mixture_{arm}.csv")
-  write_summary(a.out)
+  write_summary(a.out, a.folder)
 
 
 if __name__ == "__main__":

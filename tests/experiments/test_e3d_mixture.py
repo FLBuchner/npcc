@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import importlib.util
 import json
 import math
@@ -216,3 +217,39 @@ def test_the_summary_refuses_methods_that_mixed_other_structures(
   path.write_text(json.dumps(_row("vdc_shared", matrices[::-1])))
   with pytest.raises(SystemExit, match="must have mixed the structures"):
     mixture.write_summary(tmp_path)
+
+
+def test_the_summary_reads_member_one_against_the_e3d_arm_it_refits(
+  tmp_path: Path,
+) -> None:
+  """Member 1 must be shown against E3d's arm on the same structure.
+
+  It refits E3d's ``tll`` (or, for NPCC, ``tll-ns``) with the same seed, so a
+  difference there means the mixture's member 1 is not the selected arm
+  the paper compares it with.
+  """
+  matrices = [
+    np.asarray(pv.RVineStructure.from_order([1, 2, 3]).matrix).tolist()
+  ]
+  members, _ = _logs()
+  key = "decay_d3_s101"
+  for method in ("tll", "npcc-x", "parametric"):
+    cell = tmp_path / "out" / "cells" / method
+    cell.mkdir(parents=True)
+    (cell / f"{key}.json").write_text(json.dumps(_row(method, matrices)))
+    np.save(cell / f"{key}_members.npy", members.astype(np.float32))
+  e3d = tmp_path / "e3d" / "cells"
+  for arm, shift in (("tll", 0.0), ("npcc-x-tll-ns", 0.25)):
+    (e3d / arm).mkdir(parents=True)
+    np.save(e3d / arm / f"{key}.npy", (members[0] + shift).astype(np.float32))
+  mixture.write_summary(tmp_path / "out", tmp_path / "e3d")
+  summary = {
+    r["method"]: r
+    for r in csv.DictReader((tmp_path / "out" / "summary.csv").open())
+  }
+  assert summary["tll"]["member1_e3d_arm"] == "tll"
+  assert float(summary["tll"]["member1_max_abs_diff_vs_e3d"]) == 0.0
+  assert float(
+    summary["npcc-x"]["member1_max_abs_diff_vs_e3d"]
+  ) == pytest.approx(0.25, abs=1e-6)
+  assert summary["parametric"]["member1_e3d_arm"] == ""
