@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -361,6 +362,32 @@ def test_resume_skips_completed_cells(
 
   assert seen == [cells[0]]
   assert len(metric2) == len(metric1)
+
+
+def test_a_run_from_a_later_rep_fits_that_rep_as_the_full_run_does(
+  register_hermetic_backends: None, tmp_path: Path
+) -> None:
+  """Reps run from ``first_rep`` must be the full run's reps, row for row.
+
+  A screen on held-out reps pairs with nothing but its own two arms, yet its
+  baseline must still be E1's estimator on E1's data: a seed that hashed the
+  rep's position rather than the rep would fit other data. Moving the bound
+  must also keep the resume signature, as moving ``n_rep`` does.
+  """
+  grid = _small_grid(n_rep=2)
+  later = replace(grid, first_rep=1)
+  run = RunConfig(out=tmp_path / "full", workers=1)
+  full = run_study(grid, run)[0]
+  part = run_study(later, RunConfig(out=tmp_path / "later", workers=1))[0]
+
+  assert sorted(part["rep"].unique()) == [1]
+  pd.testing.assert_frame_equal(
+    part.reset_index(drop=True),
+    full[full["rep"] == 1].reset_index(drop=True),
+  )
+  assert runner_mod._grid_signature(later, run) == runner_mod._grid_signature(
+    grid, run
+  )
 
 
 def test_a_resumed_run_returns_the_fresh_run_tables(
