@@ -17,8 +17,8 @@ and ``truths.json`` -- and writes into ``<run>/analysis/``:
   change from the smallest to the largest n; the joint - copula KL gap; joint
   ISE at two (d, n); and how often the random structure is the true one,
   with the random - oracle difference split on it.
-- ``vine_selected.csv`` -- with a run of the ``selected`` arm passed through
-  ``--with``: one row per (d, n) with that arm's joint and copula KL, its
+- ``vine_selected.csv`` -- where the main run or one passed through
+  ``--with`` holds the ``selected`` arm: one row per (d, n) with that arm's joint and copula KL, its
   joint KL paired with the oracle's and the random arm's, how often its
   structure is the true one, the share of the true first tree and of all
   true edges it recovers, and the seconds its selection took. The text
@@ -381,11 +381,14 @@ def kl_at_x(metrics: pd.DataFrame) -> list[dict[str, object]]:
   """Joint KL at the x the text quotes, refused unless the grid holds them.
 
   The grid is a ``linspace``, so a quoted x matches a grid value only up to
-  rounding; each record carries the grid's own value.
+  rounding; each record carries the grid's own value. A run without the
+  quoted (d, n), such as E2 at d = 10, has none to quote.
   """
   d, n = KL_AT_X_CELL
   grid = np.sort(metrics["x"].unique())
   cell = metrics[(metrics["d"] == d) & (metrics["n"] == n)]
+  if cell.empty:
+    return []
   rows: list[dict[str, object]] = []
   for target in KL_AT_X:
     hit = grid[np.isclose(grid, target, rtol=0.0, atol=1e-9)]
@@ -458,10 +461,15 @@ def copula_gap(xavg: pd.DataFrame) -> dict[str, object]:
 
 
 def joint_ise(xavg: pd.DataFrame) -> list[dict[str, object]]:
-  """x-averaged joint ISE of every arm at the (d, n) the text quotes."""
+  """x-averaged joint ISE of every arm at the (d, n) the text quotes.
+
+  A (d, n) the run does not hold is left out.
+  """
   rows: list[dict[str, object]] = []
   for d, n in ISE_CELLS:
     cell = xavg[(xavg["d"] == d) & (xavg["n"] == n)]
+    if cell.empty:
+      continue
     for arm in ARMS:
       values = cell.loc[cell["arm"] == arm, "ISE"]
       rows.append({"d": d, "n": n, "arm": ARMS[arm]["name"], **_stat(values)})
@@ -680,7 +688,8 @@ def main() -> None:
 
   metrics = load(a.run)
   check_against_runner(a.run, x_averaged(metrics), kl_by_x(metrics))
-  holds_selected: Path | None = None
+  # The selected arm comes with the main run, as at d = 10, or with --with.
+  holds_selected = a.run if "selected" in set(metrics["arm"]) else None
   for other in a.others:
     theirs = load(other)
     check_against_runner(other, x_averaged(theirs), kl_by_x(theirs))

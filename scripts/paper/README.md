@@ -349,6 +349,23 @@ with Clayton and Gaussian copulas:
     code changed between b7702e1 and this arm. Its pilot on cell d = 5,
     n = 1000, rep 0 reproduced `results/vine_2026-11-10`'s oracle there bit
     for bit.
+- E2 at d = 10:
+  - **Config.** `configs/vine_study_d10.toml` is E2 at `dims = [10]`, with all
+    four arms in one run (oracle, random, selected, kde-tll).
+  - **Analysis.** Run it on that folder alone. With the selected arm in the
+    run itself, the analysis writes `vine_selected.csv` without `--with`. The
+    text numbers quoted at d = 3 and 5 are left out, since the run has no
+    such cells.
+  - **Tree 9.** Tree t's tau band is `[0.05, 0.70 ** t]`, and at t = 9,
+    `0.70 ** 9 = 0.040` lies below 0.05. The map onto the band is then
+    decreasing, so the single tree-9 edge has its tau in `[0.040, 0.050]`
+    with its regime mirrored: near independence either way. Trees 1 to 8
+    are as at d <= 5.
+  - **Where it runs.** It runs on its own machine, gpu053 (an A100 80GB), as a
+    whole experiment: no cell or shard of it runs here. Results there agree
+    with this machine's only to about 1e-13, not bit for bit, so it is
+    compared with nothing fitted elsewhere. Its `env.txt` records the
+    machine.
 
 ## E3 — comparison with VDC (§3.3)
 

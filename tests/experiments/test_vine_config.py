@@ -45,6 +45,22 @@ def test_the_selected_arm_runs_on_e2s_cells() -> None:
       assert getattr(selected, f.name) == getattr(e2, f.name), f.name
 
 
+def test_e2_at_d10_is_e2_at_another_dimension() -> None:
+  """E2 at d = 10 must differ from E2 only in its dimension and its arms.
+
+  Any other drift -- the sample sizes, repetitions, evaluation points,
+  projection grid or estimator -- would make its numbers incomparable with
+  §3.4's at d <= 5.
+  """
+  e2 = load_vine_grid(_CONFIGS / "vine_study.toml")
+  d10 = load_vine_grid(_CONFIGS / "vine_study_d10.toml")
+  assert d10.dims == [10]
+  assert d10.arms == ["oracle", "random", "selected", "tll"]
+  for f in fields(VineGridConfig):
+    if f.name not in {"dims", "arms"}:
+      assert getattr(d10, f.name) == getattr(e2, f.name), f.name
+
+
 @pytest.mark.parametrize(
   ("overrides", "match"),
   [
