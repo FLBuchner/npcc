@@ -205,7 +205,7 @@ are from a clean worktree at 7567717.
   results/study_misspec_2026-11-06_r`, and `paired.py` with the same runs as
   in E1b.
 
-## E9 — several covariates (§3.2)
+## E9 — several covariates (§3.3)
 
 The covariates of Vatter and Nagler (2018, JCGS, §4.1): `b1..b5` iid
 Bernoulli(1/2), `z1..z5` iid standard normal and `t1..t5` iid uniform, all
@@ -303,11 +303,13 @@ with Clayton and Gaussian copulas:
   cell's seeds depend on the cell alone, so the order changes nothing.
 - Analysis: `uv run --no-sync python scripts/paper/e9/analyze.py
   results/study_covariates_<TAG> --with results/study_covariates_<TAG>_r`
-  writes `kl.csv` (the main text's table: KL by scenario x n x estimator,
-  averaged over points and families within each rep, with its paired
-  difference from TabPFN v3 on every covariate), `kl_by_family.csv`,
-  `iae.csv`, `per_point.csv` and `failures.csv` (every fit that failed, each
-  missing from every mean) into the npcc run's `analysis/`, and from the R
+  writes `kl.csv` (the main text's `tab:covariates`: KL by scenario x n x
+  estimator, averaged over points and families within each rep, with its
+  paired difference from TabPFN v3 on every covariate), `kl_by_family.csv`
+  (the supplement's `tab:covariates-clayton` and `tab:covariates-gaussian`),
+  `iae.csv` (`tab:covariates-iae`), `per_point.csv` and `failures.csv`
+  (every fit that failed, each missing from every mean) into the npcc run's
+  `analysis/`, and from the R
   scripts' logged lines `fits.csv` and `fits_summary.csv`: per estimator,
   scenario and n, how often the chosen family is the true one, the active
   and inert covariates kept, and how many of boostCopula's stops landed
@@ -367,7 +369,7 @@ with Clayton and Gaussian copulas:
     - Each run's `logs/` holds the launcher, `e9c.sh`, and `provenance.txt`,
       every command rendered.
 
-## E2 — vine study (§3.4)
+## E2 — vine study (§3.5)
 
 - Config: `configs/vine_study.toml`: TabPFN v3 with the probit transform;
   oracle, random and TLL arms; d in {3, 5}, n in {500, 1000}, 20 reps; 80
@@ -379,7 +381,7 @@ with Clayton and Gaussian copulas:
   cell's seeds depend on the cell alone. A d = 5 shard peaks at about 7 GB,
   since every fitted margin held its own TabPFN model on the GPU before
   f4f17b5.
-- The rerun after E8, the one §3.4 cites: `results/vine_2026-11-10`, from
+- The rerun after E8, the one §3.5 cites: `results/vine_2026-11-10`, from
   b7702e1 on the same config. It ran as 4 shards (`--shard i/4 --resume
   --workers 1 --gpu-mem-fraction 0.15`) started at 19:20 on 2026-11-10,
   then the aggregation pass at 20:50.
@@ -431,6 +433,11 @@ with Clayton and Gaussian copulas:
     `<run>/analysis/`, on the CPU in about 30 s at d <= 5. On
     `results/vine_2026-11-11_selected` it ran from 9b26ffa, its command
     closing that run's `logs/provenance.txt`.
+  - **Cited.** The paper cites `results/vine_2026-11-11_selected/analysis`,
+    and that folder is frozen:
+    - its `vine_selected.csv` gives the d = 3 and 5 rows of
+      `tab:vine-selected`;
+    - its `tree1_diagnostic.csv` gives the tree-1 numbers at d = 3 and 5.
 - E2 at d = 10:
   - **Config.** `configs/vine_study_d10.toml` is E2 at `dims = [10]`, with all
     four arms in one run (oracle, random, selected, kde-tll).
@@ -466,13 +473,24 @@ with Clayton and Gaussian copulas:
     `results/vine_d10_2026-11-11` wrote its `analysis/`. The tree-1
     diagnostic takes about 80 s at d = 10. The commands close the run's
     `logs/provenance.txt`, beneath gpu053's, with their logs beside them.
+  - **Cited.** The paper cites `results/vine_d10_2026-11-11/analysis`, and
+    that folder is frozen:
+    - `vine_table.csv` gives the d = 10 rows of `tab:vine-results`;
+    - `vine_selected.csv` gives the d = 10 rows of `tab:vine-selected`;
+    - `tree1_diagnostic.csv` gives the tree-1 numbers at d = 10;
+    - `vine_kl_by_x.pdf` is the supplement's Fig. B.3, copied to
+      `figures/vine_kl_by_x_d10.pdf`.
 
-## E3 — comparison with VDC (§3.3)
+    The d = 10 timings come from the run's own `runtime_summary.parquet`,
+    beside `analysis/`. They were timed within the study, on gpu053's A100,
+    not on an idle machine as E6's were.
+
+## E3 — comparison with VDC (§3.4)
 
 See `scripts/paper/e3/README.md` for VDC's environment, the weight check and
 the command behind every file in `results/e3_vdc/`.
 
-## E4 — numerical coherence (§3.5)
+## E4 — numerical coherence (§3.6)
 
 - Accuracy and coherence, as two runs that differ only in estimators and
   device; every row records the commit it ran from.
