@@ -500,6 +500,51 @@ with Clayton and Gaussian copulas:
     The d = 10 timings come from the run's own `runtime_summary.parquet`,
     beside `analysis/`. They were timed within the study, on gpu053's A100,
     not on an idle machine as E6's were.
+- E2b, GAM vines (gamCopula) on E2's cells:
+  - **Arms.** Each fits mgcv margins `gam(y_j ~ s(x))`, Gaussian, and a GAM
+    vine on their PITs, with x a smooth term in every pair and E1b's
+    gamCopula settings (n.iters = 100, as E9):
+    - `gamvine-oracle`: `gamVineCopSelect` on the true structure,
+      simplified;
+    - `gamvine-selected`: `gamVineStructureSelect`, simplified,
+      `treecrit = "tau"`;
+    - `gamvine-ns`: `gamVineStructureSelect`, not simplified (Vatter and
+      Nagler, 2018).
+
+    The joint KL scores the margins and the vine together; the copula KL
+    scores the vine at the true PITs, as for every arm.
+  - **How it runs.** `r_methods/fit_gamvine.R`, once per arm and cell,
+    through `npcc.experiments._external_vine`: it is handed the cell's
+    training sample and test points, and the oracle the true structure,
+    converted to VineCopula's matrix convention. It checks `gamVinePDF`
+    against the product of the fitted pairs' `gamBiCopPDF` densities on
+    every fit. Each runtime row records the fitted structure and, in
+    `pairs`, every pair copula's family, kind and calibration function. A
+    fit that fails is recorded with nan metrics and its `error`.
+  - **Two gamCopula 0.0.8 defects, worked around in the script.** In a
+    vine, it stores a negatively dependent pair's double family with its
+    90- and 270-degree rotations exchanged (`gamVineCopSelect` with its
+    default `rotations = TRUE`), and `gamVineStructureSelect` fits each next
+    tree on the h-functions of that mirror. And a non-simplified pair reads
+    a conditioning variable named `u1` or `u2` as its own argument. The
+    script passes `rotations = FALSE` (the same family set), runs the
+    structure selection with each pair's h-functions its own, and names the
+    copula columns `v1`, ..., `vd`; `tests/experiments/test_gamvine.py`
+    shows each defect's cost.
+  - **Configs.** One per E2 run it pairs with, every key but `arms` and the
+    script E2's: `configs/vine_study_gamvine.toml` (d = 3, 5),
+    `configs/vine_study_gamvine_d10.toml` (d = 10), and their `_n2000`
+    versions for E2d's n = 2000 runs. Run each on the CPU from the
+    repository root, as single-threaded shards
+    (`OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+    npcc-vinestudy --config <config> --device cpu --out <run> --shard i/8
+    --resume`, then once without `--shard`), with R, gamCopula, mgcv and
+    VineCopula installed.
+  - **Analysis.** Pass the run after `--with` to the analysis of the E2 run
+    it pairs with. It then writes `vine_gamvine.csv`, one row per (d, n,
+    arm): the arm's joint and copula KL, its joint KL paired with the
+    oracle's and the random arm's, and its failed fits; and
+    `vine_gamvine_families.csv`, the selected pair families per tree.
 
 ## E3 — comparison with VDC (§3.4)
 

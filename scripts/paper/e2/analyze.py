@@ -23,9 +23,17 @@ and ``truths.json`` -- and writes into ``<run>/analysis/``:
   structure is the true one, the share of the true first tree and of all
   true edges it recovers, and the seconds its selection took. The text
   numbers then hold the same under ``selected``.
+- ``vine_gamvine.csv`` -- where a run holds E2b's GAM vines
+  (``configs/vine_study_gamvine*.toml``): one row per (d, n, GAM arm) with
+  its joint and copula KL, its joint KL paired with the oracle's and the
+  random arm's, and the repetitions in which its fit failed, which every
+  mean leaves out. ``vine_gamvine_families.csv`` counts the pair copulas
+  those fits selected, per (d, n, arm, tree), by kind and family. The text
+  numbers then hold the table under ``gamvine``.
 
 ``--with`` adds runs of other arms on the same cells, as
-``configs/vine_study_selected.toml`` makes them. Each must pair with the
+``configs/vine_study_selected.toml`` and ``configs/vine_study_gamvine.toml``
+make them. Each must pair with the
 main run, or the analysis refuses it: the same base seed and evaluation
 settings, the same truths, and at every (d, n, rep, x) the same cell seed
 and the same mean true log-density, which pins the test points.
@@ -96,7 +104,33 @@ SELECTED: dict[str, str] = {
   "marker": "D",
   "linestyle": "-",
 }
-KNOWN_ARMS: dict[str, dict[str, str]] = {**ARMS, "selected": SELECTED}
+#: E2b's GAM vines, which a ``--with`` run may add: outside the paper's
+#: table and figure, with a table of their own.
+GAMVINE: dict[str, dict[str, str]] = {
+  "gamvine-oracle": {
+    "name": "gamvine-oracle",
+    "color": "#56B4E9",
+    "marker": "v",
+    "linestyle": ":",
+  },
+  "gamvine-selected": {
+    "name": "gamvine-selected",
+    "color": "#CC79A7",
+    "marker": "P",
+    "linestyle": ":",
+  },
+  "gamvine-ns": {
+    "name": "gamvine-ns",
+    "color": "#D55E00",
+    "marker": "X",
+    "linestyle": ":",
+  },
+}
+KNOWN_ARMS: dict[str, dict[str, str]] = {
+  **ARMS,
+  "selected": SELECTED,
+  **GAMVINE,
+}
 #: What a ``--with`` run must share with the main run's ``config.json``.
 SHARED_GRID = ("eval_x_n", "eval_m", "projection_grid_size")
 #: The fixed-x metrics read: joint KL and ISE, and the copula KL.
@@ -203,11 +237,21 @@ def by_arm(xavg: pd.DataFrame, metric: str) -> pd.DataFrame:
   return xavg.pivot(index=["d", "n", "rep"], columns="arm", values=metric)
 
 
+def _stats(values: pd.Series) -> pd.Series:
+  """Mean and SE over the repetitions that have a value, nan if none has.
+
+  A GAM vine whose fit failed has no value in that repetition.
+  """
+  if values.notna().any():
+    return _mean_se(values)
+  return pd.Series({"mean": np.nan, "se": np.nan, "n_rep": 0})
+
+
 def kl_by_x(metrics: pd.DataFrame) -> pd.DataFrame:
   """Joint KL at each evaluation x: mean and SE over repetitions."""
   stats = (
     metrics.groupby(["d", "n", "arm", "x"])["KL"]
-    .apply(_mean_se)
+    .apply(_stats)
     .unstack()
     .reset_index()
   )
@@ -245,8 +289,9 @@ def _agree(
   """Exit unless ``ours`` holds the runner's mean and SD, row for row."""
   theirs = theirs.set_index(keys)[["rep_mean", "rep_std"]].sort_index()
   ours = ours.sort_index()
+  # A GAM vine that failed in every repetition has no mean on either side.
   same = theirs.index.equals(ours.index) and np.allclose(
-    theirs.to_numpy(), ours.to_numpy(), rtol=1e-9, atol=0.0
+    theirs.to_numpy(), ours.to_numpy(), rtol=1e-9, atol=0.0, equal_nan=True
   )
   if not same:
     raise SystemExit(
@@ -604,6 +649,62 @@ def selected_table(
   return pd.DataFrame(rows)
 
 
+def gamvine_table(xavg: pd.DataFrame) -> pd.DataFrame:
+  """E2b's GAM vines per (d, n, arm), paired with the oracle and random arms.
+
+  A repetition whose GAM fit failed has a ``nan`` KL; it is counted in
+  ``n_failed`` and left out of every mean and difference. ``oracle_wins``
+  counts the repetitions in which the NPCC oracle's joint KL is strictly
+  below the GAM arm's.
+  """
+  kl = by_arm(xavg, "KL")
+  copula = by_arm(xavg, "KL_copula")
+  rows = []
+  for (d, n), cell in kl.groupby(level=["d", "n"]):
+    for arm in (a for a in GAMVINE if a in cell.columns):
+      row: dict[str, object] = {"d": int(d), "n": int(n), "arm": arm}
+      for prefix, values in (
+        ("joint_KL", cell[arm]),
+        ("copula_KL", copula.loc[(d, n), arm]),
+        ("minus_oracle_joint_KL", cell[arm] - cell["oracle"]),
+        ("minus_random_joint_KL", cell[arm] - cell["random"]),
+      ):
+        stat = _stats(values)
+        row[f"{prefix}_mean"] = float(stat["mean"])
+        row[f"{prefix}_se"] = float(stat["se"])
+      row["oracle_wins"] = int((cell["oracle"] < cell[arm]).sum())
+      row["n_rep"] = int(cell[arm].notna().sum())
+      row["n_failed"] = int(cell[arm].isna().sum())
+      rows.append(row)
+  return pd.DataFrame(rows)
+
+
+def gamvine_families(run: Path) -> pd.DataFrame:
+  """The pair copulas the GAM fits selected, per (d, n, arm, tree).
+
+  Read from the ``pairs`` the runner records with each fit. ``count`` is
+  over every fit of the group, and ``share`` within its (d, n, arm, tree).
+  """
+  runtime = pd.read_parquet(run / "runtime.parquet")
+  fitted = runtime[runtime["arm"].isin(list(GAMVINE))]
+  fitted = fitted[fitted["error"].fillna("") == ""]
+  pairs = pd.DataFrame(
+    [
+      {"d": r.d, "n": r.n, "arm": r.arm, "rep": r.rep, **pair}
+      for r in fitted.itertuples(index=False)
+      for pair in json.loads(str(r.pairs))
+    ]
+  )
+  keys = ["d", "n", "arm", "tree"]
+  counts = pairs.groupby([*keys, "kind", "family_name"], as_index=False).agg(
+    count=("first", "size")
+  )
+  counts["share"] = counts["count"] / counts.groupby(keys)["count"].transform(
+    "sum"
+  )
+  return counts
+
+
 def text_numbers(
   run: Path, metrics: pd.DataFrame, xavg: pd.DataFrame
 ) -> dict[str, object]:
@@ -690,12 +791,15 @@ def main() -> None:
   check_against_runner(a.run, x_averaged(metrics), kl_by_x(metrics))
   # The selected arm comes with the main run, as at d = 10, or with --with.
   holds_selected = a.run if "selected" in set(metrics["arm"]) else None
+  holds_gamvine = a.run if set(GAMVINE) & set(metrics["arm"]) else None
   for other in a.others:
     theirs = load(other)
     check_against_runner(other, x_averaged(theirs), kl_by_x(theirs))
     check_pairing(a.run, metrics, other, theirs)
     if "selected" in set(theirs["arm"]):
       holds_selected = other
+    if set(GAMVINE) & set(theirs["arm"]):
+      holds_gamvine = other
     metrics = pd.concat([metrics, theirs], ignore_index=True)
   complete(metrics, "the runs together")
   xavg = x_averaged(metrics)
@@ -712,6 +816,16 @@ def main() -> None:
     numbers["selected"] = {
       "run": str(holds_selected),
       "by_cell": _selected_numbers(selected),
+    }
+  if holds_gamvine is not None:
+    gamvine = gamvine_table(xavg)
+    gamvine.to_csv(out / "vine_gamvine.csv", index=False)
+    gamvine_families(holds_gamvine).to_csv(
+      out / "vine_gamvine_families.csv", index=False
+    )
+    numbers["gamvine"] = {
+      "run": str(holds_gamvine),
+      "by_cell": json.loads(str(gamvine.to_json(orient="records"))),
     }
   (out / "vine_text_numbers.json").write_text(
     json.dumps(numbers, indent=2) + "\n"

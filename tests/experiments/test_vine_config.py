@@ -68,10 +68,18 @@ def test_e2_at_d10_is_e2_at_another_dimension() -> None:
     ({"arms": ["tll", "tll"]}, "arms must be unique"),
     ({"dims": [1]}, "dims must be"),
     ({"eval_m": 5}, "eval_m must be"),
+    (
+      {"arms": ["gamvine-ns"], "gamvine_script": "missing.R"},
+      "gamvine_script must name an existing file",
+    ),
   ],
 )
 def test_bad_grid_is_refused(overrides: dict[str, object], match: str) -> None:
-  """An unknown or repeated arm would silently drop or double-count a column."""
+  """An unknown or repeated arm would silently drop or double-count a column.
+
+  A GAM-vine arm without its script would fail every fit, each recorded as
+  the method's failure.
+  """
   kwargs: dict[str, object] = {
     "dims": [3],
     "n": [40],
@@ -82,3 +90,34 @@ def test_bad_grid_is_refused(overrides: dict[str, object], match: str) -> None:
   kwargs.update(overrides)
   with pytest.raises(ValueError, match=match):
     VineGridConfig(**kwargs)  # ty: ignore[invalid-argument-type] - mistyped values exercise the guard
+
+
+@pytest.mark.parametrize(
+  ("config", "e2", "n"),
+  [
+    ("vine_study_gamvine.toml", "vine_study.toml", None),
+    ("vine_study_gamvine_d10.toml", "vine_study_d10.toml", None),
+    ("vine_study_gamvine_n2000.toml", "vine_study.toml", [2000]),
+    ("vine_study_gamvine_d10_n2000.toml", "vine_study_d10.toml", [2000]),
+  ],
+)
+def test_the_gam_vines_run_on_e2s_cells(
+  monkeypatch: pytest.MonkeyPatch, config: str, e2: str, n: list[int] | None
+) -> None:
+  """Each GAM-vine run must hold E2's cells, so --with can pair it.
+
+  Each pairs with one E2 run -- d = 3 and 5 or d = 10, at n = 500 and 1000
+  or, as E2d, at 2000 -- by cell, so a dimension, repetition count or
+  evaluation key that drifted would score its arms on other truths or test
+  points, which the analysis would then refuse.
+  """
+  monkeypatch.chdir(_CONFIGS.parent)
+  grid = load_vine_grid(_CONFIGS / config)
+  reference = load_vine_grid(_CONFIGS / e2)
+  assert grid.arms == ["gamvine-oracle", "gamvine-selected", "gamvine-ns"]
+  assert grid.estimators == []
+  assert grid.n == (reference.n if n is None else n)
+  for f in fields(VineGridConfig):
+    if f.name not in {"arms", "estimators", "n", "gamvine_script_sha256"}:
+      assert getattr(grid, f.name) == getattr(reference, f.name), f.name
+  assert grid.gamvine_script_sha256 is not None
