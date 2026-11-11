@@ -93,6 +93,34 @@ def truth_for(base_seed: int, d: int, rep: int) -> VineTruth:
   return vine_scenarios.draw_truth(d, derive_seed(base_seed, "truth", d, rep))
 
 
+def training_sample(
+  base_seed: int, cell: VineCell
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+  """The cell's training sample: ``y`` and its true PITs ``u``, and ``x``.
+
+  Drawn from the truth of the cell's ``(d, rep)`` with a seed of its own
+  ``(d, n, rep)``, so a diagnostic that redraws it sees the data every arm
+  was fitted on.
+
+  Parameters
+  ----------
+  base_seed : int
+      The run's base seed.
+  cell : VineCell
+      The cell.
+
+  Returns
+  -------
+  tuple of torch.Tensor
+      ``y`` and ``u`` of shape ``(n, d)``, and ``x`` of shape ``(n, 1)``.
+  """
+  return vine_scenarios.sample(
+    truth_for(base_seed, cell.d, cell.rep),
+    cell.n,
+    derive_seed(base_seed, "train", cell.d, cell.n, cell.rep),
+  )
+
+
 def random_structure_for(base_seed: int, d: int, rep: int) -> pv.RVineStructure:
   """The ``random`` arm's structure, drawn independently of the truth's."""
   return pv.RVineStructure.sample(
@@ -275,9 +303,7 @@ def summarize_one_cell(
 ) -> tuple[Rows, Rows]:
   """Fit every arm on one cell's data and return its metric and runtime rows."""
   truth = truth_for(base_seed, cell.d, cell.rep)
-  y, _, x = vine_scenarios.sample(
-    truth, cell.n, derive_seed(base_seed, "train", cell.d, cell.n, cell.rep)
-  )
+  y, _, x = training_sample(base_seed, cell)
   points = vine_scenarios.eval_points(
     truth,
     scenarios.conditional_x_axis(grid.eval_x_n),
