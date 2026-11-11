@@ -46,6 +46,11 @@ NPCC_PYTHON = NPCC_REPO / ".venv" / "bin" / "python"
 RESULTS = NPCC_REPO / "results" / "e3_vdc"
 #: The directory of the E3 scripts; every module here is fingerprinted.
 E3_DIR = Path(__file__).resolve().parent
+#: The checkout these scripts run from, whose commit the rows record. It is
+#: ``NPCC_REPO`` unless they run from a worktree of it, whose package is the
+#: one that runs (with ``PYTHONPATH`` on its ``src``), while the interpreter
+#: and the results stay ``NPCC_REPO``'s.
+CODE_REPO = E3_DIR.parents[2]
 
 CHECKPOINT = Path(
   "/home/thibault/vdc/weights/vdc-denoiser-m64-v1/vdc-denoiser-m64-v1.pt"
@@ -220,12 +225,12 @@ def provenance(script: Path | str, device: str) -> dict:
     "catboost_version": npcc_env["catboost"],
     "tabicl_version": npcc_env["tabicl"],
     "nori_version": npcc_env["synthefy-nori"],
-    "npcc_commit": git_short(NPCC_REPO),
-    "npcc_src_dirty": git_src_dirty(NPCC_REPO),
+    "npcc_commit": git_short(CODE_REPO),
+    "npcc_src_dirty": git_src_dirty(CODE_REPO),
     # The estimators live in src/npcc/core; a parallel session may hold
     # uncommitted work elsewhere in the tree, which this tells apart.
-    "npcc_core_dirty": bool(git_dirty_paths(NPCC_REPO, "src/npcc/core")),
-    "npcc_dirty_paths": ";".join(git_dirty_paths(NPCC_REPO, "src", "configs")),
+    "npcc_core_dirty": bool(git_dirty_paths(CODE_REPO, "src/npcc/core")),
+    "npcc_dirty_paths": ";".join(git_dirty_paths(CODE_REPO, "src", "configs")),
     "script": Path(script).name,
     "script_sha256": sha256_file(script),
     "code_sha256": json.dumps(code_hashes(script), sort_keys=True),
