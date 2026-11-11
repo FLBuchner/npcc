@@ -11,10 +11,13 @@ So estimating a *conditional bivariate copula density* reduces to estimating a
 :class:`~npcc.core.margin.ConditionalMargin` backend provides. The features
 fed to the inner regressor are::
 
-    W = [u, x]    (when predicting V | U, X)
+    W = [g(u), x]    (when predicting V | U, X)
 
 so the inner backend sees the conditioning copula score and the covariates
-side by side.
+side by side. ``g`` is the controls'
+:attr:`~npcc.core.controls.FitControlsRosenblattBicop.feature_transform`: the
+identity by default, or a map of the unit interval onto the real line, such
+as probit's ``Phi^{-1}``. It reaches the copula score alone, never ``x``.
 
 **Pluggable backend.** The inner conditional-density estimator is any
 registered backend (see :mod:`npcc.core.registry`), named in the fit controls
@@ -64,6 +67,7 @@ from pyvinecopulib.utils import ghalton, wdm
 
 from npcc.core._interp import interp
 from npcc.core._placement import TensorPlacement, default_batch_size
+from npcc.core._transform import TRANSFORMS
 from npcc.core._trim import check_open_unit
 from npcc.core.controls import FitControlsRosenblattBicop
 from npcc.core.margin import ConditionalMargin, QuantileTableConfig
@@ -302,6 +306,7 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
     )
     self.eps = controls.eps
     self.transform = controls.transform
+    self.feature_transform = controls.feature_transform
     self._set_placement(controls.device)
     self.batch_size = controls.batch_size or default_batch_size(self._device)
     self.backend_kwargs = dict(controls.backend_kwargs or {})
@@ -343,7 +348,17 @@ class RosenblattBicop(TensorPlacement, BicopBase[torch.Tensor]):
   def _features(
     self, first_coord: torch.Tensor, x: torch.Tensor
   ) -> torch.Tensor:
-    """Build the inner regressor's feature matrix ``[first_coord | x]``."""
+    """Build the inner regressor's feature matrix ``[g(first_coord) | x]``.
+
+    Every feature matrix either direction is fitted or evaluated on is built
+    here, which is what keeps a fit and its evaluations on one feature scale.
+    ``g`` is :attr:`feature_transform`, applied after the clamp at
+    :attr:`eps` every copula argument receives. The identity skips both, so
+    the default hands the regressor ``first_coord`` itself, bit for bit.
+    """
+    if self.feature_transform != "identity":
+      clamped = torch.clamp(first_coord, self.eps, 1.0 - self.eps)
+      first_coord = TRANSFORMS[self.feature_transform].forward(clamped)
     return torch.column_stack([first_coord, x])
 
   def _default_x(self, n: int) -> torch.Tensor:

@@ -128,6 +128,7 @@ FAMILY_NAMES = {
 _LABEL = re.compile(
   r"^(?:(?P<tabpfn>tabpfn)-quantiles-(?P<version>v[\d.]+)"
   r"(?:-temp(?P<temp>[\d.]+))?|(?P<other>[a-z]+))"
+  r"(?:-(?P<feature>qnorm))?"
   r"-(?P<transform>logit|probit|identity)$"
 )
 #: An R competitor's label is its key alone: its script fits on the copula
@@ -271,10 +272,15 @@ def annotate(df: pd.DataFrame) -> pd.DataFrame:
     np.where(parsed["tabpfn"].notna(), "tabpfn", parsed["other"]),
   )
   # A TabPFN temperature other than E1's 1.0 is part of the version's name,
-  # so the ablation's fits stay apart from E1's.
-  df["version"] = parsed["version"].fillna("") + np.where(
-    parsed["temp"].notna(), " (T=" + parsed["temp"].fillna("") + ")", ""
-  )
+  # so the ablation's fits stay apart from E1's; so is a conditioning score
+  # handed to the backend as qnorm(u) (the qnorm screen's arm).
+  df["version"] = (
+    parsed["version"].fillna("")
+    + np.where(
+      parsed["temp"].notna(), " (T=" + parsed["temp"].fillna("") + ")", ""
+    )
+    + np.where(parsed["feature"].notna(), " (qnorm)", "")
+  ).str.strip()
   df["transform_"] = parsed["transform"].fillna("identity")
   df["backend_name"] = df["key"].map(lambda k: BACKENDS[k]["name"])
   df["group"] = df["key"].map(lambda k: BACKENDS[k]["group"])

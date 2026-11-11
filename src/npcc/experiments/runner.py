@@ -115,8 +115,9 @@ def _grid_signature(grid: GridConfig, run: RunConfig) -> str:
     # shape invalidates a checkpoint; a --resume must not mix definitions.
     "tau_regimes": _regime_fingerprint(grid),
     "n": sorted(grid.n),
-    # n_rep is intentionally absent: each cell's seed hashes cell.rep, not
-    # n_rep, so raising it adds reps and resumes rather than discarding cells.
+    # n_rep and first_rep are intentionally absent: each cell's seed hashes
+    # cell.rep, not either bound, so moving one adds or drops reps and
+    # resumes rather than discarding cells.
     "normalize": sorted(_norm_label(x) for x in grid.normalize),
     "projection_grid_size": grid.projection_grid_size,
     # `batch_size` is absent because it chunks the query set and leaves each

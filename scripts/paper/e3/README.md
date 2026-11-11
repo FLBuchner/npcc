@@ -372,7 +372,10 @@ and `loglik_gap_vs_e3`.
   their commits, and
   `e3_code_check.csv` maps every recorded hash to its commit. Each row also records
   the npcc commit, whether `src/npcc/core` was modified (`npcc_core_dirty`),
-  and the modified paths elsewhere.
+  and the modified paths elsewhere. These describe the checkout the scripts
+  ran from (`e3_common.CODE_REPO`): a worktree's, when run from one with
+  `PYTHONPATH` on its `src`. `e3_npcc.py` refuses a package imported from
+  any other checkout.
 - **Data.** Samples are drawn with pyvinecopulib 0.7.5 from fixed seeds, as
   each VDC-side script documents. The `.npz` files are written byte for byte
   reproducibly, so their sha256 recurs on regeneration. Every npcc-side

@@ -57,6 +57,13 @@ class EstimatorSpec:
   config (``backend``/``transform``/``backend_kwargs``, not the display
   ``label``), used to seed per-estimator RNG and join result rows.
 
+  ``feature_transform`` is the controls' setting of that name, the map the
+  copula-scale conditioning score passes through before it reaches the
+  backend. It enters ``estimator_id`` only when it is not the identity, so an
+  estimator that leaves it out hashes ``backend``, ``transform`` and
+  ``backend_kwargs`` alone: the id, and so the torch seed, that the result
+  rows stored under it carry.
+
   An ``external_r`` estimator is instead a ``script`` that fits and predicts
   on its own; ``backend`` names the method in the result tables, and its
   ``transform`` is ``"identity"`` because the script fits on the copula
@@ -71,6 +78,7 @@ class EstimatorSpec:
   kind: EstimatorKind = "backend"
   #: The method's script, relative to the working directory unless absolute.
   script: str | None = None
+  feature_transform: Transform = "identity"
   #: SHA-256 of the script's content, read at construction.
   script_sha256: str | None = field(default=None, init=False)
 
@@ -99,6 +107,11 @@ class EstimatorSpec:
         f"Unknown transform {self.transform!r}. "
         f"Allowed: {list(get_args(Transform))}."
       )
+    if self.feature_transform not in get_args(Transform):
+      raise EstimatorConfigError(
+        f"feature_transform must be one of {list(get_args(Transform))}; got "
+        f"{self.feature_transform!r} for {self.label!r}"
+      )
     frozen = MappingProxyType(deepcopy(dict(self.backend_kwargs)))
     validate_backend_kwargs(self.backend, frozen)
     object.__setattr__(self, "backend_kwargs", frozen)
@@ -115,6 +128,12 @@ class EstimatorSpec:
         f"transform must be 'identity' for the external_r estimator "
         f"{self.label!r}, whose script fits on the copula scale; "
         f"got {self.transform!r}"
+      )
+    if self.feature_transform != "identity":
+      raise EstimatorConfigError(
+        f"feature_transform must be 'identity' for the external_r estimator "
+        f"{self.label!r}, since nothing forwards it to its script; got "
+        f"{self.feature_transform!r}"
       )
     if self.backend_kwargs:
       raise EstimatorConfigError(
@@ -141,11 +160,16 @@ class EstimatorSpec:
         "script": self.script,
         "script_sha256": self.script_sha256,
       }
-    return {
+    settings: dict[str, object] = {
       "backend": self.backend,
       "transform": self.transform,
       "backend_kwargs": dict(self.backend_kwargs),
     }
+    # Only when set, so that the identity hashes as the three keys alone:
+    # the id every stored result row of such an estimator carries.
+    if self.feature_transform != "identity":
+      settings["feature_transform"] = self.feature_transform
+    return settings
 
   @property
   def estimator_id(self) -> str:
@@ -194,6 +218,7 @@ class EstimatorSpec:
     return cls(
       backend=self.backend,
       transform=self.transform,
+      feature_transform=self.feature_transform,
       device=device,
       projection_grid_size=projection_grid_size,
       batch_size=batch_size,
@@ -274,6 +299,11 @@ class GridConfig:
   ``families`` are either one-parameter families, each crossed with every
   regime in ``tau_scenarios``, or shape families, whose one regime is
   ``"implied"``; a grid holds one kind or the other.
+
+  The repetitions run are ``first_rep`` to ``n_rep - 1``. A cell's seed
+  hashes its own rep, never ``n_rep`` or ``first_rep``, so rep 5 of a grid
+  that starts there sees the data of rep 5 of one that starts at 0: a run
+  can hold out the reps an earlier choice was made on.
   """
 
   families: list[str]
@@ -300,6 +330,8 @@ class GridConfig:
   #: family's tau need not pick out an ``x`` -- the Student family's is
   #: constant -- so its surfaces need these.
   surface_x: list[float] = field(default_factory=list)
+  #: The first repetition run; see the class docstring.
+  first_rep: int = 0
 
   def __post_init__(self) -> None:
     _check_subset("families", self.families, [*FAMILIES, *SHAPE_FAMILIES])
@@ -316,6 +348,11 @@ class GridConfig:
       projection_grid_size=self.projection_grid_size,
       batch_size=self.batch_size,
     )
+    if not 0 <= self.first_rep < self.n_rep:
+      raise ValueError(
+        f"first_rep must lie in [0, n_rep) = [0, {self.n_rep}), so that some "
+        f"rep runs; got {self.first_rep}"
+      )
     if not self.normalize:
       raise ValueError("normalize must be non-empty (e.g. [None]).")
     for entry in self.normalize:
@@ -409,7 +446,7 @@ class GridConfig:
       for f in self.families
       for s in self.tau_scenarios
       for n in self.n
-      for rep in range(self.n_rep)
+      for rep in range(self.first_rep, self.n_rep)
     ]
 
 
@@ -466,6 +503,9 @@ def _parse_estimator(entry: Mapping[str, object]) -> EstimatorSpec:
     backend_kwargs={str(k): v for k, v in raw.items()},
     kind=cast("EstimatorKind", str(entry.get("kind", "backend"))),
     script=None if script is None else str(script),
+    feature_transform=cast(
+      "Transform", str(entry.get("feature_transform", "identity"))
+    ),
   )
 
 
@@ -494,6 +534,7 @@ _GRID_OPTIONAL: dict[str, Callable[[Any], object]] = {
   "tau_diagnostic_n": int,
   "holdout_n": int,
   "surface_x": lambda v: [float(x) for x in v],
+  "first_rep": int,
 }
 
 
