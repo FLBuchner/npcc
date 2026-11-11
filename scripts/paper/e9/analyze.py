@@ -64,6 +64,7 @@ BASELINE: str = "tabpfn-quantiles-v3-probit"
 #: Each label as the tables show it.
 DISPLAY: dict[str, str] = {
   "tabpfn-quantiles-v3-probit": "TabPFN v3",
+  "tabpfn-quantiles-v3.5-probit": "TabPFN v3.5",
   "tabpfn-quantiles-v3-probit-active": "TabPFN v3, active covariates",
   "tabpfn-quantiles-v3-probit-none": "no covariates",
   "tabicl-probit": "TabICLv2",

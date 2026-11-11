@@ -301,6 +301,12 @@ with Clayton and Gaussian copulas:
   different seeds in two runs, or an estimator without every cell of TabPFN
   v3's (the arm on the active covariates aside, under `constant`). A fit
   with a non-finite KL_mc or IAE at any point counts as failed.
+- TabPFN v3.5, for the supplement: `configs/e9_covariates_v35.toml` holds
+  E1's `tabpfn-quantiles-v3.5-probit` alone, on E9's `[grid]`.
+  - Run it as the npcc arms, into `results/study_covariates_<TAG>_v35`.
+  - Add that folder to the analysis's `--with`, beside the R run. The
+    analysis then pairs it with TabPFN v3 like every other estimator.
+  - The main text's TabPFN stays v3, as E1 fixed before E9 ran.
 
 ## E2 — vine study (§3.4)
 

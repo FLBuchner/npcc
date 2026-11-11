@@ -113,6 +113,21 @@ def _external_spec(script: Path) -> EstimatorSpec:
   )
 
 
+def _same_grid(a: CovariateGridConfig, b: CovariateGridConfig) -> None:
+  """Assert two E9 configs fit the same cells, scored the same way."""
+  for f in fields(CovariateGridConfig):
+    if f.name not in {"estimators", "active_covariates", "without_covariates"}:
+      assert getattr(a, f.name) == getattr(b, f.name), f.name
+
+
+def _e1_ids() -> set[str]:
+  """The estimator ids of E1's config."""
+  return {
+    e.estimator_id
+    for e in load_grid(_ROOT / "configs" / "study.toml").estimators
+  }
+
+
 def test_shipped_configs_fit_e1s_estimators_on_one_grid() -> None:
   """The R competitors must fit the backends' exact cells, with E1's ids.
 
@@ -122,15 +137,9 @@ def test_shipped_configs_fit_e1s_estimators_on_one_grid() -> None:
   """
   backends = load_covariate_grid(_ROOT / "configs" / "e9_covariates.toml")
   external = load_covariate_grid(_ROOT / "configs" / "e9_covariates_r.toml")
-  for f in fields(CovariateGridConfig):
-    if f.name not in {"estimators", "active_covariates", "without_covariates"}:
-      assert getattr(external, f.name) == getattr(backends, f.name), f.name
+  _same_grid(external, backends)
   assert len(backends.cells()) == 2 * 3 * 2 * 10
-  e1 = {
-    e.estimator_id
-    for e in load_grid(_ROOT / "configs" / "study.toml").estimators
-  }
-  assert {e.estimator_id for e in backends.estimators} <= e1
+  assert {e.estimator_id for e in backends.estimators} <= _e1_ids()
   assert [backends.covariates(e) for e in backends.estimators] == [
     "all",
     "all",
@@ -139,6 +148,22 @@ def test_shipped_configs_fit_e1s_estimators_on_one_grid() -> None:
     "none",
   ]
   assert {e.kind for e in external.estimators} == {"external_r"}
+
+
+def test_the_v35_arm_is_e1s_v35_on_e9s_cells() -> None:
+  """The supplement's TabPFN v3.5 must be E1's, fitted on E9's exact cells.
+
+  It runs from its own config, so a ``[grid]`` field that drifted from
+  E9's would pair it with TabPFN v3 on other data or points, and another
+  estimator id would make "TabPFN v3.5" another model than E1's.
+  """
+  backends = load_covariate_grid(_ROOT / "configs" / "e9_covariates.toml")
+  v35 = load_covariate_grid(_ROOT / "configs" / "e9_covariates_v35.toml")
+  _same_grid(v35, backends)
+  [est] = v35.estimators
+  assert est.label == "tabpfn-quantiles-v3.5-probit"
+  assert est.estimator_id in _e1_ids()
+  assert v35.covariates(est) == "all"
 
 
 @pytest.mark.parametrize(

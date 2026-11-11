@@ -15,6 +15,7 @@ import pytest
 import torch
 
 from npcc.experiments import covariate_scenarios as cs
+from npcc.experiments.covariate_config import load_covariate_grid
 
 _SCRIPT = (
   Path(__file__).resolve().parents[2]
@@ -131,6 +132,41 @@ def test_runs_scored_on_other_grids_are_refused(tmp_path: Path) -> None:
   (r / "config.json").unlink()
   with pytest.raises(SystemExit, match="config.json"):
     analyze.load([npcc, r])
+
+
+def test_every_shipped_e9_estimator_has_a_display_name() -> None:
+  """An estimator without one would reach the paper's tables as its label."""
+  root = Path(__file__).resolve().parents[2] / "configs"
+  labels = {
+    est.label
+    for config in sorted(root.glob("e9_covariates*.toml"))
+    for est in load_covariate_grid(config).estimators
+  }
+  assert "tabpfn-quantiles-v3.5-probit" in labels
+  assert labels <= set(analyze.DISPLAY)
+
+
+def test_a_third_run_pairs_with_the_baseline(tmp_path: Path) -> None:
+  """An arm run from its own config must still be paired with TabPFN v3.
+
+  The v3.5 arm comes in through ``--with`` beside the R run; were it read
+  as its own baseline, or dropped, its difference would be missing or zero.
+  """
+  npcc = _run(tmp_path / "a", _rows(analyze.BASELINE, CELLS, kl_mc=0.1))
+  r = _run(tmp_path / "b", _rows("gamcopula-select", CELLS, kl_mc=0.3))
+  v35 = _run(
+    tmp_path / "c", _rows("tabpfn-quantiles-v3.5-probit", CELLS, kl_mc=0.15)
+  )
+  metrics = analyze.load([npcc, r, v35])
+  kl = analyze.paired(
+    analyze.per_rep(metrics, "pdf", "KL_mc"), "KL_mc", ["scenario", "n"]
+  )
+  row = kl[kl["estimator"] == "TabPFN v3.5"]
+  assert len(row) == len(cs.SCENARIOS)
+  assert row["diff_vs_tabpfn"].to_list() == pytest.approx(
+    [0.05] * len(cs.SCENARIOS)
+  )
+  assert row["reps"].to_list() == [2] * len(cs.SCENARIOS)
 
 
 def test_an_estimator_without_the_baselines_cells_is_refused(
