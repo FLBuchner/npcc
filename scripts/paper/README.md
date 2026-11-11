@@ -545,6 +545,15 @@ with Clayton and Gaussian copulas:
     arm): the arm's joint and copula KL, its joint KL paired with the
     oracle's and the random arm's, and its failed fits; and
     `vine_gamvine_families.csv`, the selected pair families per tree.
+  - **Pilot.** On 2026-11-11, from cd312e2, into
+    `results/e2b_pilot_2026-11-11`: one cell at d = 5 and one at d = 10
+    (n = 1000, rep 0), the three arms, R single-threaded, beside other CPU
+    jobs. Both cells pair with E2's rows (same seed and true log-density at
+    every x). Fit seconds per arm, oracle / selected / ns: 28 / 38 / 94 at
+    d = 5, and 135 / 197 / 740 at d = 10; evaluation takes 2 to 8 s. The
+    whole d = 10 cell took 18.5 min. `logs/compare_with_e2.txt` has the KLs
+    beside E2's arms, and `logs/margins_side_check.txt` what mgcv's default
+    smoothing (GCV) costs the margins at d = 10, against REML.
 
 ## E3 — comparison with VDC (§3.4)
 
