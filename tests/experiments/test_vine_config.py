@@ -62,6 +62,31 @@ def test_e2_at_d10_is_e2_at_another_dimension() -> None:
 
 
 @pytest.mark.parametrize(
+  ("name", "dims", "e2_name"),
+  [
+    ("vine_study_n2000.toml", [3, 5], "vine_study.toml"),
+    ("vine_study_d10_n2000.toml", [10], "vine_study_d10.toml"),
+  ],
+)
+def test_e2d_is_e2_at_n_2000(name: str, dims: list[int], e2_name: str) -> None:
+  """E2d must differ from E2 at its dimension only in n and the arms.
+
+  Its cells pair with E2's at n = 500 and 1000 by (d, rep), which holds only
+  while the repetitions, evaluation points, projection grid and estimator
+  are E2's; a drift in any would score n = 2000 on other test points or
+  another model.
+  """
+  e2 = load_vine_grid(_CONFIGS / e2_name)
+  e2d = load_vine_grid(_CONFIGS / name)
+  assert e2d.dims == dims == e2.dims
+  assert e2d.n == [2000]
+  assert e2d.arms == ["oracle", "random", "selected", "tll"]
+  for f in fields(VineGridConfig):
+    if f.name not in {"n", "arms"}:
+      assert getattr(e2d, f.name) == getattr(e2, f.name), f.name
+
+
+@pytest.mark.parametrize(
   ("overrides", "match"),
   [
     ({"arms": ["oracle", "bogus"]}, "arms must be drawn"),
