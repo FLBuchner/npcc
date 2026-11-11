@@ -501,6 +501,50 @@ with Clayton and Gaussian copulas:
     beside `analysis/`. They were timed within the study, on gpu053's A100,
     not on an idle machine as E6's were.
 
+## E10 — structure mixtures
+
+A non-simplified vine is consistent on any structure, so rather than select
+one structure, E10 averages over several. For an equal-weight mixture
+`f_bar = (1/K) sum_k f_k`, Jensen's inequality gives
+`KL(f || f_bar) <= (1/K) sum_k KL(f || f_k)`, and it holds for the
+Monte-Carlo KL point by point.
+
+- **The arm.** `mixture` in the vine study (`vine_runner.py`), with
+  `mixture_k = 5` members:
+  - The margins are fitted once and shared, as the other NPCC arms fit them.
+  - Member 1 is on the `selected` arm's structure: Dissmann's algorithm with
+    TLL pairs on the margins' probability integral transforms.
+  - Members 2 to K are on pyvinecopulib's weighted random spanning trees of
+    the same transforms (`tree_algorithm = "random_weighted"`, weights
+    |tau|), each seeded by (d, rep, k). They are diverse, but they favor
+    strong pairs: a uniformly random structure is clearly worse than the
+    selected one at d = 10 (E3d).
+  - Each member is a non-simplified TabPFN v3 vine, fitted and evaluated one
+    at a time.
+  - The mixture's joint log-density is the margins' plus `logsumexp` of the
+    members' copula log-densities less `log K`. Its copula density is the
+    members' mean.
+  - Every member is also scored on its own, as the arm
+    `mixture-member-<k>`, and the mixture's rows carry the members' mean
+    KL.
+- **Configs.** `configs/vine_study_mixture.toml` (d = 3 and 5, run here)
+  and `configs/vine_study_mixture_d10.toml` (d = 10, on gpu053 as a whole
+  experiment) hold the mixture arm alone at n = 500, 1000 and 2000. Every
+  other key is E2's, so each cell has E2's truth, training data and test
+  points, and member 1 is the selected arm's fit there.
+- **Analysis.** `scripts/paper/e10/analyze_mixture.py <run> --with <E2
+  runs>` writes `vine_mixture.csv`. Per (d, n), it has the mixture's joint
+  and copula KL against member 1 and against the members' mean, paired by
+  repetition, and against E2's arms on the cells both runs hold. It also
+  writes `vine_mixture_checks.json`, which holds Jensen's bound and how far
+  member 1 is from the selected arm.
+- **Reusing quantile tables.** A pair copula in a vine reads each direction
+  twice at the same conditioning rows, for its density and then for its
+  h-function. Each `ConditionalMargin` now keeps its last table and returns
+  it for a repeat read. `scripts/paper/e10/check_table_reuse.py` checks that
+  this changes no TabPFN vine density bitwise, on one E2 cell and one E3d
+  sample, and measures the speed-up.
+
 ## E3 — comparison with VDC (§3.4)
 
 See `scripts/paper/e3/README.md` for VDC's environment, the weight check and
