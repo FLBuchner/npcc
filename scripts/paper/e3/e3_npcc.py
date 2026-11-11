@@ -10,6 +10,10 @@ controls from, so the backend, transform, ``backend_kwargs`` and per-fit
 torch seed (``derive_seed(<salt>, estimator_id)``) are built the same way:
 :func:`spec` reads them from E1's config, which is where TabPFN's release and
 softmax temperature are set. No backend hyperparameter is changed from E1's.
+The qnorm screen's arm, ``tabpfn-quantiles-v3-qnorm-probit``, is E1's TabPFN
+v3 handed ``qnorm(u)`` as its conditioning feature; it is not in E1's config,
+so :func:`spec` reads it from the screen's (``configs/qnorm_screen.toml``),
+which also holds E1's TabPFN v3 under E1's settings.
 
 **Timing.** ``fit_s`` is the construction of :class:`RosenblattBicop` and its
 ``fit`` (both Rosenblatt directions); for TabPFN that includes building the
@@ -26,13 +30,24 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
+import e3_common as common
 import numpy as np
 import torch
 from dotenv import load_dotenv
 
+import npcc
 from npcc import FitControlsRosenblattBicop, RosenblattBicop
 from npcc.experiments._study import derive_seed
 from npcc.experiments.config import EstimatorSpec, load_grid
+
+# Every row records the commit of the checkout these scripts run from, so the
+# package that runs must be that checkout's: from a worktree, an interpreter
+# imports the main checkout's unless PYTHONPATH puts the worktree's src first.
+if not Path(npcc.__file__).resolve().is_relative_to(common.CODE_REPO / "src"):
+  raise SystemExit(
+    f"npcc must be imported from {common.CODE_REPO / 'src'}; got "
+    f"{npcc.__file__}. Run with PYTHONPATH={common.CODE_REPO / 'src'}."
+  )
 
 # TabPFN reads TABPFN_TOKEN from the environment; an exported token wins.
 load_dotenv("/home/thibault/npcc/.env", override=False)
@@ -54,6 +69,18 @@ ESTIMATORS: dict[str, tuple[str, str | None, str]] = {
 CPU_ESTIMATORS = [k for k, v in ESTIMATORS.items() if v[2] == "cpu"]
 GPU_ESTIMATORS = [k for k, v in ESTIMATORS.items() if v[2] == "gpu"]
 
+#: The qnorm screen's arm, in the same layout. It is kept out of
+#: ``ESTIMATORS``, which lists E1's estimators: the collector reads that table
+#: for the arms a run still lacks, and ``gpu`` expands to its GPU entries.
+SCREEN_ESTIMATORS: dict[str, tuple[str, str | None, str]] = {
+  "tabpfn-quantiles-v3-qnorm-probit": ("tabpfn-quantiles", "v3", "gpu"),
+}
+#: Every label :func:`spec` can build.
+KNOWN: dict[str, tuple[str, str | None, str]] = {
+  **ESTIMATORS,
+  **SCREEN_ESTIMATORS,
+}
+
 #: The estimator of E3c's ``rosenblatt-vinecop-check``: fitted in
 #: ``npcc.RosenblattVinecop``, it must equal the shared vine's
 #: ``npcc-<estimator>`` arm.
@@ -68,22 +95,28 @@ E1_CONFIG = Path(__file__).resolve().parents[3] / "configs" / "study.toml"
 
 
 @cache
-def _e1_estimators() -> dict[str, EstimatorSpec]:
-  return {e.label: e for e in load_grid(E1_CONFIG).estimators}
+def _estimators(config: Path) -> dict[str, EstimatorSpec]:
+  return {e.label: e for e in load_grid(config).estimators}
 
 
-def spec(label: str) -> EstimatorSpec:
-  """The E1 estimator called ``label``, as E1's config builds it."""
-  backend, version, _ = ESTIMATORS[label]
-  est = _e1_estimators().get(label)
+def spec(label: str, config: Path = E1_CONFIG) -> EstimatorSpec:
+  """The estimator called ``label``, as ``config`` (E1's by default) builds it."""
+  backend, version, _ = KNOWN[label]
+  est = _estimators(config).get(label)
   if est is None:
-    raise SystemExit(f"{label} must be an estimator of {E1_CONFIG}; it is not")
+    raise SystemExit(f"{label} must be an estimator of {config}; it is not")
   stated = (backend, TRANSFORM, version)
   found = (est.backend, est.transform, est.backend_kwargs.get("model_version"))
   if found != stated:
     raise SystemExit(
       f"{label} must be (backend, transform, model_version) {stated} in "
-      f"{E1_CONFIG}, as ESTIMATORS states; got {found}"
+      f"{config}, as KNOWN states; got {found}"
+    )
+  e1 = _estimators(E1_CONFIG).get(label)
+  if e1 is not None and e1.estimator_id != est.estimator_id:
+    raise SystemExit(
+      f"{label} must have E1's settings in {config}, since it carries E1's "
+      f"label; got estimator id {est.estimator_id}, E1's is {e1.estimator_id}"
     )
   return est
 

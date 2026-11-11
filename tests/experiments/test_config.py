@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from npcc.core.controls import FitControlsRosenblattBicop
 from npcc.core.errors import (
   EstimatorConfigError,
   InvalidBackendKwargsError,
@@ -484,3 +485,128 @@ def test_holdout_n_is_read_from_the_grid_and_refused_below_two(
   config.write_text(body.format(n=1))
   with pytest.raises(ValueError, match="holdout_n must be >= 2"):
     load_grid(config)
+
+
+def test_the_identity_feature_transform_keeps_every_estimator_id() -> None:
+  """A default that entered the hash would re-seed every run already made.
+
+  ``estimator_id`` seeds each estimator's torch RNG and joins result rows, so
+  the identity must hash exactly as an estimator from before the setting.
+  """
+  spec = EstimatorSpec(label="a", backend="tabpfn-quantiles", transform="logit")
+  assert spec.feature_transform == "identity"
+  assert "feature_transform" not in spec.canonical_dict()
+  assert (
+    spec.estimator_id
+    == "eaf54a98cc1b68d623481297d830f5c1c4f8fe9d373dc9f73d4c1e10f5d33999"
+  )
+
+
+def test_a_feature_transform_is_its_own_estimator() -> None:
+  """qnorm features are another estimator: another id, and its controls say so.
+
+  The screen pairs the two on the same cells; sharing an id would make them
+  one estimator to the runner's resume check and to every join on the id,
+  and a spec that did not forward the setting would fit both on ``u``.
+  """
+  base = EstimatorSpec(
+    label="tabpfn-v3", backend="tabpfn-quantiles", transform="probit"
+  )
+  qnorm = EstimatorSpec(
+    label="tabpfn-v3-qnorm",
+    backend="tabpfn-quantiles",
+    transform="probit",
+    feature_transform="probit",
+  )
+  assert qnorm.estimator_id != base.estimator_id
+  assert qnorm.canonical_dict()["feature_transform"] == "probit"
+  controls = qnorm.controls(
+    FitControlsRosenblattBicop,
+    device="cpu",
+    projection_grid_size=30,
+    batch_size=None,
+  )
+  assert controls.feature_transform == "probit"
+  assert controls.to_dict()["feature_transform"] == "probit"
+
+
+def test_feature_transform_is_read_from_toml_and_refused_when_unknown(
+  tmp_path: Path,
+) -> None:
+  """The key must reach the estimator, and a misspelling must be refused.
+
+  A loader that dropped it would run the screen's arm as a second copy of
+  the baseline under another label.
+  """
+  body = _TOML + (
+    '\n[[grid.estimators]]\nlabel = "quant-qnorm-logit"\n'
+    'backend = "tabpfn-quantiles"\ntransform = "logit"\n'
+    'feature_transform = "{f}"\n'
+  )
+  grid = load_grid(_write(tmp_path, body.format(f="probit")))
+  by_label = {e.label: e for e in grid.estimators}
+  assert by_label["quant-qnorm-logit"].feature_transform == "probit"
+  assert by_label["quant-logit"].feature_transform == "identity"
+  with pytest.raises(EstimatorConfigError, match="feature_transform must be"):
+    load_grid(_write(tmp_path, body.format(f="qnorm")))
+
+
+def test_an_external_estimator_refuses_a_feature_transform(
+  tmp_path: Path,
+) -> None:
+  """Nothing hands the setting to an R script, so it must not be accepted."""
+  script = tmp_path / "fit.R"
+  script.write_text("# fits on the copula scale\n")
+  with pytest.raises(EstimatorConfigError, match="feature_transform must be"):
+    EstimatorSpec(
+      label="r",
+      backend="gamcopula",
+      transform="identity",
+      kind="external_r",
+      script=str(script),
+      feature_transform="probit",
+    )
+
+
+def test_first_rep_runs_the_later_reps_on_the_same_cells(
+  tmp_path: Path,
+) -> None:
+  """Reps held out from an earlier choice must be E1's reps, nothing else.
+
+  A grid starting at rep 5 must hold exactly the cells of rep 5 onward of
+  the grid starting at 0, whose seeds hash the cell alone; and starting at or
+  past ``n_rep`` would run nothing.
+  """
+  full = load_grid(_write(tmp_path, _TOML))
+  text = _TOML.replace("n_rep = 3", "n_rep = 3\nfirst_rep = 1")
+  later = load_grid(_write(tmp_path, text))
+  assert later.first_rep == 1
+  assert later.cells() == [c for c in full.cells() if c.rep >= 1]
+  with pytest.raises(ValueError, match="first_rep must lie in"):
+    load_grid(
+      _write(tmp_path, _TOML.replace("n_rep = 3", "n_rep = 3\nfirst_rep = 3"))
+    )
+
+
+def test_the_screen_config_pairs_e1s_tabpfn_v3_with_its_qnorm_arm() -> None:
+  """The screen's baseline must be E1's TabPFN v3, on E1's reps 5-9.
+
+  A baseline whose settings drifted from E1's would compare qnorm against
+  another estimator; reps 0-4 would reuse the reps earlier choices were
+  made on.
+  """
+  e1 = {
+    e.label: e for e in load_grid(_ROOT / "configs" / "study.toml").estimators
+  }
+  screen = load_grid(_ROOT / "configs" / "qnorm_screen.toml")
+  by_label = {e.label: e for e in screen.estimators}
+  base = by_label["tabpfn-quantiles-v3-probit"]
+  arm = by_label["tabpfn-quantiles-v3-qnorm-probit"]
+  assert base.estimator_id == e1["tabpfn-quantiles-v3-probit"].estimator_id
+  assert arm.canonical_dict() == {
+    **base.canonical_dict(),
+    "feature_transform": "probit",
+  }
+  assert {c.rep for c in screen.cells()} == {5, 6, 7, 8, 9}
+  e1_grid = load_grid(_ROOT / "configs" / "study.toml")
+  assert screen.cells() == [c for c in e1_grid.cells() if c.rep >= 5]

@@ -86,6 +86,7 @@ def test_to_dict_contains_all_settings() -> None:
   controls = FitControlsRosenblattBicop(
     backend="tabpfn-quantiles",
     transform="probit",
+    feature_transform="probit",
     device="cpu",
     batch_size=64,
     backend_kwargs={"model_version": "v2.5"},
@@ -101,6 +102,7 @@ def test_to_dict_contains_all_settings() -> None:
     "quantile_table_config": controls.quantile_table_config,
     "eps": 1e-6,
     "transform": "probit",
+    "feature_transform": "probit",
     "device": torch.device("cpu"),
     "batch_size": 64,
     "backend_kwargs": {"model_version": "v2.5"},

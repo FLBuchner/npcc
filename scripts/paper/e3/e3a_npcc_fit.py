@@ -39,10 +39,13 @@ locations. NPCC's grid density is its own ``pdf_grid`` (both Rosenblatt
 directions on the Cartesian product, averaged), spot-checked per fit against
 pointwise ``pdf`` at 500 grid points (``grid_spot_check_max_rel``).
 
-**Outputs** (under ``--out``): one JSON row and one float32 ``.npy`` of
-test-point log-densities per fit in ``npcc_cells/<estimator>/n<n_train>/`` (so
-a run resumes), and ``npcc_<estimator>.csv`` with every row of the estimator.
-Every row carries the provenance of ``e3_common.provenance``.
+**Outputs** (under ``--out``, which defaults to ``--folder``): one JSON row
+and one float32 ``.npy`` of test-point log-densities per fit in
+``npcc_cells/<estimator>/n<n_train>/`` (so a run resumes), and
+``npcc_<estimator>.csv`` with every row of the estimator. Every row carries
+the provenance of ``e3_common.provenance``. The samples and truths are always
+read from ``--folder``, so a run that must leave it untouched (the qnorm
+screen's, with ``--config configs/qnorm_screen.toml``) writes elsewhere.
 """
 
 from __future__ import annotations
@@ -78,11 +81,11 @@ def resolve(names: list[str]) -> list[str]:
       out += e3_npcc.GPU_ESTIMATORS
     elif name == "all":
       out += list(e3_npcc.ESTIMATORS)
-    elif name in e3_npcc.ESTIMATORS or name == VDC_ADAPTED:
+    elif name in e3_npcc.KNOWN or name == VDC_ADAPTED:
       out.append(name)
     else:
       raise SystemExit(f"estimator must be cpu, gpu, all, {VDC_ADAPTED} or one of "
-                       f"{list(e3_npcc.ESTIMATORS)}; got {name}")
+                       f"{list(e3_npcc.KNOWN)}; got {name}")
   return list(dict.fromkeys(out))
 
 
@@ -111,7 +114,12 @@ class VdcAdapted:
 
 def main() -> None:  # noqa: PLR0915 - one linear protocol
   p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-  p.add_argument("--folder", type=Path, default=common.RESULTS / "e3a")
+  p.add_argument("--folder", type=Path, default=common.RESULTS / "e3a",
+                 help="the VDC side's samples and truths")
+  p.add_argument("--out", type=Path, default=None,
+                 help="where the fits go (default: --folder)")
+  p.add_argument("--config", type=Path, default=e3_npcc.E1_CONFIG,
+                 help="the config the estimators are read from (default: E1's)")
   p.add_argument("--estimators", nargs="+", default=["cpu"])
   p.add_argument("--n-train", type=int, nargs="+", default=[2000, 10000])
   p.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
@@ -124,8 +132,9 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
   a = p.parse_args()
 
   labels = resolve(a.estimators)
+  out = a.folder if a.out is None else a.out
   for label in labels:
-    kind = "cpu" if label == VDC_ADAPTED else e3_npcc.ESTIMATORS[label][2]
+    kind = "cpu" if label == VDC_ADAPTED else e3_npcc.KNOWN[label][2]
     if kind == "gpu" and a.device != "cuda":
       raise SystemExit(f"{label} must run with --device cuda; got --device {a.device}")
     if kind == "cpu" and a.device != "cpu":
@@ -157,9 +166,9 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
 
     for label in labels:
       adapted = label == VDC_ADAPTED
-      est = None if adapted else e3_npcc.spec(label)
+      est = None if adapted else e3_npcc.spec(label, a.config)
       runner = VdcAdapted(a.vdc_core) if adapted else None
-      cell_dir = a.folder / "npcc_cells" / label / f"n{n_train}"
+      cell_dir = out / "npcc_cells" / label / f"n{n_train}"
       cell_dir.mkdir(parents=True, exist_ok=True)
       warmed = adapted  # the server warms itself up
       try:
@@ -214,7 +223,8 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
             "estimator": label, "estimator_id": None if adapted else est.estimator_id,
             "backend": "vdc" if adapted else est.backend,
             "transform": None if adapted else est.transform,
-            "model_version": None if adapted else e3_npcc.ESTIMATORS[label][1],
+            "feature_transform": None if adapted else est.feature_transform,
+            "model_version": None if adapted else e3_npcc.KNOWN[label][1],
             "env": "npcc",
             "kl": float(np.mean(ratio)),
             "kl_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
@@ -247,9 +257,9 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
 
   for label in labels:
     rows = [json.loads(path.read_text())
-            for path in sorted((a.folder / "npcc_cells" / label).glob("n*/k*.json"))]
+            for path in sorted((out / "npcc_cells" / label).glob("n*/k*.json"))]
     if rows:
-      common.write_csv(rows, a.folder / f"npcc_{label}.csv")
+      common.write_csv(rows, out / f"npcc_{label}.csv")
       for n in sorted({r["n_train"] for r in rows}):
         sel = [r for r in rows if r["n_train"] == n]
         print(f"{label} n={n}: {len(sel)} fits, mean KL {np.mean([r['kl'] for r in sel]):.5f}, "

@@ -1,0 +1,45 @@
+# The qnorm screen (scripts/paper/README.md): TabPFN v3 handed the copula-scale
+# conditioning score as qnorm(u) = Phi^{-1}(u) rather than as u.
+#
+# Two estimators on E1's cells (configs/study.toml), reps 5-9 only, the reps
+# E7a held out: E1's `tabpfn-quantiles-v3-probit`, with E1's settings and so
+# E1's estimator id, and the same with `feature_transform = "probit"`. Cell
+# seeds depend only on the cell, so these fits see exactly E1's data. The same
+# two labels run E3a's nine copulas through scripts/paper/e3/e3a_npcc_fit.py
+# `--config configs/qnorm_screen.toml`. The launcher is
+# scripts/paper/qnorm_screen/run.sh, and the rule, fixed before any result is
+# read, is in scripts/paper/qnorm_screen/report.py.
+#
+# Every other [grid] key is E1's, but surfaces are not stored: they enter no
+# metric of the screen.
+
+[grid]
+families = ["clayton", "gaussian"]
+tau_scenarios = ["linear", "sin"]
+normalize = ["none"]
+n = [200, 500, 1000, 2000]
+
+# Reps 5-9: E1's rep 5 is rep 5 here, since a cell's seed hashes its rep.
+n_rep = 10
+first_rep = 5
+
+projection_grid_size = 30
+conditional_uv_grid_n = 20
+conditional_x_grid_n = 10
+surface_tau_levels = [0.1, 0.4, 0.7]
+surface_families = []
+enable_tau_diagnostics = true
+tau_diagnostic_n = 1000
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-qnorm-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+feature_transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }

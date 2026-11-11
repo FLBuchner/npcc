@@ -719,3 +719,82 @@ uv run --no-sync python scripts/qt_ab/report.py --out $O/tabpfn \
   $O/tabpfn_temp1.0 --baseline 'm21:wh0.65|current' --compare-labels \
   tabpfn-quantiles-v3-probit tabpfn-quantiles-v3-temp1.0-probit
 ```
+
+## The qnorm screen (TabPFN's conditioning feature)
+
+**A screen only.** It asks whether TabPFN v3 fits better when the
+copula-scale score it conditions on reaches it as `qnorm(u) = Phi^{-1}(u)`
+rather than as `u`. Every TabPFN experiment above hands it `u`. Adopting
+`qnorm(u)` would mean rerunning all of them, which is the user's decision,
+not this screen's.
+
+- **The setting.** `feature_transform` in the fit controls
+  (`FitControlsRosenblattBicop`) and in a config's `[[grid.estimators]]`
+  entry. It maps the conditioning score of each Rosenblatt direction (`u` for
+  `V | U, X`, `v` for `U | V, X`) after the clamp at `eps`. `"identity"`, the
+  default, leaves every fit as before, bit for bit, and enters no estimator
+  id. Covariates are never mapped. In a non-simplified vine, the
+  conditioning-set values `u_D` reach each pair among its covariates, so
+  they stay on the `u` scale: the pair cannot tell them from `x`.
+- **The arms.** E1's `tabpfn-quantiles-v3-probit` (v3, probit, softmax
+  temperature 1.0, E1's estimator id) and `tabpfn-quantiles-v3-qnorm-probit`,
+  the same with `feature_transform = "probit"`, an estimator id of its own.
+  Both are in `configs/qnorm_screen.toml`.
+- **The cells.** The two arms are paired on identical data:
+  - E1's 16 cells at reps 5-9, the reps E7a held out, 80 pairs. The config
+    is E1's grid with `first_rep = 5`, so rep 5 is E1's rep 5, and no
+    surfaces.
+  - E3a's nine copulas, five seeds each, at `n_train` 2000 and 10000: 90
+    pairs, from E3a's samples in `results/e3_vdc/e3a`, which the fits only
+    read (`e3a_npcc_fit.py --out`). These five seeds are all E3a has; they
+    are not held out.
+- **The metric.** Each study's pdf KL: E1's Monte Carlo KL averaged over a
+  cell's 10 x values, and E3a's KL at its 20,000 test points.
+- **The rule**, fixed before any result of the screen was read
+  (`scripts/paper/qnorm_screen/report.py`'s `verdict`):
+  - per pair, `d = KL(qnorm) - KL(u)`;
+  - a stratum is a study at one n: E1 at 200, 500, 1000 and 2000, E3a at
+    2000 and 10000;
+  - a group's score is the mean of `d` within each of its strata, averaged
+    over the strata with equal weight, with SE `sqrt(sum se_s^2) / S`;
+  - `qnorm(u)` is adopted only if the score over all pairs is below -2 SE
+    (a paired gain beyond 2 SE overall) and no n and no family has a score
+    above +2 SE (no loss beyond 2 SE). The n are 200, 500, 1000, 2000 and
+    10000. The families are E1's clayton and gaussian and E3a's seven; a
+    family in both studies is one group;
+  - otherwise `u` is kept. pdf IAE is reported the same way and does not
+    decide.
+
+  The differences are absolute: E3a's independence copula has a KL below
+  its own Monte Carlo error, so a ratio to it would be noise.
+- **Why not E7a's harness.** E7a's and the temperature A/B's scripts
+  (`scripts/qt_ab/`) live on the `qt-ab-probit` branch, and replay quantile
+  read-outs on cb04041's package, which has no `feature_transform`. The
+  screen runs E1's own runner and E3a's own fit script instead, from this
+  branch.
+- **Run.** From a clean worktree at the pushed tip of the screen's PR, as
+  one GPU process at a time (`--workers 1`, 4 threads on cores 0-3, no
+  `PYTORCH_CUDA_ALLOC_CONF`):
+
+  ```bash
+  WANT=<sha> TAG=<tag> setsid -f nohup \
+    bash <worktree>/scripts/paper/qnorm_screen/run.sh > qnorm_screen.out 2>&1
+  ```
+
+  It refuses an existing `results/qnorm_screen_<TAG>`, a worktree that is
+  not clean or not at `WANT`, a package imported from elsewhere, and a busy
+  GPU. It writes `COMMIT`, `env.txt` and `logs/` (the launcher,
+  `provenance.txt` with every command, `steps.log`), then `e1/`, `e3a/`, and
+  `analysis/` with `pairs.csv`, `groups.csv` and `report.txt`, whose last
+  line is the verdict. A step that fails stops the run; its command in
+  `provenance.txt` resumes from its own checkpoints.
+- **Expected time:** about 1 h on an otherwise idle GPU. E1's cells take
+  about 10 s each per arm (E6's clean E3a pdf time, 5.8 s for 20,000
+  points, sets the holdout; the grid, h-functions and tau take the rest),
+  so 80 cells and two arms are about 27 min. E3a's fits take about 7 s at
+  `n_train` = 2000 and 12 s at 10000, so 90 fits and two arms are about
+  29 min. If it runs much longer, the baseline arm can be dropped and the
+  qnorm arm paired with E1's `results/study_2026-11-10` and E3a's stored
+  `tabpfn-quantiles-v3-probit` fits, both from b7702e1, whose
+  `src/npcc/core` this branch leaves as it was with the setting off: half
+  the time, at the cost of pairing across runs.

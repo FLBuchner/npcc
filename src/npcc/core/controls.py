@@ -31,6 +31,14 @@ class FitControlsRosenblattBicop:
     computations.
   transform
     Transformation applied to copula-scale responses before backend fitting.
+  feature_transform
+    Transformation applied to the copula-scale conditioning score -- ``u``
+    when the backend models ``V | U, X``, ``v`` for ``U | V, X`` -- before it
+    is handed to the backend as a feature, after the clamp at ``eps`` every
+    copula argument receives. ``"probit"`` hands it ``Phi^{-1}(u)``. The
+    default, ``"identity"``, hands ``u`` itself. Covariates are never
+    transformed, and that includes the conditioning-set values a
+    non-simplified vine passes each edge among them.
   device
     Device used for fitting and evaluation. If omitted, CUDA is selected when
     available and CPU otherwise; input data is placed onto the resolved device
@@ -56,6 +64,7 @@ class FitControlsRosenblattBicop:
   )
   eps: float = 1e-6
   transform: Transform = "logit"
+  feature_transform: Transform = "identity"
   device: str | torch.device | None = None
   batch_size: int | None = None
   backend_kwargs: Mapping[str, object] | None = field(default_factory=dict)
@@ -92,6 +101,12 @@ class FitControlsRosenblattBicop:
         f"transform must be one of {list(TRANSFORMS)}; got {self.transform!r}"
       )
 
+    if self.feature_transform not in TRANSFORMS:
+      raise ValueError(
+        f"feature_transform must be one of {list(TRANSFORMS)}; got "
+        f"{self.feature_transform!r}"
+      )
+
     if not 0.0 < self.eps < 0.5:
       raise ValueError("eps must lie strictly between 0 and 0.5.")
 
@@ -120,6 +135,7 @@ class FitControlsRosenblattBicop:
       "quantile_table_config": self.quantile_table_config,
       "eps": self.eps,
       "transform": self.transform,
+      "feature_transform": self.feature_transform,
       "device": self.device,
       "batch_size": self.batch_size,
       "backend_kwargs": dict(self.backend_kwargs or {}),
