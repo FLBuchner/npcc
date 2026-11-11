@@ -361,13 +361,29 @@ with Clayton and Gaussian copulas:
     - The R arms ran beside it as 8 single-threaded shards with
       `--device cpu`, then the aggregation pass, which took 28 min.
     - The analysis, `analyze.py` on the npcc run with `--with` the R run,
-      wrote the npcc run's `analysis/`, the folder the paper cites. It is
-      frozen.
+      wrote the npcc run's `analysis/`.
     - A pilot of one cell (`interaction`, Clayton, rep 0) with every arm, in
       `results/e9c_pilot_2026-11-11` and `..._r`, ran first from the same
       commit to size the lanes.
     - Each run's `logs/` holds the launcher, `e9c.sh`, and `provenance.txt`,
       every command rendered.
+  - **Cited.** E9c has no table of its own. The paper cites
+    `results/study_covariates_n10000_2026-11-11/analysis`, and that folder
+    is frozen:
+    - `kl.csv` gives the n = 10^4 columns of `tab:covariates` (`gampcc` and
+      `interaction`; `constant` is not run, and boostCopula shows "--"),
+      and the n = 10,000 numbers in §3.3 and the discussion;
+    - `fits_summary.csv` gives the convergence counts in the supplement's
+      "Several covariates" subsection: 3 selection fits under `gampcc` that
+      did not converge, and none for the oracle;
+    - `iae.csv` and `kl_by_family.csv` back that subsection's statement
+      that the comparisons at n = 10,000 agree with the KL.
+
+    The n = 10,000 timings in that subsection come from each run's
+    `runtime_summary.parquet`, beside `analysis/`: gamCopula selection's
+    `fit_time_mean` from the R run, and TabPFN v3's `total_time_mean` from
+    the npcc run. The 8 R shards ran single-threaded beside one another and
+    beside the GPU process, so these times were taken within the study.
 
 ## E2 — vine study (§3.5)
 
