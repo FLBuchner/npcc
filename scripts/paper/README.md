@@ -339,6 +339,15 @@ with Clayton and Gaussian copulas:
   cell's seeds depend on the cell alone. A d = 5 shard peaks at about 7 GB,
   since every fitted margin held its own TabPFN model on the GPU before
   f4f17b5.
+- The rerun after E8, the one §3.4 cites: `results/vine_2026-11-10`, from
+  b7702e1 on the same config. It ran as 4 shards (`--shard i/4 --resume
+  --workers 1 --gpu-mem-fraction 0.15`) started at 19:20 on 2026-11-10,
+  then the aggregation pass at 20:50.
+  - **No `logs/` or `COMMIT`.** This run has neither. Its commit and flags
+    come from the `provenance.jsonl` the runner wrote, one line per
+    process, each recording b7702e1 and no uncommitted file.
+  - **Analysis.** The command below, on that folder, wrote
+    `results/vine_2026-11-10/analysis/`.
 - Analysis: `uv run --no-sync python scripts/paper/e2/analyze.py
   results/vine_2026-11-06` writes the table (`vine_table.csv`, in the columns
   of `tab:vine-results`), the figure (`vine_kl_by_x`, PDF and PNG, with the
