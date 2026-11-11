@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,21 @@ def test_shipped_vine_config_loads() -> None:
   assert {e.estimator_id for e in grid.estimators} <= {
     e.estimator_id for e in e1.estimators
   }
+
+
+def test_the_selected_arm_runs_on_e2s_cells() -> None:
+  """The selected arm must fit E2's cells with E2's estimator.
+
+  It runs from its own config and is paired with the oracle and random arms
+  of E2's run, so any other drift from ``vine_study.toml`` would score it on
+  other data, test points or pair copulas.
+  """
+  e2 = load_vine_grid(_CONFIGS / "vine_study.toml")
+  selected = load_vine_grid(_CONFIGS / "vine_study_selected.toml")
+  assert selected.arms == ["selected"]
+  for f in fields(VineGridConfig):
+    if f.name != "arms":
+      assert getattr(selected, f.name) == getattr(e2, f.name), f.name
 
 
 @pytest.mark.parametrize(

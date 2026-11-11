@@ -10,6 +10,12 @@ RosenblattVinedist` whose margins and pairs all see ``x``, and ``tll`` as a
 :class:`pyvinecopulib.Vinedist` with kernel-density margins and TLL pairs on
 the true structure, neither of which sees ``x``.
 
+**Structures.** ``oracle`` fits the true structure and ``random`` one drawn
+per ``(d, rep)``. ``selected`` fits the structure :func:`select_structure`
+picks from the probability integral transforms of the arm's own fitted
+margins, so it varies with ``n``. Each NPCC arm's runtime row records the
+structure it fitted, and ``selected``'s the seconds its selection took.
+
 **Scoring.** At each evaluation ``x``, ``m`` points are drawn from the true
 distribution there, and the estimate is scored by Monte-Carlo integrals under
 the truth: ``KL = E[log f - log f_hat]``, ``L1 = E[|f_hat / f - 1|]`` (the
@@ -29,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from collections.abc import Mapping
 from time import perf_counter
 from typing import Any, cast
@@ -42,6 +49,7 @@ from pyvinecopulib.core import (
   NonSimplifiedContext,
   SimplifiedContext,
 )
+from pyvinecopulib.core.extend import to_numpy
 
 from npcc.core.controls import FitControlsRosenblattVinecop
 from npcc.core.margin import QuantileTableConfig
@@ -90,6 +98,32 @@ def random_structure_for(base_seed: int, d: int, rep: int) -> pv.RVineStructure:
   return pv.RVineStructure.sample(
     d, seeds=[derive_seed(base_seed, "random", d, rep)]
   )
+
+
+def select_structure(u: torch.Tensor) -> pv.RVineStructure:
+  """The structure Dissmann's algorithm with TLL pairs selects on ``u``.
+
+  E3d's ``tll-ns`` call (``scripts/paper/e3/e3d_npcc_fit.py``): pyvinecopulib's
+  compiled selection with TLL as the only family, otherwise default
+  controls, on one thread. It sees the copula-scale data only, not ``x``.
+
+  Parameters
+  ----------
+  u : torch.Tensor, shape (n, d)
+      Copula-scale observations.
+
+  Returns
+  -------
+  pyvinecopulib.RVineStructure
+      The selected structure.
+  """
+  controls = pv.FitControlsVinecop(
+    family_set=[pv.BicopFamily.tll], num_threads=1
+  )
+  data = to_numpy(u, dtype=np.float64)
+  # pyvinecopulib's compiled `Vinecop` is untyped here.
+  selected = pv.Vinecop.from_data(data, controls=controls).structure
+  return cast("pv.RVineStructure", selected)
 
 
 def regime_fingerprint() -> dict[str, list[float]]:
@@ -158,15 +192,22 @@ def _score_both(
 def _fit_npcc(
   arm: str,
   est: EstimatorSpec,
-  structure: pv.RVineStructure,
+  structure: pv.RVineStructure | None,
   y: torch.Tensor,
   x: torch.Tensor,
   *,
   device: str | None,
   projection_grid_size: int,
   batch_size: int | None,
-) -> tuple[RosenblattVinedist, RosenblattVinecop]:
-  """Fit one NPCC arm; return the distribution and its (fitted) copula."""
+) -> tuple[RosenblattVinedist, RosenblattVinecop, float]:
+  """Fit one NPCC arm; return the distribution, its copula, the selection time.
+
+  With ``structure=None`` the margins are fitted first, as
+  :meth:`RosenblattVinedist.fit` fits them, and :func:`select_structure`
+  picks the structure from their probability integral transforms. The vine
+  is then fitted on it, and the two parts are composed. The selection time
+  is ``nan`` when a structure is given.
+  """
   context: ConditioningContext[torch.Tensor] = (
     SimplifiedContext() if arm == "oracle" else NonSimplifiedContext()
   )
@@ -189,10 +230,24 @@ def _fit_npcc(
       batch_size=controls.batch_size,
       backend_kwargs=controls.backend_kwargs,
     )
-    for _ in range(structure.dim)
+    for _ in range(y.shape[1])
   ]
+  if structure is not None:
+    vine = RosenblattVinecop(None, structure, device=device, context=context)
+    dist = RosenblattVinedist(vine, margins).fit(y, controls, x=x)
+    return dist, vine, math.nan
+  # `RosenblattVinedist.fit` in two halves, with the selection between them:
+  # each margin is fitted on its column with no margin controls, and the
+  # copula on the transforms `copula_data` assembles from those margins.
+  for j, margin in enumerate(margins):
+    margin.fit(y[:, j], None, x=x)
+  u = RosenblattVinedist.copula_data(margins, y, x=x)
+  t0 = perf_counter()
+  structure = select_structure(u)
+  selection_time = perf_counter() - t0
   vine = RosenblattVinecop(None, structure, device=device, context=context)
-  return RosenblattVinedist(vine, margins).fit(y, controls, x=x), vine
+  vine.fit(u, controls, x=x)
+  return RosenblattVinedist(vine, margins), vine, selection_time
 
 
 def _metric_rows(
@@ -229,9 +284,10 @@ def summarize_one_cell(
     grid.eval_m,
     derive_seed(base_seed, "eval", cell.d, cell.rep),
   )
-  structures = {
+  structures: dict[str, pv.RVineStructure | None] = {
     "oracle": truth.structure,
     "random": random_structure_for(base_seed, cell.d, cell.rep),
+    "selected": None,
   }
   cell_seed = derive_seed(base_seed, "cell", cell.d, cell.n, cell.rep)
   cell_base = {"d": cell.d, "n": cell.n, "rep": cell.rep, "seed": cell_seed}
@@ -240,7 +296,10 @@ def summarize_one_cell(
   runtime_rows: Rows = []
 
   def _record(
-    base: Mapping[str, object], fit_time: float, pdf_time: float
+    base: Mapping[str, object],
+    fit_time: float,
+    pdf_time: float,
+    **extra: object,
   ) -> None:
     memory = memory_usage()
     logger.info(
@@ -262,6 +321,7 @@ def summarize_one_cell(
         "fit_time": fit_time,
         "pdf_time": pdf_time,
         "total_time": fit_time + pdf_time,
+        **extra,
         **memory,
       }
     )
@@ -279,7 +339,7 @@ def summarize_one_cell(
       torch.manual_seed(derive_seed(cell_seed, arm, est.estimator_id))
       reset_gpu_peaks()
       t0 = perf_counter()
-      dist, vine = _fit_npcc(
+      dist, vine, selection_time = _fit_npcc(
         arm,
         est,
         structures[arm],
@@ -303,7 +363,13 @@ def summarize_one_cell(
         )
       pdf_time = perf_counter() - t0
       metric_rows += _metric_rows(base, points, preds, copula_preds)
-      _record(base, fit_time, pdf_time)
+      _record(
+        base,
+        fit_time,
+        pdf_time,
+        structure=json.dumps(np.asarray(vine.structure.matrix).tolist()),
+        selection_time=selection_time,
+      )
       del dist, vine
       release_gpu()
 

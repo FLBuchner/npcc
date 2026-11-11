@@ -25,10 +25,14 @@ from npcc.experiments.config import (
 # `oracle`: the true structure, a simplified context (pairs see `x` only).
 # `random`: a uniformly drawn structure, a non-simplified context, because a
 #   wrong structure makes the truth depend on each edge's conditioning set.
+# `selected`: the structure that Dissmann's algorithm with TLL pairs selects
+#   on the probability integral transforms of the arm's own fitted margins,
+#   ignoring `x`, with a non-simplified context as for `random`. This is what
+#   a user who does not know the structure would fit.
 # `tll`: pyvinecopulib with kernel-density margins and TLL pairs on the true
 #   structure, ignoring `x` -- what leaving the covariate out costs.
-ARMS: tuple[str, ...] = ("oracle", "random", "tll")
-NPCC_ARMS: tuple[str, ...] = ("oracle", "random")
+ARMS: tuple[str, ...] = ("oracle", "random", "selected", "tll")
+NPCC_ARMS: tuple[str, ...] = ("oracle", "random", "selected")
 
 
 @dataclass(frozen=True)
@@ -80,7 +84,8 @@ class VineGridConfig:
       raise ValueError(f"arms must be unique; got {self.arms}")
     if any(a in NPCC_ARMS for a in self.arms) and not self.estimators:
       raise EstimatorConfigError(
-        "estimators must be non-empty when an NPCC arm (oracle, random) runs"
+        f"estimators must be non-empty when an NPCC arm "
+        f"({', '.join(NPCC_ARMS)}) runs"
       )
     external = [e.label for e in self.estimators if e.kind != "backend"]
     if external:
