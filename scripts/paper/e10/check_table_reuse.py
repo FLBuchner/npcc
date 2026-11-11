@@ -32,6 +32,7 @@ Usage (from the npcc repository root, on a free GPU)::
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import sys
 from collections.abc import Callable, Iterator
@@ -84,6 +85,18 @@ def reuse(on: bool) -> Iterator[None]:
     ConditionalMargin._predict_quantile_table = original
 
 
+def forget_tables() -> None:
+  """Drop every margin's kept table, so a pass starts as a fresh call does.
+
+  A pass evaluates the same points as the one before it, so without this the
+  tables the previous pass left behind would answer its first reads, and the
+  timing would credit reuse with work it never saved within one evaluation.
+  """
+  for obj in gc.get_objects():
+    if isinstance(obj, ConditionalMargin):
+      obj._last_table = None
+
+
 def three_passes(
   evaluate: Callable[[], dict[str, torch.Tensor]], device: str
 ) -> dict[str, object]:
@@ -91,6 +104,7 @@ def three_passes(
   outs: list[dict[str, torch.Tensor]] = []
   seconds: list[float] = []
   for on in (False, True, False):
+    forget_tables()
     with reuse(on), torch.inference_mode():
       if device == "cuda":
         torch.cuda.synchronize()
