@@ -1,0 +1,52 @@
+# E9c: E9 at n = 10000 (scripts/paper/README.md, E9).
+#
+# Whether the two gaps E9 leaves at n = 2000 close with more data: the cost
+# of the inert covariates to TabPFN v3 under the interaction, and gamCopula's
+# lead under gampcc. E9's [grid] at n = [10000], without `constant`, whose
+# inert covariates already cost almost nothing at n <= 2000. Every other
+# field, and every estimator with its backend settings, is E9's, so each
+# estimator_id is E9's (and E1's) and the covariate points are E9's.
+#
+# Run with npcc-covstudy as E9. The R competitors are
+# configs/e9c_covariates_n10000_r.toml, on this same [grid].
+
+[grid]
+families = ["clayton", "gaussian"]
+scenarios = ["gampcc", "interaction"]
+n = [10000]
+n_rep = 10
+
+n_points = 20
+uv_grid_n = 20
+holdout_n = 2000
+
+active_covariates = ["tabpfn-quantiles-v3-probit-active"]
+without_covariates = ["tabpfn-quantiles-v3-probit-none"]
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[grid.estimators]]
+label = "tabicl-probit"
+backend = "tabicl"
+transform = "probit"
+
+[[grid.estimators]]
+label = "lightgbm-probit"
+backend = "lightgbm"
+transform = "probit"
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit-active"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit-none"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }

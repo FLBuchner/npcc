@@ -1,0 +1,32 @@
+# E9c's R competitors (scripts/paper/README.md, E9), on
+# configs/e9c_covariates_n10000.toml's [grid], so they fit exactly its cells'
+# data and are scored at its points and draws.
+#
+# gamCopula's two arms, E9's scripts at E9's settings. boostCopula is left
+# out: a fit took about 1300 s at n = 2000 in E9, so at n = 10000 a single
+# fit would take hours.
+#
+# Run with npcc-covstudy --device cpu, single-threaded shards as E1b.
+
+[grid]
+families = ["clayton", "gaussian"]
+scenarios = ["gampcc", "interaction"]
+n = [10000]
+n_rep = 10
+n_points = 20
+uv_grid_n = 20
+holdout_n = 2000
+
+[[grid.estimators]]
+label = "gamcopula-select"
+backend = "gamCopula"
+transform = "identity"
+kind = "external_r"
+script = "r_methods/fit_gamcopula_select.R"
+
+[[grid.estimators]]
+label = "gamcopula-oracle"
+backend = "gamCopula"
+transform = "identity"
+kind = "external_r"
+script = "r_methods/fit_gamcopula_oracle.R"

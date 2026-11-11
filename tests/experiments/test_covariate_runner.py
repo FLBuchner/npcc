@@ -11,7 +11,7 @@ import json
 import shutil
 import subprocess
 import sys
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pandas as pd
@@ -164,6 +164,39 @@ def test_the_v35_arm_is_e1s_v35_on_e9s_cells() -> None:
   assert est.label == "tabpfn-quantiles-v3.5-probit"
   assert est.estimator_id in _e1_ids()
   assert v35.covariates(est) == "all"
+
+
+def test_e9c_is_e9_at_n_10000() -> None:
+  """E9c must differ from E9 only in its sample size and scenarios.
+
+  It asks whether E9's gaps close with more data, so any other ``[grid]``
+  field, or an estimator id other than E9's, would change what is compared
+  besides n. Its R config must hold E9's gamCopula pair on the same cells.
+  """
+  e9 = load_covariate_grid(_ROOT / "configs" / "e9_covariates.toml")
+  e9_r = load_covariate_grid(_ROOT / "configs" / "e9_covariates_r.toml")
+  backends = load_covariate_grid(
+    _ROOT / "configs" / "e9c_covariates_n10000.toml"
+  )
+  external = load_covariate_grid(
+    _ROOT / "configs" / "e9c_covariates_n10000_r.toml"
+  )
+  _same_grid(external, backends)
+  assert backends.n == [10000]
+  assert backends.scenarios == ["gampcc", "interaction"]
+  e9_at_n = replace(e9, n=backends.n, scenarios=backends.scenarios)
+  _same_grid(backends, e9_at_n)
+  assert len(backends.cells()) == 2 * 2 * 1 * 10
+  assert [e.estimator_id for e in backends.estimators] == [
+    e.estimator_id for e in e9.estimators
+  ]
+  assert backends.active_covariates == e9.active_covariates
+  assert backends.without_covariates == e9.without_covariates
+  assert [(e.label, e.estimator_id) for e in external.estimators] == [
+    (e.label, e.estimator_id)
+    for e in e9_r.estimators
+    if e.label.startswith("gamcopula")
+  ]
 
 
 @pytest.mark.parametrize(

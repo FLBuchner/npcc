@@ -307,6 +307,19 @@ with Clayton and Gaussian copulas:
   - Add that folder to the analysis's `--with`, beside the R run. The
     analysis then pairs it with TabPFN v3 like every other estimator.
   - The main text's TabPFN stays v3, as E1 fixed before E9 ran.
+- E9c, E9 at n = 10000:
+  - **Why.** It asks whether E9's two gaps at n = 2000 close with more
+    data: what the inert covariates cost TabPFN v3 under `interaction`, and
+    gamCopula's lead under `gampcc`.
+  - **Config.** `configs/e9c_covariates_n10000.toml` and
+    `configs/e9c_covariates_n10000_r.toml` are E9's two configs at
+    `n = [10000]`, without `constant`, whose inert covariates already cost
+    almost nothing at n <= 2000. Every other `[grid]` field and every
+    estimator id is E9's, so the covariate points are E9's too.
+  - **R arms.** gamCopula's two arms only. A boostCopula fit took about
+    1300 s at n = 2000, so at n = 10000 one fit would take hours.
+  - **Run and analysis.** As E9's, into `results/study_covariates_n10000_<TAG>`
+    and `..._r`.
 
 ## E2 — vine study (§3.4)
 
