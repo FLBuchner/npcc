@@ -636,3 +636,39 @@ def test_a_conditioning_variable_is_not_read_as_a_pair_argument() -> None:
   # 0.04; this one about 0.
   kl = float(np.mean(np.log(pdf) - np.log(fit.copula_pdf.numpy())))
   assert kl < 0.02
+
+
+@needs_r
+def test_a_structure_selection_whose_first_candidate_pair_is_not_adjacent() -> (
+  None
+):
+  """A selection must not stop when the next tree's first candidate fails.
+
+  gamCopula builds each next tree's candidate graph by setting its edges'
+  conditioning sets one at a time, from none, and leaves the edges that break
+  the proximity condition unset. When the first candidate is one of them,
+  igraph >= 2 refuses the short attribute it is handed, and the selection
+  stops with "Length of new attribute value must be 1 or <ecount>"; it did on
+  a fifth of E2's d = 5 cells. This sample's second tree starts with such a
+  candidate.
+  """
+  g = torch.Generator().manual_seed(1)
+  a = torch.randn(4, 4, generator=g, dtype=torch.float64)
+  s = a.T @ a
+  sd = s.diag().sqrt()
+  chol = torch.linalg.cholesky(s / sd[:, None] / sd[None, :])
+  y = torch.randn(200, 4, generator=g, dtype=torch.float64) @ chol.T
+  x = torch.rand(200, 1, generator=g, dtype=torch.float64)
+  y_test = torch.randn(20, 4, generator=g, dtype=torch.float64) @ chol.T
+  u_test: torch.Tensor = torch.special.ndtr(y_test)
+  x_test = torch.rand(20, 1, generator=g, dtype=torch.float64)
+  fit = _external_vine.fit_and_evaluate(
+    str(_SCRIPT),
+    (y, x),
+    (y_test, u_test, x_test),
+    arm="gamvine-selected",
+    seed=1,
+    name="selected",
+  )
+  assert len(_external_vine.edges(fit.structure)) == 6
+  assert bool(torch.isfinite(fit.pdf).all())

@@ -534,7 +534,7 @@ with Clayton and Gaussian copulas:
     every fit. Each runtime row records the fitted structure and, in
     `pairs`, every pair copula's family, kind and calibration function. A
     fit that fails is recorded with nan metrics and its `error`.
-  - **Two gamCopula 0.0.8 defects, worked around in the script.** In a
+  - **Three gamCopula 0.0.8 defects, worked around in the script.** In a
     vine, it stores a negatively dependent pair's double family with its
     90- and 270-degree rotations exchanged (`gamVineCopSelect` with its
     default `rotations = TRUE`), and `gamVineStructureSelect` fits each next
@@ -542,8 +542,16 @@ with Clayton and Gaussian copulas:
     a conditioning variable named `u1` or `u2` as its own argument. The
     script passes `rotations = FALSE` (the same family set), runs the
     structure selection with each pair's h-functions its own, and names the
-    copula columns `v1`, ..., `vd`; `tests/experiments/test_gamvine.py`
-    shows each defect's cost.
+    copula columns `v1`, ..., `vd`. And with igraph >= 2,
+    `gamVineStructureSelect` stops ("Length of new attribute value must be
+    1 or ...") whenever a next tree's first candidate pair breaks the
+    proximity condition: gamCopula sets the candidates' conditioning sets one
+    at a time from none, which older igraph recycled with a warning. It
+    stopped the selected and non-simplified fits on 10 of E2's 40 d = 5
+    cells in a first run. The script starts those attributes as full-length
+    lists, which changes no selected vine (a cell that ran before gives the
+    same densities to every digit). `tests/experiments/test_gamvine.py` shows
+    each defect's cost or failure.
   - **Configs.** One per E2 run it pairs with, every key but `arms` and the
     script E2's: `configs/vine_study_gamvine.toml` (d = 3, 5),
     `configs/vine_study_gamvine_d10.toml` (d = 10), and their `_n2000`

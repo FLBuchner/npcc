@@ -308,12 +308,42 @@ pair_table <- function(object) {
   do.call(rbind, rows)
 }
 
+# gamCopula's buildNextGraph with its edge attributes made full-length first.
+# It sets `E(g)$conditionedSet[i]` and `E(g)$conditioningSet[i]` edge by
+# edge, starting from no attribute at all, and leaves the edges that break
+# the proximity condition unset. When the first edge of the candidate graph
+# is one of those, the first assignment builds a list of length i > 1, which
+# igraph >= 2 refuses ("Length of new attribute value must be 1 or <ecount>")
+# where older igraph recycled it with a warning gamCopula suppresses. Every
+# edge it keeps is assigned its own value either way, and the others are
+# deleted, so starting from empty lists of full length changes no selected
+# vine: it only removes the failure, which stopped a fifth of E2's d = 5
+# structure selections. Stops unless the function builds its graph where this
+# expects.
+next_graph <- function(ns) {
+  f <- get("buildNextGraph", envir = ns)
+  b <- as.list(body(f))
+  at <- which(vapply(b, function(e) identical(e, quote(g <- graph.full(d))),
+                     logical(1)))
+  if (length(at) != 1) {
+    refuse("gamCopula's buildNextGraph must build its graph with ",
+           "`g <- graph.full(d)`; this gamCopula differs from the 0.0.8 this ",
+           "script was written against")
+  }
+  init <- list(
+    quote(E(g)$conditionedSet <- vector("list", ecount(g))),
+    quote(E(g)$conditioningSet <- vector("list", ecount(g)))
+  )
+  body(f) <- as.call(append(b, init, after = at))
+  f
+}
+
 # gamVineStructureSelect with each pair's h-functions those of the copula it
 # fitted (see **Rotations**): copies of it and of the two tree fitters it
 # calls, whose scope finds a pair fitter that fits unswapped and swaps the
-# stored family after. Each copy keeps the package namespace as its scope's
-# parent. Stops unless the package calls its pair fitter where this replaces
-# it.
+# stored family after, and `next_graph`'s buildNextGraph. Each copy keeps the
+# package namespace as its scope's parent. Stops unless the package calls its
+# pair fitter where this replaces it.
 structure_select <- function() {
   ns <- asNamespace("gamCopula")
   scope <- new.env(parent = ns)
@@ -347,6 +377,9 @@ structure_select <- function() {
     assign(f, copy, envir = scope)
   }
   assign("wrapper.fitACopula", fit_pair, envir = scope)
+  graph <- next_graph(ns)
+  environment(graph) <- scope
+  assign("buildNextGraph", graph, envir = scope)
   get("gamVineStructureSelect", envir = scope)
 }
 
