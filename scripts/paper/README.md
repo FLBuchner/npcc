@@ -216,13 +216,18 @@ with Clayton and Gaussian copulas:
 - **gampcc:** Vatter and Nagler's partially linear predictor, `eta =
   (b1 + b2 - b3)/4 + (z1 - z2 - z3)/4 + s1(t1) + s2(t2) + s3(t3)`, with
   `s1(t) = -1/4 + t/2`, `s2(t) = sin(2 pi t)/4` and `s3(t) = sin(6 pi t)/4`,
-  mapped to the parameter by gamCopula's link: `rho = tanh(eta/2)` for the
-  Gaussian, and for the Clayton gamCopula's double Clayton type I, the
-  Clayton at `eta` where `eta > 0` and the Clayton rotated by 90 degrees at
-  `|eta|` below, so Kendall's tau changes sign. pyvinecopulib's rotated
-  Clayton equals VineCopula's family 23 at `-theta` to every printed digit;
-  `|eta|` is floored at pyvinecopulib's Clayton bound, `1e-10`. Nine
-  covariates have an effect, six none.
+  which calibrates Kendall's tau, `tau = tanh(eta/2)`, for either family:
+  gamCopula's `tau = TRUE` link, with which Vatter and Nagler's true model
+  was built. The Gaussian has `rho = sin(pi tau/2)`; the Clayton is
+  gamCopula's double Clayton type I, the Clayton at `theta = 2 tau/(1 - tau)`
+  where `tau > 0` and the Clayton rotated by 90 degrees at that of `|tau|`
+  below, so Kendall's tau changes sign. pyvinecopulib's rotated Clayton
+  equals VineCopula's family 23 at `-theta` to every printed digit, and a
+  gamCopula fit whose predictor is the true `eta` predicts the true tau to
+  `2e-8` and parameter to `1e-6` relative (gamCopula shrinks tau by `1 -
+  1e-8`; `tests/experiments/test_covariate_scenarios.py`); `theta` is
+  floored at pyvinecopulib's Clayton bound, `1e-10`. Nine covariates have an
+  effect, six none.
 - **interaction:** E1's `linear` regime in `t1` where `b1 = 0` and its `sin`
   regime where `b1 = 1`. Two covariates have an effect, and an additive
   model without a `t1 x b1` term is misspecified.
@@ -241,13 +246,24 @@ with Clayton and Gaussian copulas:
     (`active_covariates`; not fitted under null), and on `(U, V)` alone
     (`without_covariates`).
   - gamCopula as Vatter and Nagler run it, `gamBiCopSelect` with the `b`
-    and `z` linear and the `t` smooth (`r_methods/fit_gamcopula_select.R`);
-    gamCopula with the scenario's true formula
-    (`r_methods/fit_gamcopula_true.R`); and boostCopula with the `b` and `z`
-    as linear columns and a cubic B-spline basis per `t`, stopped by 10-fold
-    cross-validation (`r_methods/fit_boostcopula_smooth_cv_covariates.R`).
-    Each script receives every covariate and the cell's scenario
-    (`npcc.experiments._external`).
+    and `z` linear and the `t` smooth, `s(t, k = 10, bs = "cr")`, from
+    E1b's family set (Gaussian, Student t, the double Clayton and Gumbel
+    with every rotation), with their `n.iters = 30` and `select.once =
+    FALSE` (`r_methods/fit_gamcopula_select.R`).
+  - The oracle, gamCopula with the cell's true family and the scenario's
+    true formula (`r_methods/fit_gamcopula_oracle.R`): under `gampcc`, `b1 +
+    b2 + b3 + z1 + z2 + z3` and a smooth of each of `t1..t3`; under
+    `interaction`, `s(t1, by = b1) + b1` with `b1` a factor; under `null`,
+    the intercept.
+  - boostCopula with the `b` and `z` as linear columns and a cubic B-spline
+    basis per `t` (`df = 9`, boundary knots `[0, 1]`), stopped by 10-fold
+    cross-validation with E1b's cap, `maxit = 5000`
+    (`r_methods/fit_boostcopula_smooth_cv_covariates.R`). E1b's stops reach
+    the cap's last 5% in 8 of its 160 fits, so a lower cap would change
+    fits.
+  - Each script receives every covariate, the cell's scenario and its
+    family (`npcc.experiments._external`), and logs one line on its fit:
+    the family chosen, the covariates kept, and boostCopula's stop.
 - Scoring: 20 covariate points per scenario, drawn from the covariate
   distribution with a seed of the scenario's own, so every family, n, rep
   and estimator is scored at the same points (`points.parquet` lists them).
@@ -263,7 +279,12 @@ with Clayton and Gaussian copulas:
   writes `kl.csv` (the main text's table: KL by scenario x n x estimator,
   averaged over points and families within each rep, with its paired
   difference from TabPFN v3 on every covariate), `kl_by_family.csv`,
-  `iae.csv` and `per_point.csv` into the npcc run's `analysis/`.
+  `iae.csv`, `per_point.csv` and `failures.csv` (every fit that failed, each
+  missing from every mean) into the npcc run's `analysis/`, and from the R
+  scripts' logged lines `fits.csv` and `fits_summary.csv`: per estimator,
+  scenario and n, how often the chosen family is the true one, the active
+  and inert covariates kept, and how many of boostCopula's stops landed
+  within 5% of the cap.
 
 ## E2 — vine study (§3.4)
 

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import math
+import shutil
+import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -39,22 +42,24 @@ def test_only_the_active_covariates_move_the_copula(
     assert changed == (name in cs.ACTIVE[scenario]), name
 
 
-def test_gampcc_takes_gamcopulas_link() -> None:
+@pytest.mark.parametrize("family", cs.SCENARIO_FAMILIES)
+def test_gampcc_calibrates_kendalls_tau(family: str) -> None:
   """The truth must be the model gamCopula fits, or its formula is not true.
 
-  gamCopula's link is ``rho = tanh(eta / 2)`` for the Gaussian and, for its
-  double Clayton type I, ``theta = eta``: the Clayton for ``eta > 0`` and the
-  Clayton rotated by 90 degrees at ``|eta|`` below, whose tau is negative.
+  gamCopula's fits calibrate Kendall's tau, ``tau = tanh(eta / 2)``, for
+  every family; the parameter follows from tau. A link on the parameter, as
+  its ``tau = FALSE`` has, would leave the oracle's formula misspecified.
+  The Clayton's tau is negative where ``eta`` is, by its rotation.
   """
   x = _x()
   eta = cs.eta(x)
   assert (eta < 0).any() and (eta > 0).any()
-  clayton = cs.kendall_tau("clayton", "gampcc", x)
-  expected = torch.sign(eta) * eta.abs() / (eta.abs() + 2.0)
-  torch.testing.assert_close(clayton, expected, rtol=0.0, atol=1e-12)
-  gaussian = cs.kendall_tau("gaussian", "gampcc", x)
-  expected = 2.0 / math.pi * torch.asin(torch.tanh(eta / 2.0))
-  torch.testing.assert_close(gaussian, expected, rtol=0.0, atol=1e-12)
+  torch.testing.assert_close(
+    cs.kendall_tau(family, "gampcc", x),
+    torch.tanh(eta / 2.0),
+    rtol=0.0,
+    atol=1e-12,
+  )
 
 
 def test_gampcc_eta_is_vatter_and_naglers() -> None:
@@ -63,13 +68,104 @@ def test_gampcc_eta_is_vatter_and_naglers() -> None:
   for name, value in {
     "b1": 1,
     "b3": 1,
+    "z1": 1.0,
     "z2": 2.0,
     "t1": 1.0,
     "t2": 0.25,
+    "t3": 1.0 / 12.0,
   }.items():
     x[0, cs.column(name)] = value
-  # b: (1 - 1) / 4; z: -2 / 4; s1(1) = 1/4; s2(1/4) = 1/4; s3(0) = 0.
-  assert float(cs.eta(x)[0]) == pytest.approx(-0.5 + 0.25 + 0.25, abs=1e-15)
+  # b: (1 - 1) / 4; z: (1 - 2) / 4; s1(1) = 1/4; s2(1/4) = 1/4;
+  # s3(1/12) = 1/4. Flipping any one sign moves eta by at least 1/2.
+  eta = 0.0 - 0.25 + 0.25 + 0.25 + 0.25
+  assert float(cs.eta(x)[0]) == pytest.approx(eta, abs=1e-15)
+  for family in cs.SCENARIO_FAMILIES:
+    tau = float(cs.kendall_tau(family, "gampcc", x)[0])
+    assert tau == pytest.approx(math.tanh(eta / 2.0), abs=1e-15)
+
+
+def _r_has(package: str) -> bool:
+  rscript = shutil.which("Rscript")
+  if rscript is None:
+    return False
+  done = subprocess.run(
+    [rscript, "-e", f"library({package})"], capture_output=True, check=False
+  )
+  return done.returncode == 0
+
+
+#: Fits ``family`` with the formula ``~ e``, sets its coefficients so that
+#: the calibration function is ``e`` itself, and predicts tau and the
+#: parameter where ``e`` is each value of ``eta.csv``.
+_GAMCOPULA_AT_ETA = """\
+suppressPackageStartupMessages({library(gamCopula); library(VineCopula)})
+args <- commandArgs(trailingOnly = TRUE)
+eta <- read.csv(args[[1]])$eta
+set.seed(1)
+n <- 200
+fitted <- gamBiCopFit(
+  data.frame(u1 = runif(n), u2 = runif(n), e = rnorm(n)), ~ e,
+  family = as.integer(args[[2]]), tau = TRUE, n.iters = 1
+)$res
+fitted@model$coefficients[] <- c(0, 1)
+at <- gamBiCopPredict(
+  fitted, newdata = data.frame(e = eta), target = c("calib", "tau", "par")
+)
+out <- data.frame(calib = at$calib, tau = at$tau, par = at$par)
+write.csv(
+  data.frame(lapply(out, sprintf, fmt = "%.17g")), args[[3]],
+  row.names = FALSE, quote = FALSE
+)
+"""
+
+
+@pytest.mark.skipif(
+  not _r_has("gamCopula"), reason="needs Rscript with gamCopula"
+)
+@pytest.mark.parametrize(
+  ("family", "code"), [("gaussian", 1), ("clayton", 301)]
+)
+def test_the_truth_is_what_gamcopula_predicts_at_its_eta(
+  tmp_path: Path, family: str, code: int
+) -> None:
+  """The oracle is correctly specified only if gamCopula's model is the truth.
+
+  A gamCopula fit of the true family whose calibration function is the true
+  ``eta`` must predict the true tau and parameter. gamCopula shrinks tau by
+  a factor ``1 - 1e-8`` at prediction, hence the tolerance; the double
+  Clayton's parameter is VineCopula's, negative for the 90-degree rotation.
+  """
+  x = _x(n=300, seed=5)
+  eta = cs.eta(x)
+  (tmp_path / "eta.csv").write_text(
+    "eta\n" + "\n".join(f"{v:.17g}" for v in eta.tolist()) + "\n"
+  )
+  script = tmp_path / "at_eta.R"
+  script.write_text(_GAMCOPULA_AT_ETA)
+  out = tmp_path / "out.csv"
+  subprocess.run(
+    [
+      shutil.which("Rscript") or "Rscript",
+      str(script),
+      str(tmp_path / "eta.csv"),
+      str(code),
+      str(out),
+    ],
+    check=True,
+    capture_output=True,
+  )
+  r = np.loadtxt(out, delimiter=",", skiprows=1)
+  np.testing.assert_allclose(r[:, 0], eta.numpy(), rtol=0.0, atol=1e-12)
+  tau = cs.kendall_tau(family, "gampcc", x).numpy()
+  np.testing.assert_allclose(r[:, 1], tau, rtol=0.0, atol=2e-8)
+  cops = cs.copulas(family, "gampcc", x)
+  par = np.array(
+    [
+      float(c.parameters.item()) * (-1.0 if c.rotation == 90 else 1.0)
+      for c in cops
+    ]
+  )
+  np.testing.assert_allclose(r[:, 2], par, rtol=1e-6, atol=1e-9)
 
 
 def test_a_zero_eta_is_a_valid_clayton() -> None:

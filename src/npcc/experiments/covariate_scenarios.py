@@ -11,12 +11,14 @@ Each scenario (:data:`SCENARIOS`) is a copula of one of E1's families whose
 parameter depends on some of the covariates:
 
 - ``gampcc``: Vatter and Nagler's partially linear predictor,
-  ``eta = beta_b'b + beta_z'z + s_1(t_1) + s_2(t_2) + s_3(t_3)``, mapped to
-  the parameter by gamCopula's link: ``rho = tanh(eta / 2)`` for the
-  Gaussian, and for the Clayton its double Clayton type I, ``theta = eta``,
-  which is the Clayton for ``eta > 0`` and the Clayton rotated by 90 degrees
-  at ``|eta|`` for ``eta < 0``. Kendall's tau therefore changes sign, which
-  it does nowhere in E1. Nine covariates have an effect, six none.
+  ``eta = beta_b'b + beta_z'z + s_1(t_1) + s_2(t_2) + s_3(t_3)``, which
+  calibrates Kendall's tau, ``tau = tanh(eta / 2)``, for either family: the
+  link of gamCopula's ``tau = TRUE``, the default its study's true model was
+  built with. The Gaussian then has ``rho = sin(pi tau / 2)``; the Clayton is
+  gamCopula's double Clayton type I, the Clayton at ``theta = 2 tau / (1 -
+  tau)`` where ``tau > 0`` and the Clayton rotated by 90 degrees at that of
+  ``|tau|`` below. Kendall's tau therefore changes sign, which it does
+  nowhere in E1. Nine covariates have an effect, six none.
 - ``interaction``: Kendall's tau is E1's ``linear`` regime in ``t_1`` where
   ``b_1 = 0`` and E1's ``sin`` regime where ``b_1 = 1``, so an additive
   model without a ``t_1 x b_1`` term is misspecified. Two covariates have an
@@ -82,7 +84,7 @@ NULL_TAU: float = 0.5
 _EPS: float = 1e-9
 
 _CLAYTON = pv.Bicop(family=pv.BicopFamily.clayton)
-#: pyvinecopulib's bounds on the Clayton parameter. ``|eta|`` is floored at
+#: pyvinecopulib's bounds on the Clayton parameter. ``theta`` is floored at
 #: the lower one, ``1e-10``, where the copula is independence to every digit a
 #: density carries; ``eta`` is exactly zero with probability zero.
 CLAYTON_BOUNDS: tuple[float, float] = (
@@ -155,6 +157,24 @@ def eta(x: torch.Tensor) -> torch.Tensor:
   return b @ beta_b + z @ beta_z + smooth
 
 
+def gampcc_tau(x: torch.Tensor) -> torch.Tensor:
+  """The ``gampcc`` scenario's Kendall's tau at each row of ``x``.
+
+  ``tanh(eta / 2)``, for either family: gamCopula's calibration of tau.
+
+  Parameters
+  ----------
+  x : torch.Tensor
+      ``(m, 15)`` covariates, in :data:`COVARIATES` order.
+
+  Returns
+  -------
+  torch.Tensor
+      ``(m,)``, in ``float64``, in ``(-1, 1)``.
+  """
+  return torch.tanh(eta(x) / 2.0)
+
+
 def _interaction_tau(x: torch.Tensor) -> torch.Tensor:
   t1 = x[:, column("t1")]
   b1 = x[:, column("b1")].round().long()
@@ -189,20 +209,21 @@ def copulas(family: str, scenario: str, x: torch.Tensor) -> list[pv.Bicop]:
   x = _check_x(x)
   if scenario == "gampcc":
     out = []
-    for value in eta(x).tolist():
+    for tau in gampcc_tau(x).tolist():
       if family == "gaussian":
         out.append(
           pv.Bicop(
             family=pv.BicopFamily.gaussian,
-            parameters=np.array([[math.tanh(value / 2.0)]]),
+            parameters=np.array([[math.sin(math.pi * tau / 2.0)]]),
           )
         )
         continue
-      theta = min(max(abs(value), CLAYTON_BOUNDS[0]), CLAYTON_BOUNDS[1])
+      theta = 2.0 * abs(tau) / (1.0 - abs(tau))
+      theta = min(max(theta, CLAYTON_BOUNDS[0]), CLAYTON_BOUNDS[1])
       out.append(
         pv.Bicop(
           family=pv.BicopFamily.clayton,
-          rotation=0 if value >= 0.0 else 90,
+          rotation=0 if tau >= 0.0 else 90,
           parameters=np.array([[theta]]),
         )
       )

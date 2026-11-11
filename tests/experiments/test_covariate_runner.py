@@ -46,7 +46,7 @@ import csv
 import sys
 from pathlib import Path
 
-train_csv, eval_csv, pred_csv, seed, scenario = sys.argv[1:]
+train_csv, eval_csv, pred_csv, seed, scenario, family = sys.argv[1:]
 with open(train_csv, newline="") as fh:
   train_header = next(csv.reader(fh))
 with open(eval_csv, newline="") as fh:
@@ -54,7 +54,8 @@ with open(eval_csv, newline="") as fh:
   header = reader.fieldnames
   points = list(reader)
 with open(Path(__file__).with_suffix(".calls"), "a") as fh:
-  fh.write(" ".join([scenario, ",".join(train_header), ",".join(header)]))
+  fh.write(" ".join([scenario, family, ",".join(train_header),
+                     ",".join(header)]))
   fh.write("\\n")
 timing = {"fit_time": 1.0, "pdf_time": 0.5, "hfunc1_time": 0.25,
           "hfunc2_time": 0.25, "tau_time": 0.0}
@@ -230,10 +231,13 @@ def test_every_estimator_of_a_cell_scores_its_draws() -> None:
   assert not torch.equal(_cell_data(other, grid, 7).holdout.uv, a.holdout.uv)
 
 
-def test_a_script_gets_every_covariate_and_the_scenario(
+def test_a_script_gets_every_covariate_the_scenario_and_the_family(
   tmp_path: Path, stand_in: Path
 ) -> None:
-  """The exchange must hand all fifteen covariates and the scenario.
+  """The exchange must hand all fifteen covariates, the scenario and family.
+
+  The oracle fits the true model, so it reads both; without them it would
+  have to guess the truth from the data.
 
   The stand-in predicts the independence copula, so its KL_mc at each point
   is the mean true log density at that point's draws, exactly.
@@ -242,9 +246,12 @@ def test_a_script_gets_every_covariate_and_the_scenario(
   metric_df, runtime_df, _ = run_covariate_study(grid, RunConfig(out=tmp_path))
   calls = stand_in.with_suffix(".calls").read_text().splitlines()
   header = ",".join(cs.COVARIATES)
-  assert [c.split(" ")[0] for c in calls] == ["gampcc", "null"]
+  assert [c.split(" ")[:2] for c in calls] == [
+    ["gampcc", "clayton"],
+    ["null", "clayton"],
+  ]
   for call in calls:
-    _, train, evaluation = call.split(" ")
+    _, _, train, evaluation = call.split(" ")
     assert train == f"u1,u2,{header}"
     assert evaluation == f"grid,u1,u2,{header}"
 

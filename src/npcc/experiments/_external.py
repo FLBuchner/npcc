@@ -23,10 +23,12 @@ The covariates are named by the caller. E1's studies have one, ``x``, and
 call the script with the four arguments above. E9's
 (:mod:`~npcc.experiments.covariate_scenarios`) has fifteen, ``b1``, ...,
 ``b5`` (each 0 or 1), ``z1``, ..., ``z5`` and ``t1``, ..., ``t5``, and passes
-a fifth argument, the cell's scenario (``gampcc``, ``interaction`` or
-``null``), which a script fitting the true formula reads::
+two more arguments, the cell's scenario (``gampcc``, ``interaction`` or
+``null``) and family (``gaussian`` or ``clayton``), which the oracle, fitting
+the true model, reads::
 
-    Rscript <script> <train.csv> <eval.csv> <pred.csv> <seed> <scenario>
+    Rscript <script> <train.csv> <eval.csv> <pred.csv> <seed> <scenario> \
+      <family>
 
 ``hfunc1`` is ``P(V <= v | U = u)``, the copula's derivative in ``u``, and
 ``hfunc2`` is ``P(U <= u | V = v)``, as everywhere in this package. The echoed

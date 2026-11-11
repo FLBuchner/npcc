@@ -1,6 +1,7 @@
 # E9's R competitors (scripts/paper/README.md, E9), on configs/e9_covariates.toml's
 # [grid], so they fit exactly its cells' data and are scored at its points and
-# draws. Each script is handed all fifteen covariates and the cell's scenario.
+# draws. Each script is handed all fifteen covariates and the cell's scenario
+# and family.
 #
 # Run with npcc-covstudy --device cpu, single-threaded shards as E1b.
 
@@ -22,13 +23,14 @@ transform = "identity"
 kind = "external_r"
 script = "r_methods/fit_gamcopula_select.R"
 
-# gamCopula with the scenario's true formula.
+# The oracle: gamCopula with the cell's true family and the scenario's true
+# formula.
 [[grid.estimators]]
-label = "gamcopula-true"
+label = "gamcopula-oracle"
 backend = "gamCopula"
 transform = "identity"
 kind = "external_r"
-script = "r_methods/fit_gamcopula_true.R"
+script = "r_methods/fit_gamcopula_oracle.R"
 
 # boostCopula: the b and z as linear columns, a cubic B-spline basis per t,
 # stopped by 10-fold cross-validation.

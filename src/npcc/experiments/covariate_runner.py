@@ -375,7 +375,7 @@ def _external_rows(
       seed=derive_seed(data.seed, est.estimator_id),
       name=f"{est.label} on {cell.key}",
       covariates=cs.COVARIATES,
-      extra_args=(cell.scenario,),
+      extra_args=(cell.scenario, cell.family),
     )
   except (RuntimeError, ValueError) as exc:
     # A missing interpreter is this machine's fault, not the method's.
