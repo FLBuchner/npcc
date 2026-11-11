@@ -287,6 +287,19 @@ with Clayton and Gaussian copulas:
   `--config configs/e9_covariates.toml` and `OUT=results/study_covariates_<TAG>`;
   then `configs/e9_covariates_r.toml` into `results/study_covariates_<TAG>_r`
   with `--device cpu`, single-threaded shards as E1b.
+- Ran from a clean worktree at b74aee4, the merge of the E9 pull request,
+  with TAG 2026-11-11. The two runs went at once:
+  - `results/study_covariates_2026-11-11`, the npcc arms: 2 GPU shards,
+    each with 4 threads on cores 0-7 and `--gpu-mem-fraction 0.45`;
+  - `results/study_covariates_2026-11-11_r`, the R competitors: 8
+    single-threaded shards pinned to cores 8-15.
+
+  Each run then took its aggregation pass, and the analysis followed. Each
+  run's `logs/provenance.txt` has the exact commands, its `COMMIT` the
+  worktree's state, and its `logs/` the scripts that launched them. GPU
+  shard 0 failed twice on its first cell with a CUDA error while shard 1
+  shared the GPU, then ran alone after shard 1 ended, with `--resume`. A
+  cell's seeds depend on the cell alone, so the order changes nothing.
 - Analysis: `uv run --no-sync python scripts/paper/e9/analyze.py
   results/study_covariates_<TAG> --with results/study_covariates_<TAG>_r`
   writes `kl.csv` (the main text's table: KL by scenario x n x estimator,
@@ -307,6 +320,12 @@ with Clayton and Gaussian copulas:
   - Add that folder to the analysis's `--with`, beside the R run. The
     analysis then pairs it with TabPFN v3 like every other estimator.
   - The main text's TabPFN stays v3, as E1 fixed before E9 ran.
+  - Ran from a clean worktree at f8878a7, the merge of the v3.5 and
+    selected-structure pull requests, as one GPU process into
+    `results/study_covariates_2026-11-11_v35`. The analysis with both
+    `--with` folders then ran from the same worktree, into
+    `results/study_covariates_2026-11-11/analysis`: the version the paper
+    cites. Its command closes that run's `logs/provenance.txt`.
 
 ## E2 — vine study (§3.4)
 
@@ -349,6 +368,13 @@ with Clayton and Gaussian copulas:
     code changed between b7702e1 and this arm. Its pilot on cell d = 5,
     n = 1000, rep 0 reproduced `results/vine_2026-11-10`'s oracle there bit
     for bit.
+  - **Ran** from a clean worktree at f8878a7 as one GPU process into
+    `results/vine_2026-11-11_selected`. The analysis, with
+    `results/vine_2026-11-10` first and `--with` this folder, wrote into
+    `--out results/vine_2026-11-11_selected/analysis`, which leaves the
+    cited `results/vine_2026-11-10/analysis` as it was. Its `vine_table.csv`
+    is byte-identical to the cited one. The run's `logs/provenance.txt` has
+    both commands.
 - E2 at d = 10:
   - **Config.** `configs/vine_study_d10.toml` is E2 at `dims = [10]`, with all
     four arms in one run (oracle, random, selected, kde-tll).
