@@ -287,6 +287,20 @@ with Clayton and Gaussian copulas:
   `--config configs/e9_covariates.toml` and `OUT=results/study_covariates_<TAG>`;
   then `configs/e9_covariates_r.toml` into `results/study_covariates_<TAG>_r`
   with `--device cpu`, single-threaded shards as E1b.
+- Ran from a clean worktree at b74aee4, the merge of the E9 pull request,
+  with TAG 2026-11-11. The two runs went at once:
+  - `results/study_covariates_2026-11-11`, the npcc arms: 2 GPU shards,
+    each with 4 threads on cores 0-7 and `--gpu-mem-fraction 0.45`;
+  - `results/study_covariates_2026-11-11_r`, the R competitors: 8
+    single-threaded shards pinned to cores 8-15.
+
+  Each run then took its aggregation pass. The analysis the paper cites
+  ran later, with the v3.5 arm (below). Each run's `logs/provenance.txt`
+  has the exact commands, its `COMMIT` the worktree's state, and its
+  `logs/` the scripts that launched them. GPU
+  shard 0 failed twice on its first cell with a CUDA error while shard 1
+  shared the GPU, then ran alone after shard 1 ended, with `--resume`. A
+  cell's seeds depend on the cell alone, so the order changes nothing.
 - Analysis: `uv run --no-sync python scripts/paper/e9/analyze.py
   results/study_covariates_<TAG> --with results/study_covariates_<TAG>_r`
   writes `kl.csv` (the main text's table: KL by scenario x n x estimator,
@@ -307,6 +321,22 @@ with Clayton and Gaussian copulas:
   - Add that folder to the analysis's `--with`, beside the R run. The
     analysis then pairs it with TabPFN v3 like every other estimator.
   - The main text's TabPFN stays v3, as E1 fixed before E9 ran.
+  - Ran from a clean worktree at f8878a7, the merge of the v3.5 and
+    selected-structure pull requests, as one GPU process into
+    `results/study_covariates_2026-11-11_v35`.
+  - The analysis the paper cites then ran from the same worktree at
+    f8878a7, into `results/study_covariates_2026-11-11/analysis`:
+
+    ```bash
+    uv run --no-sync python scripts/paper/e9/analyze.py \
+      results/study_covariates_2026-11-11 \
+      --with results/study_covariates_2026-11-11_r \
+      results/study_covariates_2026-11-11_v35
+    ```
+
+    It replaced the first analysis there, which had the R run alone. Its
+    command closes the npcc run's `logs/provenance.txt`. That folder is
+    frozen: a later analysis of these runs takes `--out`.
 
 ## E2 — vine study (§3.4)
 
@@ -320,6 +350,15 @@ with Clayton and Gaussian copulas:
   cell's seeds depend on the cell alone. A d = 5 shard peaks at about 7 GB,
   since every fitted margin held its own TabPFN model on the GPU before
   f4f17b5.
+- The rerun after E8, the one §3.4 cites: `results/vine_2026-11-10`, from
+  b7702e1 on the same config. It ran as 4 shards (`--shard i/4 --resume
+  --workers 1 --gpu-mem-fraction 0.15`) started at 19:20 on 2026-11-10,
+  then the aggregation pass at 20:50.
+  - **No `logs/` or `COMMIT`.** This run has neither. Its commit and flags
+    come from the `provenance.jsonl` the runner wrote, one line per
+    process, each recording b7702e1 and no uncommitted file.
+  - **Analysis.** The command below, on that folder, wrote
+    `results/vine_2026-11-10/analysis/`.
 - Analysis: `uv run --no-sync python scripts/paper/e2/analyze.py
   results/vine_2026-11-06` writes the table (`vine_table.csv`, in the columns
   of `tab:vine-results`), the figure (`vine_kl_by_x`, PDF and PNG, with the
@@ -349,6 +388,13 @@ with Clayton and Gaussian copulas:
     code changed between b7702e1 and this arm. Its pilot on cell d = 5,
     n = 1000, rep 0 reproduced `results/vine_2026-11-10`'s oracle there bit
     for bit.
+  - **Ran** from a clean worktree at f8878a7 as one GPU process into
+    `results/vine_2026-11-11_selected`. The analysis, with
+    `results/vine_2026-11-10` first and `--with` this folder, wrote into
+    `--out results/vine_2026-11-11_selected/analysis`, which leaves the
+    cited `results/vine_2026-11-10/analysis` as it was. Its `vine_table.csv`
+    is byte-identical to the cited one. The run's `logs/provenance.txt` has
+    both commands.
 - E2 at d = 10:
   - **Config.** `configs/vine_study_d10.toml` is E2 at `dims = [10]`, with all
     four arms in one run (oracle, random, selected, kde-tll).
