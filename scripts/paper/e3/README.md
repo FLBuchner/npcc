@@ -391,7 +391,41 @@ cell left to fit, rewrites `summary.csv` with every method.
   `_members.npy`, the members' (K x 20,000), both float32 with NaN kept;
 - `cells/<arm>/members/`, each finished member's row and float64
   log-densities;
-- `mixture_<arm>.csv` (the rows) and `summary.csv`.
+- `mixture_<arm>.csv` (the rows) and `summary.csv`. The summary also gives,
+  for `tll` and NPCC, the largest difference between member 1's
+  log-densities and those of E3d's `tll` or `tll-ns` on the same cell (0
+  when member 1 reproduces it bit for bit in float32).
+
+**Ran (CPU).** The competitors, and NPCC with CatBoost as a CPU preview of
+the TabPFN arm, ran on 2026-11-11 from a worktree of `e10-e3d` (98c9022 to
+1d9816a; no commit between them changed what a cell computes), one thread
+per process, into `results/e10_e3d_competitors_2026-11-11`. That folder was
+renamed `results/e10_e3d_2026-11-11` before the last runs, so that the
+TabPFN arm writes beside the competitors. Each run's launcher and log are in
+its `logs/`:
+- `run.sh`: `tll` and `parametric` at d = 5 on both designs and at d = 10 on
+  `decay`, and `vdc_shared` at d = 5;
+- `run_vdc_d10.sh` and `run_catboost.sh`: VDC's pairs at d = 10 and
+  CatBoost, stopped part-way when the cores were needed elsewhere;
+- `run_rest_cores10-11.sh`: the rest of both, resumed by cell and member.
+
+Every row's `npcc_commit` is the shared checkout's, as `e3_common`
+records it; `script_repo_commit` is the worktree's.
+
+**Checks.**
+- Every cell's arms mixed the same five structures, and member 1's is E3d's
+  `tll` structure.
+- CatBoost's member 1 reproduced E3d's `npcc-catboost-probit-tll-ns` bit for
+  bit on every cell.
+- `tll`'s member 1 reproduced E3d's `tll` bit for bit on 29 of its 30 cells.
+  On `decay_d10_s1010` its excess NLL is 1.2e-4 above E3d's. The two fits
+  share the structure, but pyvinecopulib's fit on a given structure and its
+  Dissmann pass give slightly different TLL pairs in trees 6 to 9 there
+  (densities about 2e-3 apart), so this is pyvinecopulib's and not the
+  mixture's.
+- With `--k 1`, the mixture is E3d's `tll`. Member 1, mixed with K - 1 copies
+  of itself, scores as itself to within 4e-15.
+- On every cell, the mixture's excess NLL is at most the members' mean.
 
 ### The summaries
 
