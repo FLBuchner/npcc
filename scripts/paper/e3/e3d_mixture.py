@@ -251,10 +251,19 @@ SUMMARY = {"design": "design", "d": "d", "seed": "seed", "method": "method", "k"
 
 
 def write_summary(out: Path) -> None:
-  """``summary.csv``: every finished cell under ``out``, one row per cell and method."""
-  rows = []
+  """``summary.csv``: every finished cell under ``out``, one row per cell and method.
+
+  Cells copied in from another machine are compared here too: every method of
+  a cell must have mixed the same structures.
+  """
+  rows, seen = [], {}
   for path in sorted(out.glob("cells/*/*.json")):
     r = json.loads(path.read_text())
+    cell = (r["design"], r["d"], r["seed"])
+    first = seen.setdefault(cell, (r["method"], r["structure_matrices"]))
+    if json.loads(first[1]) != json.loads(r["structure_matrices"]):
+      raise SystemExit(f"{cell}: {r['method']} must have mixed the structures {first[0]} "
+                       f"mixed; they differ")
     rows.append({col: (json.loads(r["member_recovery_overall"])[0] if src is None else r[src])
                  for col, src in SUMMARY.items()})
   if not rows:

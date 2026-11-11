@@ -19,6 +19,12 @@ its weights, and which command produces each output file.
   as a user would, and NPCC fits a non-simplified vine on a random structure
   or on TLL's selected one.
   Outputs go to `results/e3d_unknown_structure/`.
+- **E3e**: on E3d's truths and samples, the 2 x 2 of NPCC fitted simplified
+  or non-simplified on TLL's selected or on the true structure. Outputs go to
+  `results/e3e_simplification_2x2/`, beside E3d's.
+- **E10 on E3d**: on the same truths and samples, equal-weight mixtures of
+  K = 5 vines, one per structure, for NPCC and for each competitor. Outputs
+  go to `results/e10_e3d_2026-11-11/`.
 
 Two environments are involved. VDC's code runs only in its own (`~/vdc/env`,
 Python 3.10, pyvinecopulib 0.7.5). Everything else runs in npcc's (`uv run
@@ -42,7 +48,8 @@ pair copula of E3a's cross-check and of E3c — it gets it from
 | `e3d_structure.py` | both | Vine edges from a structure matrix or a D-vine order, and their recovery of a true structure |
 | `e3d_truth.py` | npcc | E3d truths: uniform random R-vines (E2's sampler), the nine cases, both designs, a random structure per cell |
 | `e3d_vdc_side.py` | VDC | E3d `vdc`: VDC's own pipeline, choosing its own greedy D-vine |
-| `e3d_npcc_fit.py` | npcc | E3d `parametric` and `tll` with Dissmann selection, true-structure references, and NPCC on random, TLL-selected and true structures |
+| `e3d_npcc_fit.py` | npcc | E3d `parametric` and `tll` with Dissmann selection, true-structure references, and NPCC on random, TLL-selected and true structures; E3e's `tll-s` and `true-ns` |
+| `e3d_mixture.py` | npcc | E10 on E3d: mixtures of vines on TLL's selected structure and four weighted random ones, for NPCC, TLL, parametric and VDC's pairs |
 | `e3_vdc_server.py` | VDC | VDC's density estimate as a service (started by `e3_vdc_pair.VdcServer`) |
 | `e3_vdc_pair.py` | npcc | The server client and `VdcBicop`: VDC's 64 x 64 grid replicate-padded and held by pyvinecopulib 1.0's `TorchTllBicop` with `norm_maxiter=0`, adapted from pyvinecopulib PR #217 |
 | `e3_vine.py` | npcc | `SharedVinecop`: a simplified pyvinecopulib 1.0 `VinecopBase` hosting any torch pair copula |
@@ -73,7 +80,11 @@ cd ~/vdc/vine-denoising-copula
 
 The scripts find VDC through constants at the top of `e3_common.py`:
 `VDC_REPO`, `VDC_PYTHON`, `CHECKPOINT` and `NPCC_REPO` (this machine's
-`/home/thibault/...` paths). Edit them there to run anywhere else.
+`/home/thibault/...` paths). On another machine, set `E3_NPCC_REPO` (the npcc
+checkout whose `results/` is read and written), `E3_NPCC_PYTHON` (its
+interpreter, `<repo>/.venv/bin/python` by default), `E3_VDC_REPO` and
+`E3_VDC_PYTHON`. Without VDC's interpreter, the npcc-only arms still run, and
+their rows hold `None` for VDC's versions.
 
 `constraints.txt` pins the numerical stack of VDC's paper replays: torch
 2.9.1, NumPy 2.2.6, SciPy 1.15.3, pyvinecopulib 0.7.5, networkx 3.4.2,
@@ -261,6 +272,126 @@ The competitors' `fit_s` includes their structure selection; arm (b)'s
 includes TLL's Dissmann selection, which it reuses. Every row records the
 structure it used and its recovery of the true one: the share of true edges
 found in each tree and overall, and whether it is the truth.
+
+### E3e (simplified or not, on a selected or the true structure)
+
+E3e asks how much of NPCC's E3d result is the non-simplified fit and how much
+the structure. It crosses the two:
+
+| | TLL's selected structure | true structure |
+|---|---|---|
+| non-simplified | `tll-ns` (E3d's arm (b)) | `true-ns` |
+| simplified | `tll-s` | `true-s` |
+
+`e3d_npcc_fit.py` reads E3d's `samples.npz` and `truths.json` from `--folder`
+(E3d's, by default) and writes its cells under `--out`. `tll-s` and
+`true-ns` refuse E3d's folder, which the paper cites. E3d already holds
+TabPFN v3's `tll-ns` (d = 5 on both designs, d = 10 on `decay`, ten seeds
+each), but not its `true-s`, so E3e runs three variants. Each variant's torch
+seed is `derive_seed("E3d", design, d, seed, variant, estimator_id)`, as
+E3d's.
+
+```bash
+E=scripts/paper/e3/e3d_npcc_fit.py
+F=results/e3e_simplification_2x2
+# GPU, TabPFN v3: d = 5 on both designs (20 cells per variant) ...
+for v in tll-s true-ns true-s; do
+  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-probit-$v --out $F --dims 5 \
+      --device cuda --gpu-is-free >> results/e3e_simplification_2x2_gpu.log 2>&1
+done
+# ... then d = 10 on the decay design, in two batches of five seeds.
+for seeds in "101 202 303 404 505" "606 707 808 909 1010"; do
+  for v in tll-s true-ns true-s; do
+    uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-probit-$v --out $F --designs decay \
+        --dims 10 --seeds $seeds --device cuda --gpu-is-free >> results/e3e_simplification_2x2_gpu.log 2>&1
+  done
+done
+```
+
+Every run resumes by cell: a cell whose JSON row exists is skipped.
+`$F/cells/<arm>/` and `$F/npcc_<arm>.csv` then hold E3e's three variants; the
+fourth is `results/e3d_unknown_structure/cells/npcc-tabpfn-quantiles-v3-probit-tll-ns/`.
+`e3_collect.py` reads neither folder for E3e.
+
+**Check (CPU, CatBoost, `decay`, d = 5, seed 101).** Run into a scratch
+folder, `tll-ns` and `true-s` reproduced E3d's CatBoost cells bit for bit
+(the `.npy` files are equal). `true-ns` fitted the true matrix and `tll-s`
+TLL's selected one (E3d's `tll` row), each in the context its name says. The
+excess NLLs were `tll-ns` 0.2350, `tll-s` 0.1535, `true-ns` 0.2175 and
+`true-s` 0.1146.
+
+### E10 on E3d (mixtures over structures)
+
+E2's `mixture` arm (`configs/vine_study_mixture*.toml`) asks the question in
+the conditional vine study; `e3d_mixture.py` asks it on E3d's unconditional
+truths, where the competitors can answer too. Per cell, K = 5 structures are
+picked on the training data:
+- member 1 is TLL's Dissmann selection (`vine_runner.select_structure`),
+  E3d's `tll` and `tll-ns` structure;
+- members 2 to 5 are pyvinecopulib's weighted random spanning trees, with
+  weights |tau| (`vine_runner.weighted_random_structure`), seeded
+  `derive_seed("E3d", "mixture", d, seed, j)`.
+
+Every arm fits one vine per structure and scores the members' equal-weight
+mixture. The arms are:
+- `tll` and `parametric`, in pyvinecopulib's compiled vine with E3d's
+  controls and the structure given;
+- `vdc_shared`, VDC's pair copulas in `e3_vine.SharedVinecop`, as E3d's
+  `vdc_true`;
+- `npcc-<estimator>`, non-simplified. Member 1's torch seed is E3d's for
+  `tll-ns`, so NPCC's member 1 is E3d's arm (b).
+
+Each row records:
+- the mixture's excess NLL;
+- each member's, on its own finite points and on the mixture's;
+- the members' mean, member 1's and the best member's;
+- every structure, its recovery of the truth, and how many of the K
+  structures are distinct vines, compared as edge sets;
+- the seconds of every member.
+
+`summary.csv` has one row per cell and method with the comparisons, all on
+the mixture's finite points. A cell refuses to run if another arm's row for
+it records other structures, and the summary refuses methods of one cell
+that mixed different ones. Members are fitted, evaluated and released one at
+a time, and saved as they finish, so a cell resumes at its next member.
+
+```bash
+M=scripts/paper/e3/e3d_mixture.py
+O=results/e10_e3d_2026-11-11
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+# CPU, the competitors: d = 5 on both designs, d = 10 on decay.
+taskset -c 4 nice -n 10 uv run --no-sync python $M --arms tll parametric --designs decay strong \
+    --dims 5 --out $O > $O/logs/tll_parametric_d5.log 2>&1
+taskset -c 5 nice -n 10 uv run --no-sync python $M --arms tll parametric --designs decay \
+    --dims 10 --out $O > $O/logs/tll_parametric_d10_decay.log 2>&1
+taskset -c 6 nice -n 10 uv run --no-sync python $M --arms vdc_shared --vdc-core 7 --designs decay strong \
+    --dims 5 --out $O > $O/logs/vdc_shared_d5.log 2>&1
+taskset -c 8 nice -n 10 uv run --no-sync python $M --arms vdc_shared --vdc-core 9 --designs decay \
+    --dims 10 --out $O > $O/logs/vdc_shared_d10_decay.log 2>&1
+# GPU, TabPFN v3, here: d = 5 on both designs.
+uv run --no-sync python $M --arms npcc-tabpfn-quantiles-v3-probit --designs decay strong --dims 5 \
+    --out $O --device cuda --gpu-is-free >> $O/logs/tabpfn_d5.log 2>&1
+# GPU, TabPFN v3, on gpu053: d = 10 on decay, in two batches of five seeds,
+# into a copy of $O (so its structures are checked against the competitors').
+for seeds in "101 202 303 404 505" "606 707 808 909 1010"; do
+  uv run --no-sync python $M --arms npcc-tabpfn-quantiles-v3-probit --designs decay --dims 10 \
+      --seeds $seeds --out $O --device cuda --gpu-is-free >> $O/logs/tabpfn_d10_decay.log 2>&1
+done
+```
+
+On gpu053, `E3_NPCC_REPO` names the checkout there, whose
+`results/e3d_unknown_structure/` holds a copy of E3d's `samples.npz` and
+`truths.json` (or pass `--folder`). Copying `cells/npcc-tabpfn-quantiles-v3-probit/`
+back into `$O` and rerunning any of the commands above, which then has no
+cell left to fit, rewrites `summary.csv` with every method.
+
+`$O` holds:
+- `cells/<arm>/<design>_d<d>_s<seed>.json`, the row;
+- `.npy` beside it, the mixture's test-point log-densities, and
+  `_members.npy`, the members' (K x 20,000), both float32 with NaN kept;
+- `cells/<arm>/members/`, each finished member's row and float64
+  log-densities;
+- `mixture_<arm>.csv` (the rows) and `summary.csv`.
 
 ### The summaries
 

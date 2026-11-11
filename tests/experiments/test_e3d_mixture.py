@@ -174,3 +174,45 @@ def test_a_cell_refuses_another_arms_structures(tmp_path: Path) -> None:
   mixture.check_structures(tmp_path, "decay_d3_s101", matrices)
   with pytest.raises(SystemExit, match="structures must equal"):
     mixture.check_structures(tmp_path, "decay_d3_s101", matrices[::-1])
+
+
+def _row(method: str, matrices: list[list[list[int]]]) -> dict[str, object]:
+  """A finished cell's row, with every field the summary reads."""
+  row: dict[str, object] = {
+    src: 0.0 for src in mixture.SUMMARY.values() if src is not None
+  }
+  row.update(
+    design="decay",
+    d=3,
+    seed=101,
+    method=method,
+    structure_matrices=json.dumps(matrices),
+    member_recovery_overall=json.dumps([1.0, 0.5]),
+  )
+  return row
+
+
+def test_the_summary_refuses_methods_that_mixed_other_structures(
+  tmp_path: Path,
+) -> None:
+  """Cells copied in from another machine must have mixed the same vines.
+
+  The GPU arm may run elsewhere, where its structures are recomputed; a
+  summary pairing it with competitors that mixed other structures would
+  compare two designs as one.
+  """
+  matrices = [
+    np.asarray(pv.RVineStructure.from_order([1, 2, 3]).matrix).tolist(),
+    np.asarray(pv.RVineStructure.from_order([2, 1, 3]).matrix).tolist(),
+  ]
+  for method, these in (("tll", matrices), ("npcc-x", matrices)):
+    path = tmp_path / "cells" / method / "decay_d3_s101.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(_row(method, these)))
+  mixture.write_summary(tmp_path)
+  assert (tmp_path / "summary.csv").read_text().count("decay,3,101") == 2
+  path = tmp_path / "cells" / "vdc_shared" / "decay_d3_s101.json"
+  path.parent.mkdir(parents=True)
+  path.write_text(json.dumps(_row("vdc_shared", matrices[::-1])))
+  with pytest.raises(SystemExit, match="must have mixed the structures"):
+    mixture.write_summary(tmp_path)
