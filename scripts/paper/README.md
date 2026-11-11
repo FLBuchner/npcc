@@ -294,9 +294,10 @@ with Clayton and Gaussian copulas:
   - `results/study_covariates_2026-11-11_r`, the R competitors: 8
     single-threaded shards pinned to cores 8-15.
 
-  Each run then took its aggregation pass, and the analysis followed. Each
-  run's `logs/provenance.txt` has the exact commands, its `COMMIT` the
-  worktree's state, and its `logs/` the scripts that launched them. GPU
+  Each run then took its aggregation pass. The analysis the paper cites
+  ran later, with the v3.5 arm (below). Each run's `logs/provenance.txt`
+  has the exact commands, its `COMMIT` the worktree's state, and its
+  `logs/` the scripts that launched them. GPU
   shard 0 failed twice on its first cell with a CUDA error while shard 1
   shared the GPU, then ran alone after shard 1 ended, with `--resume`. A
   cell's seeds depend on the cell alone, so the order changes nothing.
@@ -322,10 +323,20 @@ with Clayton and Gaussian copulas:
   - The main text's TabPFN stays v3, as E1 fixed before E9 ran.
   - Ran from a clean worktree at f8878a7, the merge of the v3.5 and
     selected-structure pull requests, as one GPU process into
-    `results/study_covariates_2026-11-11_v35`. The analysis with both
-    `--with` folders then ran from the same worktree, into
-    `results/study_covariates_2026-11-11/analysis`: the version the paper
-    cites. Its command closes that run's `logs/provenance.txt`.
+    `results/study_covariates_2026-11-11_v35`.
+  - The analysis the paper cites then ran from the same worktree at
+    f8878a7, into `results/study_covariates_2026-11-11/analysis`:
+
+    ```bash
+    uv run --no-sync python scripts/paper/e9/analyze.py \
+      results/study_covariates_2026-11-11 \
+      --with results/study_covariates_2026-11-11_r \
+      results/study_covariates_2026-11-11_v35
+    ```
+
+    It replaced the first analysis there, which had the R run alone. Its
+    command closes the npcc run's `logs/provenance.txt`. That folder is
+    frozen: a later analysis of these runs takes `--out`.
 
 ## E2 — vine study (§3.4)
 
