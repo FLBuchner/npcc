@@ -8,8 +8,13 @@ reuse off, on and off again, timing every pass:
 
 - E2's ``random`` arm on cell ``d = 5, n = 1000, rep 0`` (non-simplified, with
   the covariate), at the study's 5 x 1000 test points, joint and copula;
-- E3d's ``npcc-tabpfn-quantiles-v3-probit-random-ns`` arm on
-  ``decay_d5_s101`` (unconditional), at its 20,000 test points.
+- E3d's ``npcc-tabpfn-quantiles-v3-probit-random-ns`` arm on one sample,
+  ``decay_d5_s101`` by default (unconditional), at its 20,000 test points or
+  the first ``--n-test``.
+
+``--skip-e2`` runs the E3d part alone, as on another machine, where only a
+same-machine comparison counts: two machines agree to about 1e-13, not
+bitwise. ``--e3d-folder`` then names where E3d's ``samples.npz`` was copied.
 
 The two passes without reuse show whether the backend is deterministic at
 all; reuse is adopted only if the pass with it is bitwise equal to both.
@@ -19,6 +24,9 @@ Usage (from the npcc repository root, on a free GPU)::
 
     uv run --no-sync python scripts/paper/e10/check_table_reuse.py \\
         --out results/e10_table_reuse_<TAG> --device cuda
+    uv run --no-sync python scripts/paper/e10/check_table_reuse.py \\
+        --out <folder> --device cuda --skip-e2 --e3d-folder <copy> \\
+        --e3d-key decay_d10_s101 --n-test 2000
 """
 
 from __future__ import annotations
@@ -143,11 +151,15 @@ def e2_cell(device: str) -> dict[str, object]:
   )
 
 
-def e3d_cell(device: str) -> dict[str, object]:
-  key = "decay_d5_s101"
-  with np.load(E3D / "samples.npz") as f:
+def e3d_cell(
+  device: str, folder: Path, key: str, n_test: int | None
+) -> dict[str, object]:
+  design, dim, seed = key.split("_")
+  d, sample = int(dim.removeprefix("d")), int(seed.removeprefix("s"))
+  with np.load(folder / "samples.npz") as f:
     train, test = f[f"{key}_train"], f[f"{key}_test"]
     structure = pv.RVineStructure.from_matrix(f[f"{key}_random_matrix"])
+  test = test[:n_test]
   est = e3_npcc.spec(LABEL)
   controls = est.controls(
     FitControlsRosenblattVinecop,
@@ -156,7 +168,7 @@ def e3d_cell(device: str) -> dict[str, object]:
     batch_size=None,
   )
   torch.manual_seed(
-    derive_seed("E3d", "decay", 5, 101, "random-ns", est.estimator_id)
+    derive_seed("E3d", design, d, sample, "random-ns", est.estimator_id)
   )
   vine = RosenblattVinecop(
     None, structure, device=device, context=NonSimplifiedContext()
@@ -170,11 +182,20 @@ def main() -> None:
   p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   p.add_argument("--out", type=Path, required=True)
   p.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
+  p.add_argument("--skip-e2", action="store_true")
+  p.add_argument("--e3d-folder", type=Path, default=E3D)
+  p.add_argument("--e3d-key", default="decay_d5_s101")
+  p.add_argument("--n-test", type=int, default=None)
   a = p.parse_args()
   a.out.mkdir(parents=True, exist_ok=False)
-  report = {"e2_d5_n1000_rep0_random": e2_cell(a.device)}
-  print(json.dumps(report, indent=2), flush=True)
-  report["e3d_decay_d5_s101_random_ns"] = e3d_cell(a.device)
+  report: dict[str, object] = {}
+  if not a.skip_e2:
+    report["e2_d5_n1000_rep0_random"] = e2_cell(a.device)
+    print(json.dumps(report, indent=2), flush=True)
+  report[f"e3d_{a.e3d_key}_random_ns"] = {
+    "n_test": a.n_test,
+    **e3d_cell(a.device, a.e3d_folder, a.e3d_key, a.n_test),
+  }
   (a.out / "check.json").write_text(json.dumps(report, indent=2) + "\n")
   print(json.dumps(report, indent=2))
 

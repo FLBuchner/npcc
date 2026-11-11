@@ -13,6 +13,13 @@ the first of which is on the selected structure. Writes into
   many repetitions the mixture beats member 1. Then each member's mean joint
   KL. With ``--with``, each other arm's mean joint KL over the repetitions
   both runs hold, and the mixture's paired difference to it.
+  The best member's mean KL (the member that scores lowest in each
+  repetition, an oracle choice no user has), and how many distinct
+  structures the mixtures hold: members' draws can coincide, as they must at
+  d = 3, which has three R-vines.
+- ``vine_mixture_cells.csv`` -- the same per cell: the mixture's, member 1's,
+  the members' mean and the best member's joint and copula KL, and the
+  number of distinct structures among the members.
 - ``vine_mixture_checks.json`` -- per (d, n), Jensen's bound (the mixture's
   KL is at most its members' mean in every repetition), and where a
   ``selected`` arm comes through ``--with``, how far member 1 is from it.
@@ -41,6 +48,7 @@ from typing import cast
 
 import numpy as np
 import pandas as pd
+import pyvinecopulib as pv
 
 METRICS = {"joint": "KL", "copula": "KL_copula"}
 KEY = ["d", "n", "rep", "x"]
@@ -61,6 +69,41 @@ def member_arms(metrics: pd.DataFrame) -> list[str]:
   if "mixture" not in set(metrics["arm"]) or not arms:
     raise SystemExit("the run must hold the mixture arm and its members")
   return sorted(arms, key=lambda a: int(a.rsplit("-", 1)[1]))
+
+
+Edge = tuple[frozenset[int], frozenset[int]]
+
+
+def edges(matrix: list[list[int]]) -> frozenset[Edge]:
+  """A vine's edges as (conditioned pair, conditioning set), every tree.
+
+  Two matrices can write one vine, so structures compare by their edges.
+  """
+  array = np.asfortranarray(np.asarray(matrix, dtype=np.uint64))
+  # pyvinecopulib's compiled `get_trees` is untyped here.
+  trees = cast(
+    "list[list[tuple[int, int, list[int]]]]",
+    pv.RVineStructure.from_matrix(array).get_trees(),
+  )
+  return frozenset(
+    (frozenset((a, b)), frozenset(conditioning))
+    for tree in trees
+    for a, b, conditioning in tree
+  )
+
+
+def distinct_structures(run: Path) -> pd.Series:
+  """How many distinct structures each cell's mixture holds."""
+  runtime = pd.read_parquet(run / "runtime.parquet")
+  rows = runtime[runtime["arm"] == "mixture"]
+  counts = {
+    (int(r.d), int(r.n), int(r.rep)): len(
+      {edges(m) for m in json.loads(str(r.mixture_structures))}
+    )
+    for r in rows.itertuples(index=False)
+  }
+  index = pd.MultiIndex.from_tuples(list(counts), names=["d", "n", "rep"])
+  return pd.Series(list(counts.values()), index=index, name="n_distinct")
 
 
 def wide(metrics: pd.DataFrame, metric: str) -> pd.DataFrame:
@@ -104,9 +147,25 @@ def others(paths: list[Path], ours: pd.DataFrame) -> pd.DataFrame:
   return out
 
 
+def per_cell(
+  tables: dict[str, pd.DataFrame], members: list[str], distinct: pd.Series
+) -> pd.DataFrame:
+  """Per cell: the mixture, member 1, the members' mean and the best."""
+  out = pd.DataFrame(index=tables["joint"].index)
+  for name, frame in tables.items():
+    out[f"{name}_KL_mixture"] = frame["mixture"]
+    out[f"{name}_KL_member1"] = frame[members[0]]
+    out[f"{name}_KL_members_mean"] = frame[members].mean(axis=1)
+    out[f"{name}_KL_best_member"] = frame[members].min(axis=1)
+  out["n_distinct"] = distinct.reindex(out.index)
+  return out.reset_index()
+
+
 def table(
-  metrics: pd.DataFrame, extra: pd.DataFrame | None
-) -> tuple[pd.DataFrame, dict[str, object]]:
+  metrics: pd.DataFrame,
+  extra: pd.DataFrame | None,
+  distinct: pd.Series,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
   members = member_arms(metrics)
   rows: list[dict[str, object]] = []
   checks: dict[str, object] = {}
@@ -128,6 +187,7 @@ def table(
         ("mixture", mixture),
         ("member1", first),
         ("members_mean", mean_members),
+        ("best_member", w[members].min(axis=1)),
         ("mixture_minus_member1", mixture - first),
         ("mixture_minus_members_mean", mixture - mean_members),
       ):
@@ -140,6 +200,10 @@ def table(
       row[f"joint_KL_member{k}_mean"] = float(
         tables["joint"].loc[(d, n), arm].mean()
       )
+    counts = distinct.loc[(d, n)]
+    row["n_distinct_mean"] = float(counts.mean())
+    row["n_distinct_min"] = int(counts.min())
+    row["n_distinct_max"] = int(counts.max())
     if theirs is not None and (d, n) in theirs.index.droplevel("rep"):
       t = theirs.loc[(d, n)]
       mixture = tables["joint"].loc[(d, n), "mixture"]
@@ -160,7 +224,7 @@ def table(
           check["member1_vs_selected_max_abs"] = float(gap.max())
     rows.append(row)
     checks[f"d{int(d)}_n{int(n)}"] = check
-  return pd.DataFrame(rows), checks
+  return pd.DataFrame(rows), per_cell(tables, members, distinct), checks
 
 
 def main() -> None:
@@ -182,8 +246,9 @@ def main() -> None:
   out.mkdir(parents=True, exist_ok=True)
   metrics = load(a.run)
   extra = others(a.others, metrics) if a.others else None
-  result, checks = table(metrics, extra)
+  result, cells, checks = table(metrics, extra, distinct_structures(a.run))
   result.to_csv(out / "vine_mixture.csv", index=False)
+  cells.to_csv(out / "vine_mixture_cells.csv", index=False)
   (out / "vine_mixture_checks.json").write_text(
     json.dumps(checks, indent=2) + "\n"
   )
