@@ -501,15 +501,28 @@ with Clayton and Gaussian copulas:
     beside `analysis/`. They were timed within the study, on gpu053's A100,
     not on an idle machine as E6's were.
 - E2b, GAM vines (gamCopula) on E2's cells:
-  - **Arms.** Each fits mgcv margins `gam(y_j ~ s(x))`, Gaussian, and a GAM
-    vine on their PITs, with x a smooth term in every pair and E1b's
-    gamCopula settings (n.iters = 100, as E9):
+  - **Arms.** Each fits mgcv margins `gam(y_j ~ s(x), method = "REML")`,
+    Gaussian, and a GAM vine on their PITs, with x a smooth term in every
+    pair and E1b's gamCopula settings, but for two:
     - `gamvine-oracle`: `gamVineCopSelect` on the true structure,
       simplified;
     - `gamvine-selected`: `gamVineStructureSelect`, simplified,
       `treecrit = "tau"`;
     - `gamvine-ns`: `gamVineStructureSelect`, not simplified (Vatter and
       Nagler, 2018).
+
+    The two settings that differ from E1b and E9:
+    - `n.iters = 100`, as E9, where E1b ran gamCopula's default of 10;
+    - `select.once = TRUE`, gamCopula's default, where E9 passes FALSE. With
+      x the only exogenous covariate it hardly matters to the simplified
+      arms, and for `gamvine-ns`, FALSE would redo the selection at every
+      iteration and multiply its cost.
+
+    **Margins by REML.** mgcv's default smoothing, GCV, undersmoothed 3 of
+    the 10 margins on the d = 10 pilot cell (EDF 6 to 8, against linear true
+    means). There, against REML, it raised the margins' KL from 0.018 to
+    0.050 and gamvine-oracle's joint KL from 0.526 to 0.764, so the margins,
+    not the vine, would have decided the comparison. At d = 5 the two agree.
 
     The joint KL scores the margins and the vine together; the copula KL
     scores the vine at the true PITs, as for every arm.
@@ -553,7 +566,8 @@ with Clayton and Gaussian copulas:
     d = 5, and 135 / 197 / 740 at d = 10; evaluation takes 2 to 8 s. The
     whole d = 10 cell took 18.5 min. `logs/compare_with_e2.txt` has the KLs
     beside E2's arms, and `logs/margins_side_check.txt` what mgcv's default
-    smoothing (GCV) costs the margins at d = 10, against REML.
+    smoothing (GCV) costs the margins at d = 10, against REML. The pilot ran
+    with GCV margins; the study runs with REML.
 
 ## E3 — comparison with VDC (§3.4)
 

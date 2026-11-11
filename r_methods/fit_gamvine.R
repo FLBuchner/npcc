@@ -12,8 +12,12 @@
 # `fitted.csv`, the fitted vine's R-vine matrix, and `pairs.csv`, one row per
 # pair copula with its family and calibration function.
 #
-# **Margins.** Each variable is mgcv's gam(y_j ~ s(x)), Gaussian, at the
-# package defaults. Its probability integral transform is pnorm of the
+# **Margins.** Each variable is mgcv's gam(y_j ~ s(x)), Gaussian, with its
+# smoothing parameter chosen by REML (method = "REML"), otherwise at the
+# package defaults. mgcv's default, GCV, undersmoothed 3 of the 10 margins on
+# the d = 10 pilot cell (EDF 6 to 8 against linear true means), which would
+# charge the vine's KL for the margins' noise. Its probability integral
+# transform is pnorm of the
 # standardized residual, (y_j - mu_j(x)) / sigma_j with sigma_j^2 the fit's
 # scale estimate sig2; the vine is fitted on the training sample's. At a test
 # point, `pdf` is the fitted copula density at the point's transforms times
@@ -32,9 +36,12 @@
 # rotation (1, 2, 301-304, 401-404) -- selected by familycrit = "AIC", with
 # level = 0.05 for the covariates' and the independence tests. n.iters = 100
 # is E9's (fit_gamcopula_select.R, **Iterations**): a cap that leaves every
-# fit converging sooner as it is. Everything else is gamCopula's default:
-# tau = TRUE, method = "FS", tol.rel = 0.001, select.once = TRUE, no
-# truncation. A pair whose selection keeps no covariate, or whose GAM fit
+# fit converging sooner as it is, where E1b ran gamCopula's default of 10.
+# Everything else is gamCopula's default: tau = TRUE, method = "FS",
+# tol.rel = 0.001, no truncation, and select.once = TRUE, where E9 passes
+# FALSE: with x the only exogenous covariate it hardly matters to the
+# simplified arms, and for gamvine-ns, FALSE would refit the selection at
+# every iteration and multiply its cost. A pair whose selection keeps no covariate, or whose GAM fit
 # fails, is gamCopula's constant BiCopSelect fit, or independence when its
 # test does not reject.
 #
@@ -363,7 +370,8 @@ if (!all(inside)) {
 
 # The margins, and the training sample's transforms.
 margin_fit <- timed(lapply(Y, function(y) {
-  gam(value ~ s(x), data = data.frame(value = train[[y]], x = train$x))
+  gam(value ~ s(x), data = data.frame(value = train[[y]], x = train$x),
+      method = "REML")
 }))
 margins <- margin_fit$value
 transform <- function(y, x) {
