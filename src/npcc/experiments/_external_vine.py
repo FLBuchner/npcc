@@ -190,7 +190,20 @@ def _read_matrix(path: Path, d: int, *, script: str) -> pv.RVineStructure:
 def _read_pairs(path: Path, d: int, *, script: str) -> list[dict[str, object]]:
   if not path.is_file():
     raise ExchangeError(f"{script} must write its pairs; got no {path.name}")
-  pairs = pd.read_csv(path, keep_default_na=False, na_values=["NA"])
+  # Text stays text: a conditioning set "2" is not the number 2.
+  text_columns = (
+    "conditioning",
+    "family_name",
+    "kind",
+    "formula",
+    "covariates",
+  )
+  pairs = pd.read_csv(
+    path,
+    keep_default_na=False,
+    na_values=["NA"],
+    dtype=dict.fromkeys(text_columns, str),
+  )
   missing = [c for c in PAIR_COLUMNS if c not in pairs.columns]
   if missing or len(pairs) != d * (d - 1) // 2:
     raise ExchangeError(

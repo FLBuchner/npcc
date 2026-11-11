@@ -577,35 +577,62 @@ def test_negatively_dependent_pairs_keep_their_rotation(arm: str) -> None:
     )
 
 
-@needs_r
-def test_a_conditioning_variable_is_not_read_as_a_pair_argument() -> None:
-  """The non-simplified arm must see a conditioning variable as itself.
+def _nonsimplified_sample(n: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+  """A non-simplified D-vine on 1 - 2 - 3, and its copula density there.
 
-  gamCopula names a pair's arguments u1 and u2 beside its covariates, so a
-  conditioning variable named u2 would be read as the pair's own argument.
-  Here the second tree's dependence grows with its conditioning variable,
-  which only the non-simplified arm can fit, and does only if it reads it.
+  Both first-tree pairs are Gaussian with correlation 0.85; the pair
+  (1, 3 | 2) is a Clayton whose Kendall's tau is 0.05 + 0.5 u2.
   """
-  n = 1000
-  w = np.random.default_rng(3).uniform(size=(n, 3))
-  gaussian = pv.Bicop(pv.BicopFamily.gaussian, parameters=np.array([[0.5]]))
+  w = np.random.default_rng(seed).uniform(size=(n, 3))
+  gaussian = pv.Bicop(pv.BicopFamily.gaussian, parameters=np.array([[0.85]]))
   clayton = pv.Bicop(pv.BicopFamily.clayton)
   u = np.empty_like(w)
+  pdf = np.empty(n)
   u[:, 1] = w[:, 1]
   for i in range(n):
-    # The pair (1, 3 | 2) is a Clayton with Kendall's tau 0.1 + 0.6 u2.
-    theta = clayton.tau_to_parameters(0.1 + 0.6 * float(u[i, 1]))
+    theta = clayton.tau_to_parameters(0.05 + 0.5 * float(u[i, 1]))
     given = pv.Bicop(pv.BicopFamily.clayton, parameters=theta)
     a = w[i, 0]
     b = float(given.hinv1(np.array([[a, w[i, 2]]]))[0])
     u[i, 0] = float(gaussian.hinv2(np.array([[a, u[i, 1]]]))[0])
     u[i, 2] = float(gaussian.hinv2(np.array([[b, u[i, 1]]]))[0])
-  ys = torch.special.ndtri(torch.from_numpy(u))
-  x = torch.linspace(0.0, 1.0, n, dtype=torch.float64).reshape(-1, 1)
-  points = (ys[:200], torch.from_numpy(u[:200]), x[:200])
+    first = np.array([[u[i, 0], u[i, 1]], [u[i, 2], u[i, 1]]])
+    pdf[i] = float(
+      np.prod(gaussian.pdf(first)) * given.pdf(np.array([[a, b]]))[0]
+    )
+  return u, pdf
+
+
+@needs_r
+def test_a_conditioning_variable_is_not_read_as_a_pair_argument() -> None:
+  """The non-simplified arm must see a conditioning variable as itself.
+
+  gamCopula names a pair's arguments u1 and u2 beside its covariates, so a
+  conditioning variable named u1 or u2 would be read as the pair's own
+  argument, and the fit would miss a dependence that changes with it, as
+  this sample's second tree does. The script's own check, that gamVinePDF
+  is the product of the pair densities, refuses such a fit too.
+  """
+  u_train, _ = _nonsimplified_sample(1000, 3)
+  u_test, pdf = _nonsimplified_sample(500, 4)
+  x_train = torch.linspace(0.0, 1.0, 1000, dtype=torch.float64).reshape(-1, 1)
+  x_test = torch.linspace(0.0, 1.0, 500, dtype=torch.float64).reshape(-1, 1)
+  y_train: torch.Tensor = torch.special.ndtri(torch.from_numpy(u_train))
+  y_test: torch.Tensor = torch.special.ndtri(torch.from_numpy(u_test))
   fit = _external_vine.fit_and_evaluate(
-    str(_SCRIPT), (ys, x), points, arm="gamvine-ns", seed=1, name="ns"
+    str(_SCRIPT),
+    (y_train, x_train),
+    (y_test, torch.from_numpy(u_test), x_test),
+    arm="gamvine-ns",
+    seed=1,
+    name="ns",
   )
-  deep = [p for p in fit.pairs if p["tree"] == 2]
-  assert len(deep) == 1
-  assert "v" in str(deep[0]["covariates"])
+  # The true structure, whose second tree conditions on variable 2: the
+  # name that collides with the pair's second argument.
+  [deep] = [p for p in fit.pairs if p["tree"] == 2]
+  assert deep["conditioning"] == "2"
+  assert set(str(deep["covariates"]).split()) - {"x"}
+  # A simplified fit of this sample, with that pair constant, scores about
+  # 0.04; this one about 0.
+  kl = float(np.mean(np.log(pdf) - np.log(fit.copula_pdf.numpy())))
+  assert kl < 0.02

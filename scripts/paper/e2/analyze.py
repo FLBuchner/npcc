@@ -50,6 +50,8 @@ Usage (from the npcc repository root)::
     uv run --no-sync python scripts/paper/e2/analyze.py results/vine_2026-11-06
     uv run --no-sync python scripts/paper/e2/analyze.py results/vine_2026-11-10 \
         --with results/vine_2026-11-11_selected
+    uv run --no-sync python scripts/paper/e2/analyze.py results/vine_2026-11-10 \
+        --with results/vine_gamvine_<TAG> --out results/vine_gamvine_<TAG>/analysis
 """
 
 from __future__ import annotations
