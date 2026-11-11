@@ -320,6 +320,29 @@ with Clayton and Gaussian copulas:
   plotted values in `vine_kl_by_x.csv`) and the numbers the text quotes
   (`vine_text_numbers.json`) into `results/vine_2026-11-06/analysis/`, and
   prints the table's LaTeX rows. Timings come from E6.
+- The selected structure:
+  - **What it is.** The `selected` arm is what a user without the true
+    structure would fit. The arm's margins are fitted first. Dissmann's
+    algorithm with TLL pairs then selects a structure on their probability
+    integral transforms, ignoring x: E3d's `tll-ns` call. TabPFN v3 fits the
+    pairs on it in a non-simplified context, as for `random`.
+  - **What is recorded.** The structure depends on the cell's training data,
+    so it varies with n. Each NPCC arm's runtime row records the structure
+    it fitted, and the selected arm's also the seconds its selection took.
+  - **Config.** `configs/vine_study_selected.toml` is `configs/vine_study.toml`
+    with this arm only, so it fits E2's cells: run it into
+    `results/vine_<TAG>_selected` with the commands above.
+  - **Analysis.** Pass that folder after `--with`. The analysis then writes
+    `vine_selected.csv`, one row per (d, n): the arm's joint and copula KL;
+    its joint KL paired with the oracle's and the random arm's; how often its
+    structure is the true one; and the share of the true first tree and of
+    all true edges it recovers. It refuses a run that does not pair: another
+    base seed, other evaluation settings or other truths, or another cell
+    seed or mean true log-density at any (d, n, rep, x).
+  - **Cell data.** Neither `src/npcc/core` nor the truth, data and scoring
+    code changed between b7702e1 and this arm. Its pilot on cell d = 5,
+    n = 1000, rep 0 reproduced `results/vine_2026-11-10`'s oracle there bit
+    for bit.
 
 ## E3 — comparison with VDC (§3.3)
 

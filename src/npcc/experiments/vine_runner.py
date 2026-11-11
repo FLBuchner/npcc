@@ -121,7 +121,9 @@ def select_structure(u: torch.Tensor) -> pv.RVineStructure:
     family_set=[pv.BicopFamily.tll], num_threads=1
   )
   data = to_numpy(u, dtype=np.float64)
-  return pv.Vinecop.from_data(data, controls=controls).structure
+  # pyvinecopulib's compiled `Vinecop` is untyped here.
+  selected = pv.Vinecop.from_data(data, controls=controls).structure
+  return cast("pv.RVineStructure", selected)
 
 
 def regime_fingerprint() -> dict[str, list[float]]:

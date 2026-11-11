@@ -95,7 +95,23 @@ def test_arms_use_their_contexts(
   assert seen == [SimplifiedContext, NonSimplifiedContext, NonSimplifiedContext]
 
 
-_FIT = {"device": "cpu", "projection_grid_size": 30, "batch_size": None}
+def _fit(
+  arm: str,
+  structure: pv.RVineStructure | None,
+  y: torch.Tensor,
+  x: torch.Tensor,
+) -> tuple[Any, RosenblattVinecop, float]:
+  """Fit one NPCC arm with the hermetic estimator, on the CPU."""
+  return vine_runner._fit_npcc(
+    arm,
+    _est(),
+    structure,
+    y,
+    x,
+    device="cpu",
+    projection_grid_size=30,
+    batch_size=None,
+  )
 
 
 def _est() -> EstimatorSpec:
@@ -120,13 +136,9 @@ def test_the_selected_arm_fits_as_the_random_arm_does(
   structure = vine_runner.random_structure_for(317, 3, 0)
   monkeypatch.setattr(vine_runner, "select_structure", lambda u: structure)
   torch.manual_seed(5)
-  given, _, none = vine_runner._fit_npcc(
-    "random", _est(), structure, y, x, **_FIT
-  )
+  given, _, none = _fit("random", structure, y, x)
   torch.manual_seed(5)
-  chosen, vine, seconds = vine_runner._fit_npcc(
-    "selected", _est(), None, y, x, **_FIT
-  )
+  chosen, vine, seconds = _fit("selected", None, y, x)
   assert math.isnan(none)
   assert seconds >= 0.0
   np.testing.assert_array_equal(
@@ -157,7 +169,7 @@ def test_the_selection_sees_the_margins_transforms(
   monkeypatch.setattr(vine_runner, "select_structure", spy)
   truth = vine_runner.truth_for(317, 3, 0)
   y, _, x = vine_scenarios.sample(truth, 60, 11)
-  dist, vine, _ = vine_runner._fit_npcc("selected", _est(), None, y, x, **_FIT)
+  dist, vine, _ = _fit("selected", None, y, x)
   [u] = seen
   torch.testing.assert_close(u, dist.marginal_cdf(y, x=x), rtol=0, atol=0)
   np.testing.assert_array_equal(

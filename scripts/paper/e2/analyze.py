@@ -17,6 +17,18 @@ and ``truths.json`` -- and writes into ``<run>/analysis/``:
   change from the smallest to the largest n; the joint - copula KL gap; joint
   ISE at two (d, n); and how often the random structure is the true one,
   with the random - oracle difference split on it.
+- ``vine_selected.csv`` -- with a run of the ``selected`` arm passed through
+  ``--with``: one row per (d, n) with that arm's joint and copula KL, its
+  joint KL paired with the oracle's and the random arm's, how often its
+  structure is the true one, the share of the true first tree and of all
+  true edges it recovers, and the seconds its selection took. The text
+  numbers then hold the same under ``selected``.
+
+``--with`` adds runs of other arms on the same cells, as
+``configs/vine_study_selected.toml`` makes them. Each must pair with the
+main run, or the analysis refuses it: the same base seed and evaluation
+settings, the same truths, and at every (d, n, rep, x) the same cell seed
+and the same mean true log-density, which pins the test points.
 
 Each KL or ISE is a fixed-x divergence. An x-averaged one is its mean over
 the evaluation x within a repetition -- nothing is integrated over x -- and
@@ -28,6 +40,8 @@ Timings are left to E6, which runs on an otherwise idle machine.
 Usage (from the npcc repository root)::
 
     uv run --no-sync python scripts/paper/e2/analyze.py results/vine_2026-11-06
+    uv run --no-sync python scripts/paper/e2/analyze.py results/vine_2026-11-10 \
+        --with results/vine_2026-11-11_selected
 """
 
 from __future__ import annotations
@@ -74,6 +88,17 @@ ARMS: dict[str, dict[str, str]] = {
   },
 }
 NPCC_ARMS = ("oracle", "random")
+#: The arm a ``--with`` run may add: outside the paper's table and figure,
+#: with a table of its own.
+SELECTED: dict[str, str] = {
+  "name": "selected",
+  "color": "#009E73",
+  "marker": "D",
+  "linestyle": "-",
+}
+KNOWN_ARMS: dict[str, dict[str, str]] = {**ARMS, "selected": SELECTED}
+#: What a ``--with`` run must share with the main run's ``config.json``.
+SHARED_GRID = ("eval_x_n", "eval_m", "projection_grid_size")
 #: The fixed-x metrics read: joint KL and ISE, and the copula KL.
 METRICS = ("KL", "KL_copula", "ISE")
 #: Each arm's offset from x_k in the figure, in units of x, so that the error
@@ -99,9 +124,17 @@ def load(run: Path) -> pd.DataFrame:
   if not path.is_file():
     raise SystemExit(f"{path} must exist; run the aggregation pass first")
   df = pd.read_parquet(path)
-  unknown = sorted(set(df["arm"]) - set(ARMS))
+  unknown = sorted(set(df["arm"]) - set(KNOWN_ARMS))
   if unknown:
-    raise SystemExit(f"arms must be drawn from {list(ARMS)}; got {unknown}")
+    raise SystemExit(
+      f"arms must be drawn from {list(KNOWN_ARMS)}; got {unknown}"
+    )
+  complete(df, path)
+  return df
+
+
+def complete(df: pd.DataFrame, what: object) -> None:
+  """Exit unless every (d, n, arm, rep, x) appears once, one estimator an arm."""
   labels = df.groupby("arm")["label"].unique()
   if (labels.map(len) > 1).any():
     raise SystemExit(
@@ -114,10 +147,49 @@ def load(run: Path) -> pd.DataFrame:
   index = pd.MultiIndex.from_frame(df[key])
   if index.has_duplicates or len(full.difference(index)):
     raise SystemExit(
-      f"{path} must hold every (d, n, arm, rep, x) once; it has {len(df)} "
+      f"{what} must hold every (d, n, arm, rep, x) once; it has {len(df)} "
       f"rows for {len(full)} combinations"
     )
-  return df
+
+
+def check_pairing(
+  run: Path, metrics: pd.DataFrame, other: Path, theirs: pd.DataFrame
+) -> None:
+  """Exit unless ``other`` scored its arms on ``run``'s cells and points.
+
+  The base seed and evaluation settings in ``config.json`` and the truths
+  must agree, and at every (d, n, rep, x) both runs must hold the same cell
+  seed and the same mean true log-density. That mean is taken over the test
+  points, so it differs if they do.
+  """
+  ours_cfg = json.loads((run / "config.json").read_text())
+  their_cfg = json.loads((other / "config.json").read_text())
+  for section, keys in (("run", ("base_seed",)), ("grid", SHARED_GRID)):
+    for k in keys:
+      if ours_cfg[section][k] != their_cfg[section][k]:
+        raise SystemExit(
+          f"{other} must share {run}'s {k}; got {their_cfg[section][k]} "
+          f"against {ours_cfg[section][k]}"
+        )
+  ours_truths = json.loads((run / "truths.json").read_text())
+  if json.loads((other / "truths.json").read_text()) != ours_truths:
+    raise SystemExit(f"{other} must hold {run}'s truths.json")
+  shared = sorted(set(metrics["arm"]) & set(theirs["arm"]))
+  if shared:
+    raise SystemExit(f"{other} must add arms {run} lacks; both hold {shared}")
+  key = ["d", "n", "rep", "x"]
+  ours = metrics.groupby(key)[["seed", "loglik_true"]].first()
+  for arm, rows in theirs.groupby("arm"):
+    got = rows.set_index(key)[["seed", "loglik_true"]].sort_index()
+    if not (
+      got.index.equals(ours.index)
+      and (got["seed"] == ours["seed"]).all()
+      and (got["loglik_true"] == ours["loglik_true"]).all()
+    ):
+      raise SystemExit(
+        f"{other}'s {arm} arm must be scored on {run}'s cells and test points, "
+        f"with the same seed and true log-density at every (d, n, rep, x)"
+      )
 
 
 def x_averaged(metrics: pd.DataFrame) -> pd.DataFrame:
@@ -140,7 +212,7 @@ def kl_by_x(metrics: pd.DataFrame) -> pd.DataFrame:
     .reset_index()
   )
   stats["n_rep"] = stats["n_rep"].astype(int)
-  stats.insert(3, "arm_name", stats["arm"].map(lambda a: ARMS[a]["name"]))
+  stats.insert(3, "arm_name", stats["arm"].map(lambda a: KNOWN_ARMS[a]["name"]))
   return stats
 
 
@@ -396,15 +468,21 @@ def joint_ise(xavg: pd.DataFrame) -> list[dict[str, object]]:
   return rows
 
 
+def _trees(matrix: list[list[int]]) -> list[set[tuple[frozenset[int], ...]]]:
+  """A vine's edges per tree, each as (conditioned pair, conditioning set)."""
+  array = np.asfortranarray(np.asarray(matrix, dtype=np.uint64))
+  return [
+    {
+      (frozenset((a, b)), frozenset(conditioning))
+      for a, b, conditioning in tree
+    }
+    for tree in pv.RVineStructure.from_matrix(array).get_trees()
+  ]
+
+
 def _edges(matrix: list[list[int]]) -> set[tuple[frozenset[int], ...]]:
   """A vine's edges as (conditioned pair, conditioning set), every tree."""
-  array = np.asfortranarray(np.asarray(matrix, dtype=np.uint64))
-  trees = pv.RVineStructure.from_matrix(array).get_trees()
-  return {
-    (frozenset((a, b)), frozenset(conditioning))
-    for edges in trees
-    for a, b, conditioning in edges
-  }
+  return set().union(*_trees(matrix))
 
 
 def random_is_true(run: Path) -> pd.DataFrame:
@@ -450,6 +528,74 @@ def structure_split(
   ]
 
 
+def selected_structures(run: Path) -> pd.DataFrame:
+  """Per (d, n, rep): how much of the truth the selected structure recovers.
+
+  The structure is read from the runner's runtime row and compared with the
+  truth as edge sets, as :func:`random_is_true` compares the random arm's.
+  ``tree1_recovery`` is the share of the true first tree's edges selected,
+  and ``recovery`` the share of all true edges, each in its own tree.
+  """
+  truths = {
+    (t["d"], t["rep"]): t["matrix"]
+    for t in json.loads((run / "truths.json").read_text())
+  }
+  runtime = pd.read_parquet(run / "runtime.parquet")
+  rows = []
+  for r in runtime[runtime["arm"] == "selected"].itertuples(index=False):
+    true_trees = _trees(truths[(r.d, r.rep)])
+    chosen = _trees(json.loads(str(r.structure)))
+    found = [len(t & c) for t, c in zip(true_trees, chosen, strict=True)]
+    rows.append(
+      {
+        "d": int(r.d),
+        "n": int(r.n),
+        "rep": int(r.rep),
+        "selected_is_true": set().union(*true_trees) == set().union(*chosen),
+        "tree1_recovery": found[0] / len(true_trees[0]),
+        "recovery": sum(found) / sum(len(t) for t in true_trees),
+        "selection_seconds": float(r.selection_time),
+      }
+    )
+  return pd.DataFrame(rows)
+
+
+def selected_table(
+  xavg: pd.DataFrame, structures: pd.DataFrame
+) -> pd.DataFrame:
+  """The selected arm per (d, n), paired with the oracle and random arms.
+
+  ``oracle_wins`` counts the repetitions in which the oracle's joint KL is
+  strictly below the selected arm's, and ``selected_wins`` those in which
+  the selected arm's is strictly below the random arm's.
+  """
+  kl = by_arm(xavg, "KL")
+  copula = by_arm(xavg, "KL_copula")
+  merged = structures.set_index(["d", "n", "rep"]).sort_index()
+  rows = []
+  for (d, n), cell in kl.groupby(level=["d", "n"]):
+    s = merged.loc[(d, n)]
+    row: dict[str, float | int] = {"d": int(d), "n": int(n)}
+    for prefix, values in (
+      ("joint_KL_selected", cell["selected"]),
+      ("copula_KL_selected", copula.loc[(d, n), "selected"]),
+      ("selected_minus_oracle_joint_KL", cell["selected"] - cell["oracle"]),
+      ("selected_minus_random_joint_KL", cell["selected"] - cell["random"]),
+      ("tree1_recovery", s["tree1_recovery"]),
+      ("recovery", s["recovery"]),
+      ("selection_seconds", s["selection_seconds"]),
+    ):
+      stat = _mean_se(values)
+      row[f"{prefix}_mean"] = float(stat["mean"])
+      row[f"{prefix}_se"] = float(stat["se"])
+    row["oracle_wins"] = int((cell["oracle"] < cell["selected"]).sum())
+    row["selected_wins"] = int((cell["selected"] < cell["random"]).sum())
+    row["selected_is_true"] = int(s["selected_is_true"].sum())
+    row["n_rep"] = len(cell)
+    rows.append(row)
+  return pd.DataFrame(rows)
+
+
 def text_numbers(
   run: Path, metrics: pd.DataFrame, xavg: pd.DataFrame
 ) -> dict[str, object]:
@@ -472,6 +618,24 @@ def text_numbers(
     ],
     "random_minus_oracle_joint_KL_by_structure": structure_split(xavg, matches),
   }
+
+
+def _selected_numbers(table: pd.DataFrame) -> list[dict[str, object]]:
+  """The selected arm's table as JSON rows, for the text numbers."""
+  return [
+    {k: (int(v) if k in _COUNTS else float(v)) for k, v in row.items()}
+    for row in table.to_dict("records")
+  ]
+
+
+_COUNTS = (
+  "d",
+  "n",
+  "oracle_wins",
+  "selected_wins",
+  "selected_is_true",
+  "n_rep",
+)
 
 
 def _entry(row: pd.Series, prefix: str) -> str:
@@ -500,6 +664,14 @@ def main() -> None:
   p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   p.add_argument("run", type=Path, help="The vine study's output folder.")
   p.add_argument(
+    "--with",
+    dest="others",
+    type=Path,
+    nargs="*",
+    default=[],
+    help="Runs of other arms on the same cells, such as the selected arm.",
+  )
+  p.add_argument(
     "--out", type=Path, default=None, help="Default: <run>/analysis."
   )
   a = p.parse_args()
@@ -507,15 +679,31 @@ def main() -> None:
   out.mkdir(parents=True, exist_ok=True)
 
   metrics = load(a.run)
+  check_against_runner(a.run, x_averaged(metrics), kl_by_x(metrics))
+  holds_selected: Path | None = None
+  for other in a.others:
+    theirs = load(other)
+    check_against_runner(other, x_averaged(theirs), kl_by_x(theirs))
+    check_pairing(a.run, metrics, other, theirs)
+    if "selected" in set(theirs["arm"]):
+      holds_selected = other
+    metrics = pd.concat([metrics, theirs], ignore_index=True)
+  complete(metrics, "the runs together")
   xavg = x_averaged(metrics)
   by_x = kl_by_x(metrics)
-  check_against_runner(a.run, xavg, by_x)
 
   table = results_table(xavg)
   table.to_csv(out / "vine_table.csv", index=False)
   by_x.to_csv(out / "vine_kl_by_x.csv", index=False)
   fig_kl_by_x(by_x, out / "vine_kl_by_x.pdf")
   numbers = text_numbers(a.run, metrics, xavg)
+  if holds_selected is not None:
+    selected = selected_table(xavg, selected_structures(holds_selected))
+    selected.to_csv(out / "vine_selected.csv", index=False)
+    numbers["selected"] = {
+      "run": str(holds_selected),
+      "by_cell": _selected_numbers(selected),
+    }
   (out / "vine_text_numbers.json").write_text(
     json.dumps(numbers, indent=2) + "\n"
   )
