@@ -501,6 +501,19 @@ with Clayton and Gaussian copulas:
     beside `analysis/`. They were timed within the study, on gpu053's A100,
     not on an idle machine as E6's were.
 
+- E2d, E2 at n = 2000:
+  - **Config.** `configs/vine_study_n2000.toml` (d = 3 and 5) and
+    `configs/vine_study_d10_n2000.toml` (d = 10) are E2's configs at
+    `n = [2000]`, with all four arms in one run. A cell's truth, test points
+    and random structure are drawn from (d, rep) alone, so each cell pairs
+    with E2's at n = 500 and 1000 by (d, rep); only the training sample is
+    new.
+  - **Where it runs.** d = 3 and 5 run here as one GPU process; d = 10 runs
+    on gpu053, as a whole experiment, like E2 at d = 10.
+  - **Analysis.** `analyze.py` and `tree1_diagnostic.py` on each run alone,
+    as at d = 10. The rows for n = 2000 come from these runs and the rows
+    for n = 500 and 1000 from E2's.
+
 ## E3 — comparison with VDC (§3.4)
 
 See `scripts/paper/e3/README.md` for VDC's environment, the weight check and

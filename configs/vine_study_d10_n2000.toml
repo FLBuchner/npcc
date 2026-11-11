@@ -1,0 +1,25 @@
+# E2d at d = 10, E2 at n = 2000 (scripts/paper/README.md, E2):
+# `npcc-vinestudy --config configs/vine_study_d10_n2000.toml --out results/vine_d10_n2000_<TAG>`.
+#
+# configs/vine_study_d10.toml at n = [2000]. Every other key is E2's, so each
+# cell pairs with E2 at d = 10, n = 500 and 1000, by (d, rep): the truth,
+# test points and random structure are drawn from (d, rep) alone. Its own
+# config, apart from configs/vine_study_n2000.toml, because it runs as a whole
+# experiment on another machine.
+
+[grid]
+dims = [10]
+n = [2000]
+n_rep = 20
+arms = ["oracle", "random", "selected", "tll"]
+
+eval_x_n = 5
+eval_m = 1000
+
+projection_grid_size = 30
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
