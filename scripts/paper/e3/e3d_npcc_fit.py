@@ -13,6 +13,10 @@ Run in the NPCC environment, from the repository root, after ``e3d_truth.py``:
     # five seeds only (the paper lead's scope):
     ... e3d_npcc_fit.py --arms npcc-tabpfn-quantiles-v3-probit-random-ns ... --dims 5 --device cuda --gpu-is-free
     ... e3d_npcc_fit.py --arms ... --designs decay --dims 10 --seeds 101 202 303 404 505 --device cuda --gpu-is-free
+    # E3e, the 2 x 2 (simplified or not x true or selected structure), written
+    # beside E3d rather than into it:
+    ... e3d_npcc_fit.py --arms npcc-tabpfn-quantiles-v3-probit-tll-s npcc-tabpfn-quantiles-v3-probit-true-ns \
+        --out results/e3e_simplification_2x2 --dims 5 --device cuda --gpu-is-free
 
 **Competitors**, each with its own default structure selection, as a user
 would run them (``vdc``, VDC's own greedy D-vine, is ``e3d_vdc_side.py``):
@@ -32,13 +36,20 @@ would run them (``vdc``, VDC's own greedy D-vine, is ``e3d_vdc_side.py``):
 - ``npcc-<est>-tll-ns``: the structure ``tll``'s Dissmann selection picks
   (recomputed here from the same data and controls; its seconds are in
   ``fit_s`` and in ``selection_s``), non-simplified;
-- ``npcc-<est>-random-s``: the random structure, *simplified* (an ablation).
+- ``npcc-<est>-random-s``: the random structure, *simplified* (an ablation);
+- ``npcc-<est>-tll-s``: TLL's selected structure, *simplified* (E3e's
+  ablation).
 
 **References on the true structure** (an oracle no arm has):
 ``parametric_true`` and ``tll_true`` (the compiled vine with the same
 controls and ``structure=``), ``vdc_true`` (VDC's pair copulas in
-``e3_vine.SharedVinecop``, as in E3c) and ``npcc-<est>-true-s``
-(simplified).
+``e3_vine.SharedVinecop``, as in E3c), ``npcc-<est>-true-s`` (simplified)
+and ``npcc-<est>-true-ns`` (non-simplified, E3e's).
+
+**E3e** is the 2 x 2 of the NPCC variants on a structure that is selected
+(TLL's) or true, fitted simplified or not: ``tll-ns``, ``tll-s``,
+``true-ns`` and ``true-s``. It reads E3d's truths and samples and writes its
+cells elsewhere (``--out``), so the cited E3d folder stays as it was.
 
 **Metrics.** Excess NLL = mean of ``log c_true - log max(c_hat, 1e-300)``.
 A density an arm cannot evaluate (NaN) is not floored: the row's
@@ -49,9 +60,11 @@ arm on the test points where all arms and the truth are finite; ``fit_s`` and
 truth (``e3d_structure.recovery``: the share of true edges recovered in each
 tree and overall, and whether it is the truth).
 
-**Outputs** (``results/e3d_unknown_structure/``): one JSON row and one
-float32 ``.npy`` of raw test-point log-densities (NaN kept) per arm and cell in
-``cells/<arm>/<design>_d<d>_s<seed>``, and ``npcc_<arm>.csv``.
+**Outputs** (under ``--out``, by default ``--folder``, which is
+``results/e3d_unknown_structure/``): one JSON row and one float32 ``.npy`` of
+raw test-point log-densities (NaN kept) per arm and cell in
+``cells/<arm>/<design>_d<d>_s<seed>``, and ``npcc_<arm>.csv``. The truths
+and samples are always read from ``--folder``.
 """
 
 from __future__ import annotations
@@ -83,7 +96,12 @@ PARAMETRIC_FAMILIES = ("indep", "gaussian", "student", "clayton", "gumbel", "fra
                        "joe", "bb1", "bb6", "bb7", "bb8", "tawn")
 COMPETITORS = ("parametric", "tll", "parametric_true", "tll_true", "vdc_true")
 NPCC_VARIANTS = {"random-ns": ("random", "non-simplified"), "tll-ns": ("tll", "non-simplified"),
-                 "random-s": ("random", "simplified"), "true-s": ("true", "simplified")}
+                 "random-s": ("random", "simplified"), "true-s": ("true", "simplified"),
+                 "tll-s": ("tll", "simplified"), "true-ns": ("true", "non-simplified")}
+#: The simplified variants on a structure that is not the truth.
+NPCC_ABLATIONS = ("random-s", "tll-s")
+#: E3e's variants, which E3d's folder (cited by the paper) never holds.
+E3E_VARIANTS = ("tll-s", "true-ns")
 ROLES = {"parametric": "arm", "tll": "arm", "parametric_true": "reference",
          "tll_true": "reference", "vdc_true": "reference"}
 
@@ -110,7 +128,10 @@ def parse_npcc_arm(arm: str) -> tuple[str, str] | None:
 
 def main() -> None:  # noqa: PLR0915 - one linear protocol
   p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-  p.add_argument("--folder", type=Path, default=RESULTS)
+  p.add_argument("--folder", type=Path, default=RESULTS,
+                 help="where truths.json and samples.npz are read from")
+  p.add_argument("--out", type=Path, default=None,
+                 help="where cells/ and the CSVs are written (default: --folder)")
   p.add_argument("--arms", nargs="+", required=True)
   p.add_argument("--designs", nargs="+", default=["decay", "strong"], choices=["decay", "strong"])
   p.add_argument("--dims", type=int, nargs="+", default=[5, 10])
@@ -120,12 +141,16 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
   p.add_argument("--gpu-is-free", action="store_true")
   p.add_argument("--vdc-core", type=int, default=None)
   a = p.parse_args()
+  out = a.folder if a.out is None else a.out
 
   for arm in a.arms:
     parsed = parse_npcc_arm(arm)
     if arm not in COMPETITORS and parsed is None:
       raise SystemExit(f"arm must be one of {COMPETITORS} or npcc-<E1 estimator>-"
                        f"<{'|'.join(NPCC_VARIANTS)}>; got {arm}")
+    if parsed and parsed[1] in E3E_VARIANTS and out.resolve() == RESULTS.resolve():
+      raise SystemExit(f"{arm} must be written outside {RESULTS}, which E3d's rows are cited "
+                       f"from; pass --out <new folder>")
     kind = e3_npcc.ESTIMATORS[parsed[0]][2] if parsed else "cpu"
     if (kind == "gpu") != (a.device == "cuda"):
       raise SystemExit(f"{arm} must run with --device {'cuda' if kind == 'gpu' else 'cpu'}")
@@ -148,7 +173,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
     VdcBicop.server = server
   try:
     for arm in a.arms:
-      out_dir = a.folder / "cells" / arm
+      out_dir = out / "cells" / arm
       out_dir.mkdir(parents=True, exist_ok=True)
       parsed = parse_npcc_arm(arm)
       warmed = parsed is None
@@ -238,7 +263,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
                        "tll": "selected: TLL's Dissmann structure", "true": "true (given)"}[which]
           machinery = f"npcc.RosenblattVinecop, {type(context).__name__}"
           pair = f"npcc.RosenblattBicop ({label})"
-          role = "reference" if which == "true" else ("ablation" if variant == "random-s" else "arm")
+          role = "reference" if which == "true" else ("ablation" if variant in NPCC_ABLATIONS else "arm")
           extra = {"estimator": label, "estimator_id": est.estimator_id, "backend": est.backend,
                    "transform": est.transform, "model_version": e3_npcc.ESTIMATORS[label][1],
                    "simplification": simplification}
@@ -271,7 +296,7 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
               f"{rec['per_tree'][0]:.2f}) fit {fit_s:.1f} s inf {inference_s:.1f} s", flush=True)
       rows = [json.loads(q.read_text()) for q in sorted(out_dir.glob("*.json"))]
       if rows:
-        common.write_csv(rows, a.folder / f"npcc_{arm}.csv")
+        common.write_csv(rows, out / f"npcc_{arm}.csv")
   finally:
     if server is not None:
       server.close()
