@@ -15,18 +15,26 @@ that distribution exactly, whatever its smoothing:
 - :class:`NormalQuantileBackend` is a TabPFN-free backend registered as
   ``"normal-quantile"``, which proves the registry and the vine cascade
   without any third-party model.
+
+A run that does not select the ``cuda`` tests sees no CUDA device
+(:func:`pytest_configure`), so every other test runs on the CPU wherever it
+runs.
 """
 
 from __future__ import annotations
 
 import contextlib
 import math
+import os
 from collections.abc import Iterator
 from typing import cast
 
 import numpy as np
 import pytest
 import torch
+
+# pytest's own `-m` parser: a run selects a test exactly when it does.
+from _pytest.mark.expression import Expression
 
 pytest.importorskip("tabpfn")
 
@@ -38,6 +46,31 @@ TABPFN_TARGET = "npcc.core.backends.tabpfn_quantile.TabPFNRegressor"
 
 #: Mass beyond each end of the default quantile table.
 TAIL_MASS = 0.5 * math.erfc(QuantileTableConfig().normal_limit / math.sqrt(2.0))
+
+
+def selects_cuda(markexpr: str) -> bool:
+  """Whether ``-m markexpr`` selects a test whose one mark is ``cuda``.
+
+  An empty expression selects every test, that one included.
+  """
+  if not markexpr.strip():
+    return True
+  return Expression.compile(markexpr).evaluate(lambda name, **_: name == "cuda")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+  """Hide every CUDA device from a run that does not select the ``cuda`` tests.
+
+  No other test names a device, and ``resolve_device(None)`` picks ``cuda``
+  wherever one exists, so each xdist worker of ``make test`` would otherwise
+  open a CUDA context of its own and place its tensors on the GPU. That is
+  not the CPU suite CI runs, and a GPU that cannot hold several contexts at
+  once fails those tests at random. ``make test-cuda``'s ``-m cuda`` keeps
+  the devices. Nothing imported above queries CUDA, so hiding it here, before
+  collection, still takes effect.
+  """
+  if not selects_cuda(config.getoption("markexpr")):
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
 def normal_quantiles(levels: torch.Tensor) -> torch.Tensor:

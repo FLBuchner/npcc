@@ -248,9 +248,10 @@ python_functions = ["test_*"]
 #
 # `-m "not cuda"` is the default because most machines have no GPU and the
 # suite has to pass on them: CI is CPU-only, and four xdist workers each
-# opening a CUDA context is not something to do by accident. A command-line
-# `-m cuda` is appended after these and wins, which is what `make test-cuda`
-# passes.
+# opening a CUDA context is not something to do by accident, so
+# tests/conftest.py hides every device from a run that does not select the
+# `cuda` tests. A command-line `-m cuda` is appended after these and wins,
+# which is what `make test-cuda` passes.
 addopts = ["--strict-markers", "--strict-config", "-m", "not cuda"]
 markers = [
   "cuda: needs a CUDA device; skipped when torch.cuda.is_available() is False",

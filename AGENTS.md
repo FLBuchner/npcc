@@ -295,6 +295,12 @@ with as many rows as there are levels is square, and reads either way.
   cuda"` is a declared default in `addopts`, so `make test`, CI and a bare
   `pytest` all agree; `make test-cuda` is the way in. The `skipif` is what
   makes an explicit `-m cuda` safe on a machine without a device.
+- **Every other test runs on the CPU, even where there is a GPU.** A run that
+  does not select the `cuda` tests sees no CUDA device: `tests/conftest.py`
+  hides it in `pytest_configure`, before anything queries it. An estimator
+  given no device resolves to `cuda` wherever one exists, so without this
+  each xdist worker would open a CUDA context of its own. A test therefore
+  needs no `device="cpu"`, and one that wants the GPU says so with the mark.
 - Use fixtures; avoid bare `assert` on floats — `pytest.approx` or
   `torch.testing.assert_close`.
 - Tests import from the public namespaces, `npcc` or `npcc.core`, except where
