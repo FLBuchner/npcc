@@ -102,7 +102,7 @@ import e3_common as common  # noqa: E402
 import e3_npcc  # noqa: E402
 import readout  # noqa: E402
 
-E1_COMMIT = "2f8fa94"
+E1_COMMIT = "b7702e1"
 PROVENANCE_COLUMNS = [
   "vdc_tag", "vdc_commit", "vdc_main_merge_commit", "checkpoint_sha256",
   "pyvinecopulib_vdc_env", "pyvinecopulib_npcc_env", "npcc_commit",
@@ -826,7 +826,7 @@ def main() -> None:
   out = common.RESULTS
   frames: dict[str, pd.DataFrame] = {}
   report: dict = {"provenance": common.provenance(__file__, "n/a (collection only)")}
-  # E1 ran at 2f8fa94. Rows written before `npcc_core_dirty` was recorded per
+  # E1 ran at b7702e1. Rows written before `npcc_core_dirty` was recorded per
   # row rely on this: the estimator code is the same in HEAD as in E1.
   core_diff = subprocess.run(
     ["git", "-C", str(common.NPCC_REPO), "diff", "--stat", E1_COMMIT, "HEAD", "--",
