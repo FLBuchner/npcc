@@ -31,8 +31,15 @@ from npcc.experiments.config import (
 #   a user who does not know the structure would fit.
 # `tll`: pyvinecopulib with kernel-density margins and TLL pairs on the true
 #   structure, ignoring `x` -- what leaving the covariate out costs.
-ARMS: tuple[str, ...] = ("oracle", "random", "selected", "tll")
-NPCC_ARMS: tuple[str, ...] = ("oracle", "random", "selected")
+# `mixture`: the equal-weight mixture of `mixture_k` non-simplified vines
+#   sharing one set of fitted margins. The first member's structure is the
+#   `selected` arm's; each other is a weighted random spanning-tree draw on
+#   the same transforms, diverse but favoring strong pairs. A non-simplified
+#   vine is consistent on any structure, so averaging over structures hedges
+#   selecting one; by Jensen's inequality the mixture's KL is at most its
+#   members' mean.
+ARMS: tuple[str, ...] = ("oracle", "random", "selected", "tll", "mixture")
+NPCC_ARMS: tuple[str, ...] = ("oracle", "random", "selected", "mixture")
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,7 @@ class VineGridConfig:
   eval_m: int = 1000
   projection_grid_size: int = 30
   batch_size: int | None = None
+  mixture_k: int = 5
 
   def __post_init__(self) -> None:
     if not self.dims or any(d < 2 for d in self.dims):
@@ -97,6 +105,8 @@ class VineGridConfig:
       raise ValueError(f"eval_x_n must be >= 1; got {self.eval_x_n}")
     if self.eval_m < 10:
       raise ValueError(f"eval_m must be >= 10; got {self.eval_m}")
+    if self.mixture_k < 1:
+      raise ValueError(f"mixture_k must be >= 1; got {self.mixture_k}")
 
   def cells(self) -> list[VineCell]:
     """Every data cell of the grid, in sweep order."""
@@ -114,6 +124,7 @@ _VINE_OPTIONAL: dict[str, Callable[[Any], object]] = {
   "eval_m": int,
   "projection_grid_size": int,
   "batch_size": int,
+  "mixture_k": int,
 }
 
 

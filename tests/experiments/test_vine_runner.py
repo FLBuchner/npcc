@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -13,6 +14,8 @@ import pyvinecopulib as pv
 import torch
 from pyvinecopulib.core import NonSimplifiedContext, SimplifiedContext
 
+from npcc.core import ConditionalMargin, registry
+from npcc.core.margin import MarginOptions
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.experiments import scenarios, vine_runner, vine_scenarios
 from npcc.experiments.config import EstimatorSpec, RunConfig
@@ -340,3 +343,196 @@ def test_more_repetitions_resume_on_the_finished_cells(
   assert [c.rep for c in fitted] == [1]
   kept = again[again["rep"] == 0]
   assert kept["KL"].tolist() == pytest.approx(first["KL"].tolist())
+
+
+class LinearGaussianBackend(ConditionalMargin):
+  """Gaussian linear regression of the response on every feature.
+
+  Unlike the ``normal-quantile`` fake, whose pairs are all independent, its
+  pair copulas follow the data, so vines on different structures differ and a
+  mixture of them is not one of its members.
+  """
+
+  _beta: torch.Tensor
+  _sd: torch.Tensor
+
+  def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
+    design = torch.cat([torch.ones_like(z).unsqueeze(1), x], dim=1)
+    beta = torch.linalg.lstsq(design, z.unsqueeze(1)).solution.squeeze(1)
+    self._beta = beta
+    self._sd = (z - design @ beta).std()
+
+  def _predict_quantiles(
+    self, x: torch.Tensor, alphas: torch.Tensor
+  ) -> torch.Tensor:
+    ones = torch.ones(x.shape[0], 1, dtype=x.dtype, device=x.device)
+    mean = torch.cat([ones, x], dim=1) @ self._beta
+    normal = cast("torch.Tensor", torch.special.ndtri(alphas))
+    return mean.unsqueeze(1) + self._sd * normal
+
+
+@pytest.fixture
+def linear_gaussian_backend() -> Iterator[None]:
+  """Register :class:`LinearGaussianBackend` as ``"linear-gaussian"``."""
+
+  def factory(**kwargs: object) -> LinearGaussianBackend:
+    margin = {
+      k: v for k, v in kwargs.items() if k in MarginOptions.__annotations__
+    }
+    return LinearGaussianBackend(**cast("MarginOptions", margin))
+
+  registry.register_backend("linear-gaussian", factory)
+  try:
+    yield
+  finally:
+    registry._REGISTRY.pop("linear-gaussian", None)
+
+
+def _mixture_grid(
+  *, arms: list[str], mixture_k: int, backend: str = "linear-gaussian"
+) -> VineGridConfig:
+  return VineGridConfig(
+    dims=[4],
+    n=[60],
+    n_rep=1,
+    estimators=[
+      EstimatorSpec(label="lin", backend=backend, transform="probit")
+    ],
+    arms=arms,
+    eval_x_n=2,
+    eval_m=30,
+    mixture_k=mixture_k,
+  )
+
+
+def _by_arm(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+  out: dict[str, list[dict[str, Any]]] = {}
+  for row in rows:
+    out.setdefault(str(row["arm"]), []).append(row)
+  return out
+
+
+def test_weighted_random_structures_follow_their_seed() -> None:
+  """A member's structure must be a function of the data and its seed alone.
+
+  Otherwise a resumed or rerun cell would mix other members than it scored,
+  and members sharing a seed would all be one structure.
+  """
+  gen = torch.Generator().manual_seed(1)
+  z = torch.randn(300, 5, generator=gen, dtype=torch.float64)
+  z = z + 0.8 * z[:, [0]]
+  u = torch.special.ndtr(z)
+  draws = [vine_runner.weighted_random_structure(u, s) for s in (11, 12, 11)]
+  matrices = [np.asarray(s.matrix).tolist() for s in draws]
+  assert matrices[0] == matrices[2]
+  assert matrices[0] != matrices[1]
+
+
+def test_identical_members_reproduce_the_member() -> None:
+  """A mixture of k copies of one density must be that density.
+
+  Dropping the ``- log k`` would shift every mixture log-density by it.
+  """
+  member = torch.tensor([-3.0, -0.5, 1.25, -800.0], dtype=torch.float64)
+  margins = [torch.tensor([0.1, -0.2, 0.3, -0.4], dtype=torch.float64)]
+  mixture, members = vine_runner.joint_log_densities(
+    member.expand(3, -1), margins
+  )
+  torch.testing.assert_close(mixture, member + margins[0])
+  torch.testing.assert_close(members, (member + margins[0]).expand(3, -1))
+
+
+def test_the_mixtures_kl_is_at_most_its_members_mean() -> None:
+  """Jensen's inequality must hold for the Monte-Carlo KL, point by point.
+
+  The log of a mean density is at least the mean of the log-densities at
+  every point, so a mixture scored above its members' mean is wired wrong.
+  """
+  gen = torch.Generator().manual_seed(0)
+  z = torch.randn(2000, generator=gen, dtype=torch.float64)
+  normal = torch.distributions.Normal(0.0, 1.0)
+  log_true = normal.log_prob(z)
+  logs = torch.stack(
+    [torch.distributions.Normal(mu, 1.0).log_prob(z) for mu in (-0.6, 0.2, 1.0)]
+  )
+  mixture = vine_runner.mixture_log_density(logs)
+  kl_mixture = vine_runner.score(log_true.exp(), mixture.exp())["KL"]
+  kl_members = [
+    vine_runner.score(log_true.exp(), member.exp())["KL"] for member in logs
+  ]
+  assert kl_mixture <= float(np.mean(kl_members))
+  assert kl_mixture < float(np.mean(kl_members)) - 1e-3
+
+
+def test_a_mixture_of_one_reproduces_the_selected_arm(
+  linear_gaussian_backend: None,
+) -> None:
+  """With k = 1 the mixture is the selected arm, fitted and scored the same.
+
+  Its joint density is assembled from parts rather than through
+  ``RosenblattVinedist.pdf``, so any drift there would show here as a
+  mixture that is not its own single member.
+  """
+  grid = _mixture_grid(arms=["selected", "mixture"], mixture_k=1)
+  metrics, runtime = vine_runner.summarize_one_cell(
+    grid.cells()[0], grid, base_seed=317, device="cpu"
+  )
+  rows = _by_arm(metrics)
+  assert set(rows) == {"selected", "mixture", "mixture-member-1"}
+  for name in (*vine_runner.METRIC_NAMES, "loglik_hat"):
+    for arm in ("mixture", "mixture-member-1"):
+      assert [r[name] for r in rows[arm]] == pytest.approx(
+        [r[name] for r in rows["selected"]], rel=1e-12, abs=1e-12
+      ), (arm, name)
+  structures = {str(r["arm"]): r["structure"] for r in runtime}
+  assert structures["mixture"] == structures["selected"]
+
+
+def test_the_mixture_scores_itself_and_each_member(
+  linear_gaussian_backend: None,
+) -> None:
+  """Every member must be scored, and the mixture by at most their mean KL.
+
+  The paper reads the mixture against its average member; without the
+  members' own rows, or with a mean over some other set, it could not.
+  """
+  k = 3
+  grid = _mixture_grid(arms=["selected", "mixture"], mixture_k=k)
+  metrics, runtime = vine_runner.summarize_one_cell(
+    grid.cells()[0], grid, base_seed=317, device="cpu"
+  )
+  rows = _by_arm(metrics)
+  members = [f"mixture-member-{j}" for j in range(1, k + 1)]
+  assert set(rows) == {"selected", "mixture", *members}
+  for i, row in enumerate(rows["mixture"]):
+    for name in ("KL", "KL_copula"):
+      mean = float(np.mean([rows[m][i][name] for m in members]))
+      assert row[f"{name}_members_mean"] == pytest.approx(mean)
+      assert math.isfinite(row[name])
+    assert row["KL"] <= row["KL_members_mean"] + 1e-12
+  kls = {m: [r["KL"] for r in rows[m]] for m in members}
+  assert len({tuple(v) for v in kls.values()}) > 1
+  assert rows["mixture-member-1"][0]["KL"] == pytest.approx(
+    rows["selected"][0]["KL"], rel=1e-12
+  )
+  mixture = next(r for r in runtime if r["arm"] == "mixture")
+  matrices = json.loads(str(mixture["mixture_structures"]))
+  assert len(matrices) == k
+  assert matrices[0] == json.loads(str(mixture["structure"]))
+  assert len({str(m) for m in matrices}) > 1
+  assert float(mixture["selection_time"]) >= 0.0
+
+
+def test_the_signature_reads_k_only_for_a_mixture(
+  linear_gaussian_backend: None,
+) -> None:
+  """k changes a mixture's cells, and nothing else's.
+
+  Hashing it for every grid would refuse to resume a run made before the
+  arm existed; not hashing it would resume a mixture of 5 as one of 3.
+  """
+  run = RunConfig(out=Path("unused"), device="cpu")
+  plain = [_mixture_grid(arms=["random"], mixture_k=k) for k in (3, 5)]
+  assert len({vine_runner.grid_signature(g, run) for g in plain}) == 1
+  mixed = [_mixture_grid(arms=["mixture"], mixture_k=k) for k in (3, 5)]
+  assert len({vine_runner.grid_signature(g, run) for g in mixed}) == 2
