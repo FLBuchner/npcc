@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from dataclasses import fields
 from pathlib import Path
@@ -434,3 +435,53 @@ def test_a_missing_package_stops_the_run_before_its_first_cell(
   with pytest.raises(RuntimeError, match="npccNoSuchPackage"):
     run_covariate_study(grid, RunConfig(out=out))
   assert not (out / "cells").exists() or not any((out / "cells").iterdir())
+
+
+def _gamcopula() -> bool:
+  rscript = shutil.which("Rscript")
+  return rscript is not None and (
+    subprocess.run(
+      [rscript, "-e", "library(gamCopula)"], capture_output=True, check=False
+    ).returncode
+    == 0
+  )
+
+
+@pytest.mark.skipif(not _gamcopula(), reason="needs Rscript with gamCopula")
+def test_the_oracle_grows_a_basis_as_the_selection_does(tmp_path: Path) -> None:
+  """At k = 10 the oracle underfits s3(t) = sin(6 pi t) / 4, three periods.
+
+  It would then lose to the selection arm, whose doubling step grows that
+  basis, for a reason unrelated to knowing the truth; the oracle takes the
+  same rule, and the doubled basis shows in its formula.
+  """
+  u, v, x = cs.sample("gaussian", "gampcc", 2000, 3)
+  columns = {name: x[:, k].numpy() for k, name in enumerate(cs.COVARIATES)}
+  pd.DataFrame({"u1": u.numpy(), "u2": v.numpy(), **columns}).to_csv(
+    tmp_path / "train.csv", index=False
+  )
+  pd.DataFrame(
+    {
+      "grid": "g",
+      "u1": u.numpy()[:3],
+      "u2": v.numpy()[:3],
+      **{name: c[:3] for name, c in columns.items()},
+    }
+  ).to_csv(tmp_path / "eval.csv", index=False)
+  done = subprocess.run(
+    [
+      shutil.which("Rscript") or "Rscript",
+      str(_ROOT / "r_methods" / "fit_gamcopula_oracle.R"),
+      str(tmp_path / "train.csv"),
+      str(tmp_path / "eval.csv"),
+      str(tmp_path / "pred.csv"),
+      "1",
+      "gampcc",
+      "gaussian",
+    ],
+    capture_output=True,
+    text=True,
+    check=True,
+  )
+  assert 's(t3, k = 20, bs = "cr")' in done.stdout
+  assert 's(t1, k = 10, bs = "cr")' in done.stdout

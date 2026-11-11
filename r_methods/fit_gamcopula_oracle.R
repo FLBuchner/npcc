@@ -28,9 +28,20 @@
 # factor's main effect carries the difference in level; gamBiCopFit hands
 # the formula to mgcv::gam unchanged, and gamBiCopPredict to predict.gam,
 # which accept it as it is. This is the model fit_gamcopula_select.R aims at
-# when its selection keeps exactly the true covariates -- though its doubling
-# step can enlarge a basis beyond K -- except for the interaction, which its
-# additive formula cannot express.
+# when its selection keeps exactly the true covariates, except for the
+# interaction, which its additive formula cannot express.
+#
+# **Basis size.** Every smooth starts at k = K and grows by
+# gamBiCopVarSel's own rule, the loop after its selection (gamCopula 0.0-8),
+# ported here line for line: while some smooth's EDF exceeds 0.8 (k - 1) and
+# every k is below n / 30, double that smooth's k, refit, and keep doubling
+# only those still above the line whose doubled k stays below the number of
+# distinct values of their covariate. A `by` term's EDF is the larger of its
+# levels'. gampcc's own oracle kept k = 10, which underfits s3(t) =
+# sin(6 pi t) / 4, three periods, where the selection arm's doubling does
+# not; with the same rule the two arms differ only in the formula and the
+# family. The script refuses to run if gamBiCopVarSel's rule is not the one
+# ported.
 #
 # **The family** is the true one, as gampcc's oracle had it: `family` is the
 # cell's (gaussian or clayton), fitted as gamCopula's Gaussian (1) or its
@@ -164,18 +175,39 @@ vine_family <- function(family, par) {
   ifelse(par > 0, pair[1], pair[2])
 }
 
-smooth <- function(t, by = NULL) {
-  sprintf("s(%s, k = %d, bs = \"cr\"%s)", t, K,
+smooth <- function(t, k, by = NULL) {
+  sprintf("s(%s, k = %d, bs = \"cr\"%s)", t, as.integer(k),
           if (is.null(by)) "" else paste0(", by = ", by))
 }
-formula <- as.formula(switch(scenario,
-  gampcc = paste("~", paste(
-    c("b1", "b2", "b3", "z1", "z2", "z3", smooth(c("t1", "t2", "t3"))),
-    collapse = " + "
-  )),
-  interaction = paste("~", smooth("t1", by = "b1"), "+ b1"),
-  constant = "~ 1"
-))
+# The scenario's smooth terms, and its formula at basis sizes `basis`.
+SMOOTHS <- switch(scenario,
+  gampcc = c("t1", "t2", "t3"), interaction = "t1", constant = character(0)
+)
+formula_at <- function(basis) {
+  as.formula(switch(scenario,
+    gampcc = paste("~", paste(
+      c("b1", "b2", "b3", "z1", "z2", "z3", smooth(SMOOTHS, basis)),
+      collapse = " + "
+    )),
+    interaction = paste("~", smooth("t1", basis, by = "b1"), "+ b1"),
+    constant = "~ 1"
+  ))
+}
+
+# The lines of gamBiCopVarSel's basis rule that the loop below ports; the
+# script refuses a gamCopula whose rule reads otherwise.
+RULE <- c(
+  "sel <- summary(tmp$res@model)$edf > (basis - 1) * 0.8",
+  "while (any(sel) && all(basis < n/30)) {",
+  "basis[sel] <- 2 * basis[sel]",
+  "sel[sel] <- summary(tmp$res@model)$edf[sel] > (basis[sel] -",
+  "sel[sel] <- 2 * basis[sel] < apply(data[, nn[sel]],"
+)
+ported <- trimws(deparse(gamCopula:::gamBiCopVarSel))
+if (!all(RULE %in% ported)) {
+  refuse("gamBiCopVarSel's basis rule must read as the 0.0-8 one this script ",
+         "ports; missing: ", paste(setdiff(RULE, ported), collapse = " | "))
+}
 
 # The covariates as the formula reads them: b1 is a factor where it is a
 # `by` variable, with both levels whatever the rows hold.
@@ -206,10 +238,36 @@ if (scenario == "interaction" && length(unique(train$b1)) < 2) {
          unique(train$b1))
 }
 
-fit <- timed(gamBiCopFit(
-  covariates_of(train), formula, family, tau = TRUE, method = "FS",
-  tol.rel = 0.001, n.iters = N_ITERS
-))
+fit_at <- function(basis) {
+  gamBiCopFit(covariates_of(train), formula_at(basis), family, tau = TRUE,
+              method = "FS", tol.rel = 0.001, n.iters = N_ITERS)
+}
+# Each smooth term's EDF: the largest of its smooths, one per level of a
+# `by` factor.
+term_edf <- function(tmp) {
+  edf <- summary(tmp$res@model)$edf
+  names <- rownames(summary(tmp$res@model)$s.table)
+  vapply(SMOOTHS, function(t) max(edf[startsWith(names, paste0("s(", t, ")"))]),
+         numeric(1))
+}
+fit <- timed({
+  # gamBiCopVarSel's basis rule; `sel`, `basis` and `n` as it names them.
+  n <- nrow(train)
+  basis <- rep(K, length(SMOOTHS))
+  tmp <- fit_at(basis)
+  sel <- term_edf(tmp) > (basis - 1) * 0.8
+  while (any(sel) && all(basis < n / 30)) {
+    basis[sel] <- 2 * basis[sel]
+    tmp <- fit_at(basis)
+    sel[sel] <- term_edf(tmp)[sel] > (basis[sel] - 1) * 0.8
+    if (any(sel)) {
+      sel[sel] <- 2 * basis[sel] < vapply(
+        SMOOTHS[sel], function(t) length(unique(train[[t]])), integer(1)
+      )
+    }
+  }
+  tmp
+})
 model <- fit$value$res
 # One line on the fitted model, which the harness logs: the formula, its
 # total EDF (mgcv's, which logLik counts) and each smooth's, and whether the

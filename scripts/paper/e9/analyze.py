@@ -19,8 +19,9 @@ writes into ``<first run>/analysis/`` (or ``--out``):
   counts it in ``failed``;
 - ``fits.csv``: per R fit, from the line its script logs, the family it
   chose, boostCopula's cross-validated stop out of its cap, the covariates
-  it kept, counted as active and inert for the scenario, and whether
-  gamCopula's Fisher scoring converged within its iterations;
+  it kept, counted as active and inert for the scenario, gamCopula's final
+  basis size per smooth (``basis``, from its formula), and whether its
+  Fisher scoring converged within its iterations;
 - ``fits_summary.csv``: the same per estimator, scenario and ``n``: how
   often the chosen family is the true one (either double Clayton of type I
   or II where every true tau is positive, since both are then the Clayton;
@@ -318,6 +319,7 @@ def fit_logs(runs: list[Path]) -> pd.DataFrame:
         stop = re.search(r"cv-stop (\d+)/(\d+)", report)
         kept = _KEPT.search(report)
         converged = re.search(r"converged (yes|no)", report)
+        basis = re.findall(r"s\((t[1-5]), k = (\d+)", report)
         row: dict[str, object] = {
           "label": match["label"],
           "family": match["family"],
@@ -331,6 +333,7 @@ def fit_logs(runs: list[Path]) -> pd.DataFrame:
           "active_kept": math.nan,
           "inert_kept": math.nan,
           "converged": converged[1] if converged else "",
+          "basis": " ".join(f"{t}:{k}" for t, k in basis),
         }
         if kept is not None:
           names = re.findall(r"\b[bzt][1-5]\b", kept["kept"])

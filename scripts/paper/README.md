@@ -261,7 +261,13 @@ with Clayton and Gaussian copulas:
     true formula (`r_methods/fit_gamcopula_oracle.R`): under `gampcc`, `b1 +
     b2 + b3 + z1 + z2 + z3` and a smooth of each of `t1..t3`; under
     `interaction`, `s(t1, by = b1) + b1` with `b1` a factor; under `constant`,
-    the intercept.
+    the intercept. Each smooth starts at `k = 10` and grows by
+    `gamBiCopVarSel`'s own basis rule, ported line for line: double `k`
+    while its EDF exceeds `0.8 (k - 1)` and every `k` is below `n / 30`.
+    This is the one departure from gampcc's fixed-`k` oracle: at `k = 10`
+    the oracle underfits `s3(t) = sin(6 pi t)/4`, where the selection
+    arm's doubling does not, so with the same rule the two arms differ only
+    in the formula and the family.
   - boostCopula with the `b` and `z` as linear columns and a cubic B-spline
     basis per `t` (`df = 9`, boundary knots `[0, 1]`), stopped by 10-fold
     cross-validation with E1b's cap, `maxit = 5000`
