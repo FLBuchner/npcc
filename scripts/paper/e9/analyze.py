@@ -13,18 +13,26 @@ writes into ``<first run>/analysis/`` (or ``--out``):
 - ``iae.csv``: the IAE of the density and both h-functions, as ``kl.csv``;
 - ``per_point.csv``: per family, scenario, ``n``, estimator and covariate
   point, the KL and IAE averaged over repetitions, with the point's true tau;
-- ``failures.csv``: every fit that failed, with its error. A failed fit is
-  missing from every mean, and every table counts it in ``failed``;
+- ``failures.csv``: every fit that failed, with its error: a script that
+  exited with an error, or a fit that scored a non-finite KL_mc or IAE at
+  some point. A failed fit is missing from every mean, and every table
+  counts it in ``failed``;
 - ``fits.csv``: per R fit, from the line its script logs, the family it
   chose, boostCopula's cross-validated stop out of its cap, the covariates
-  it kept, counted as active and inert for the scenario, and whether the
-  oracle's Fisher scoring converged within its iterations;
+  it kept, counted as active and inert for the scenario, and whether
+  gamCopula's Fisher scoring converged within its iterations;
 - ``fits_summary.csv``: the same per estimator, scenario and ``n``: how
-  often the chosen family is the true one, how many stops landed within 5%
+  often the chosen family is the true one (either double Clayton of type I
+  or II where every true tau is positive, since both are then the Clayton;
+  type I alone under ``gampcc``), how many stops landed within 5%
   of the cap (where the cap, not the cross-validation, may have stopped),
-  the mean number of active and inert covariates kept, and how many oracle
-  fits stopped at the iteration cap unconverged, which gamCopula warns
-  should not be trusted.
+  the mean number of active and inert covariates kept, and how many
+  gamCopula fits stopped at the iteration cap unconverged, which gamCopula
+  warns should not be trusted.
+
+The runs must pair: every cell has one seed across them, so each holds the
+same data, and every estimator has every cell the baseline has, except the
+one on the active covariates where a scenario has none.
 
 Usage (from the npcc repository root)::
 
@@ -40,6 +48,7 @@ import math
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from npcc.experiments.covariate_scenarios import ACTIVE, COVARIATES
@@ -63,8 +72,9 @@ DISPLAY: dict[str, str] = {
 
 CELL: list[str] = ["family", "scenario", "n", "rep"]
 
-#: Each family's code in gamCopula and boostCopula, for the chosen family.
-TRUE_FAMILY: dict[str, int] = {"gaussian": 1, "clayton": 301}
+#: The scenarios whose true tau changes sign. Elsewhere it is positive, and
+#: the double Claytons 301 and 302 both are the Clayton there.
+SIGN_CHANGING: frozenset[str] = frozenset({"gampcc"})
 
 #: A log record's start, which a script's multi-line report continues.
 _RECORD = re.compile(r"^\d{4}-\d{2}-\d{2} [\d:,]+ ", re.MULTILINE)
@@ -80,8 +90,113 @@ _KEPT = re.compile(
 )
 
 
+def true_families(family: str, scenario: str) -> set[int]:
+  """The family codes, in gamCopula's and boostCopula's terms, that are true.
+
+  Parameters
+  ----------
+  family : str
+      The cell's family, ``gaussian`` or ``clayton``.
+  scenario : str
+      The cell's scenario.
+
+  Returns
+  -------
+  set of int
+      ``{1}`` for the Gaussian; for the Clayton ``{301}`` where tau changes
+      sign, and ``{301, 302}`` where it is positive throughout.
+  """
+  if family == "gaussian":
+    return {1}
+  return {301} if scenario in SIGN_CHANGING else {301, 302}
+
+
+def _read(cell: Path) -> pd.DataFrame:
+  parquet, csv = cell / "metrics.parquet", cell / "metrics.csv"
+  if parquet.is_file():
+    return pd.read_parquet(parquet)
+  # Only an empty field is missing: a label pandas reads as NaN by default
+  # would drop its rows from every groupby.
+  return pd.read_csv(csv, keep_default_na=False, na_values=[""])
+
+
+def flag_nonfinite(metrics: pd.DataFrame) -> pd.DataFrame:
+  """Mark a fit with a non-finite KL_mc or IAE at any point as failed.
+
+  A mean over the other points would score the fit on what it got right;
+  NaN drops out of a mean silently, and an infinite density's KL_mc is
+  ``-inf``, which is not missing.
+
+  Parameters
+  ----------
+  metrics : pandas.DataFrame
+      The metric rows, with an ``error`` column, empty for a fit that ran.
+
+  Returns
+  -------
+  pandas.DataFrame
+      ``metrics``, with each such fit's error set on all of its rows.
+  """
+  keys = [*CELL, "label"]
+  kl = metrics["KL_mc"].to_numpy(dtype=np.float64)
+  iae = metrics["IAE"].to_numpy(dtype=np.float64)
+  pdf = (metrics["quantity"] == "pdf").to_numpy()
+  bad = (~np.isfinite(iae)) | (pdf & ~np.isfinite(kl))
+  bad &= (metrics["error"] == "").to_numpy()
+  if not bad.any():
+    return metrics
+  counts = metrics.loc[bad].groupby(keys).size().rename("bad").reset_index()
+  out = metrics.merge(counts, on=keys, how="left")
+  hit = out["bad"].notna() & (out["error"] == "")
+  out.loc[hit, "error"] = out.loc[hit, "bad"].map(
+    lambda k: f"non-finite KL_mc or IAE in {int(k)} rows"
+  )
+  return out.drop(columns="bad")
+
+
+def check_pairing(metrics: pd.DataFrame) -> None:
+  """Stop unless the runs hold the same data and the same cells.
+
+  Parameters
+  ----------
+  metrics : pandas.DataFrame
+      The metric rows of every run.
+  """
+  seeds = metrics.groupby(CELL)["seed"].nunique()
+  if (seeds > 1).any():
+    cells = seeds[seeds > 1].index.tolist()
+    raise SystemExit(
+      f"each cell must have one seed across the runs, so their fits share "
+      f"its data; got several for {len(cells)} cells, e.g. {cells[:3]}"
+    )
+  if BASELINE not in set(metrics["label"]):
+    raise SystemExit(f"the runs must hold {BASELINE!r}, the baseline; got none")
+  cells = metrics[[*CELL, "label", "covariates"]].drop_duplicates()
+  base = {
+    tuple(row)
+    for row in cells.loc[cells["label"] == BASELINE, CELL].itertuples(
+      index=False
+    )
+  }
+  for label, rows in cells.groupby("label"):
+    modes = set(rows["covariates"])
+    expected = {
+      cell
+      for cell in base
+      if not ("active" in modes and not ACTIVE[str(cell[1])])
+    }
+    have = {tuple(row) for row in rows[CELL].itertuples(index=False)}
+    if have != expected:
+      missing, extra = sorted(expected - have), sorted(have - expected)
+      raise SystemExit(
+        f"{label} must have every cell {BASELINE} has; got {len(missing)} "
+        f"missing (e.g. {missing[:3]}) and {len(extra)} it lacks (e.g. "
+        f"{extra[:3]})"
+      )
+
+
 def load(runs: list[Path]) -> pd.DataFrame:
-  """Every finished cell's metric rows, over every run.
+  """Every finished cell's metric rows, over every run, checked to pair.
 
   Parameters
   ----------
@@ -98,12 +213,7 @@ def load(runs: list[Path]) -> pd.DataFrame:
     done = sorted(glob.glob(str(run / "cells" / "*" / "DONE")))
     if not done:
       raise SystemExit(f"{run} must hold finished cells; got none")
-    for marker in done:
-      cell = Path(marker).parent
-      parquet, csv = cell / "metrics.parquet", cell / "metrics.csv"
-      frames.append(
-        pd.read_parquet(parquet) if parquet.is_file() else pd.read_csv(csv)
-      )
+    frames.extend(_read(Path(marker).parent) for marker in done)
   metrics = pd.concat(frames, ignore_index=True)
   keys = [*CELL, "label", "quantity", "point"]
   duplicated = metrics.duplicated(keys)
@@ -116,13 +226,9 @@ def load(runs: list[Path]) -> pd.DataFrame:
   if "error" not in metrics.columns:
     raise SystemExit("the runs must record each fit's error; got no column")
   metrics["error"] = metrics["error"].fillna("").astype(str)
+  check_pairing(metrics)
+  metrics = flag_nonfinite(metrics)
   pdf = metrics[(metrics["quantity"] == "pdf") & (metrics["error"] == "")]
-  bad = pdf[pdf["KL_mc"].isna()]
-  if not bad.empty:
-    raise SystemExit(
-      f"every density row must carry a finite KL_mc; got {len(bad)} without, "
-      f"for {sorted(bad['label'].unique())}"
-    )
   draws = sorted(pdf["KL_mc_n"].unique())
   if len(draws) != 1:
     raise SystemExit(
@@ -186,7 +292,12 @@ def fit_logs(runs: list[Path]) -> pd.DataFrame:
   # A cell resumed after an interruption reports twice; the last is its fit.
   fits = fits.drop_duplicates([*CELL, "label"], keep="last")
   fits["estimator"] = fits["label"].map(DISPLAY).fillna(fits["label"])
-  fits["true_family"] = fits["chosen_family"] == fits["family"].map(TRUE_FAMILY)
+  fits["true_family"] = [
+    chosen in true_families(family, scenario)
+    for chosen, family, scenario in zip(
+      fits["chosen_family"], fits["family"], fits["scenario"], strict=True
+    )
+  ]
   fits["near_cap"] = fits["cv_stop"] >= 0.95 * fits["maxit"]
   return fits.sort_values([*CELL, "label"], ignore_index=True)
 
@@ -243,10 +354,11 @@ def per_rep(metrics: pd.DataFrame, quantity: str, value: str) -> pd.DataFrame:
   rows = metrics[metrics["quantity"] == quantity].assign(
     failed=lambda d: d["error"] != ""
   )
+  # A point without a score leaves the repetition without one, rather than a
+  # mean over what it has.
   out = rows.groupby([*CELL, "label", "estimator"], as_index=False).agg(
-    value=(value, "mean"), failed=("failed", "any")
+    value=(value, lambda v: v.mean(skipna=False)), failed=("failed", "any")
   )
-  # A failed fit has no score: NaN, rather than a mean over what it lacks.
   out.loc[out["failed"], "value"] = math.nan
   return out.rename(columns={"value": value})
 
@@ -278,8 +390,6 @@ def paired(reps: pd.DataFrame, value: str, by: list[str]) -> pd.DataFrame:
   pandas.DataFrame
       One row per breakdown level and estimator.
   """
-  if BASELINE not in set(reps["label"]):
-    raise SystemExit(f"the runs must hold {BASELINE!r}, the baseline; got none")
   unit = [*by, "rep"]
   # A repetition with a failed fit in any family it averages is missing:
   # the mean skips nothing.
@@ -419,7 +529,7 @@ def main() -> None:
       )
     if (unconverged := int((fits["converged"] == "no").sum())) > 0:
       print(
-        f"\n{unconverged} oracle fits stopped at n.iters unconverged "
+        f"\n{unconverged} gamCopula fits stopped at n.iters unconverged "
         "(gamCopula: not to be trusted); they are scored as returned"
       )
     print("\nR fits: chosen family and covariates kept")

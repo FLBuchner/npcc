@@ -231,7 +231,9 @@ with Clayton and Gaussian copulas:
 - **interaction:** E1's `linear` regime in `t1` where `b1 = 0` and its `sin`
   regime where `b1 = 1`. Two covariates have an effect, and an additive
   model without a `t1 x b1` term is misspecified.
-- **null:** Kendall's tau 0.5; no covariate has an effect.
+- **constant:** Kendall's tau 0.5; no covariate has an effect. The
+  scenario is not named `null`, which pandas reads from a CSV as a missing
+  value.
 
 - Configs: `configs/e9_covariates.toml` (npcc) and
   `configs/e9_covariates_r.toml` (the R competitors), on one `[grid]`: the
@@ -243,17 +245,22 @@ with Clayton and Gaussian copulas:
     b7702e1: LightGBM 0.0300, CatBoost 0.0373, XGBoost 0.0458, each over 40
     cells). E1's labels and backend settings, so E1's estimator ids.
   - TabPFN v3 on the scenario's active covariates only
-    (`active_covariates`; not fitted under null), and on `(U, V)` alone
+    (`active_covariates`; not fitted under constant), and on `(U, V)` alone
     (`without_covariates`).
   - gamCopula as Vatter and Nagler run it, `gamBiCopSelect` with the `b`
     and `z` linear and the `t` smooth, `s(t, k = 10, bs = "cr")`, from
     E1b's family set (Gaussian, Student t, the double Clayton and Gumbel
-    with every rotation), with their `n.iters = 30` and `select.once =
-    FALSE` (`r_methods/fit_gamcopula_select.R`).
+    with every rotation), with their `select.once = FALSE`
+    (`r_methods/fit_gamcopula_select.R`).
+  - Both gamCopula arms run `n.iters = 100` Fisher-scoring iterations
+    where Vatter and Nagler ran 30: at 30 the oracle can stop unconverged,
+    which gamCopula warns is not to be trusted, and a higher cap leaves a
+    fit that converges sooner as it is. Each script logs whether its fit
+    converged, and the analysis counts those that did not.
   - The oracle, gamCopula with the cell's true family and the scenario's
     true formula (`r_methods/fit_gamcopula_oracle.R`): under `gampcc`, `b1 +
     b2 + b3 + z1 + z2 + z3` and a smooth of each of `t1..t3`; under
-    `interaction`, `s(t1, by = b1) + b1` with `b1` a factor; under `null`,
+    `interaction`, `s(t1, by = b1) + b1` with `b1` a factor; under `constant`,
     the intercept.
   - boostCopula with the `b` and `z` as linear columns and a cubic B-spline
     basis per `t` (`df = 9`, boundary knots `[0, 1]`), stopped by 10-fold
@@ -284,7 +291,10 @@ with Clayton and Gaussian copulas:
   scripts' logged lines `fits.csv` and `fits_summary.csv`: per estimator,
   scenario and n, how often the chosen family is the true one, the active
   and inert covariates kept, and how many of boostCopula's stops landed
-  within 5% of the cap.
+  within 5% of the cap. It refuses runs that do not pair: a cell on
+  different seeds in two runs, or an estimator without every cell of TabPFN
+  v3's (the arm on the active covariates aside, under `constant`). A fit
+  with a non-finite KL_mc or IAE at any point counts as failed.
 
 ## E2 — vine study (§3.4)
 

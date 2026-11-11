@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import math
 import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import pyvinecopulib as pv
 import torch
@@ -29,7 +31,7 @@ def test_only_the_active_covariates_move_the_copula(
   """An inactive covariate with an effect would make it relevant.
 
   The study's questions -- what irrelevant covariates cost, whether npcc
-  overfits under null -- assume that only :data:`ACTIVE` moves the truth.
+  overfits under constant -- assume that only :data:`ACTIVE` moves the truth.
   """
   x = _x()
   base = cs.kendall_tau(family, scenario, x)
@@ -40,6 +42,17 @@ def test_only_the_active_covariates_move_the_copula(
     moved[:, k] = redrawn[:, k]
     changed = not torch.equal(cs.kendall_tau(family, scenario, moved), base)
     assert changed == (name in cs.ACTIVE[scenario]), name
+
+
+def test_no_scenario_reads_back_from_a_csv_as_missing() -> None:
+  """A scenario pandas reads as NaN drops its rows from every groupby.
+
+  The tables are written as CSV, and read back by whoever analyzes them,
+  with pandas' defaults.
+  """
+  frame = pd.DataFrame({"scenario": cs.SCENARIOS})
+  back = pd.read_csv(io.StringIO(frame.to_csv(index=False)))
+  assert back["scenario"].tolist() == list(cs.SCENARIOS)
 
 
 @pytest.mark.parametrize("family", cs.SCENARIO_FAMILIES)
@@ -224,7 +237,7 @@ def test_the_sample_follows_each_rows_copula() -> None:
   low, high = eta < -0.4, eta > 0.4
   assert kendalltau(u[low], v[low]).statistic < -0.05
   assert kendalltau(u[high], v[high]).statistic > 0.05
-  u, v, _ = cs.sample("gaussian", "null", 3000, 12)
+  u, v, _ = cs.sample("gaussian", "constant", 3000, 12)
   assert kendalltau(u, v).statistic == pytest.approx(0.5, abs=0.03)
 
 

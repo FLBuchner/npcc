@@ -8,6 +8,7 @@ no third-party model and no R are needed.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from dataclasses import fields
 from pathlib import Path
@@ -80,7 +81,7 @@ def _normal(label: str) -> EstimatorSpec:
 def _grid(*estimators: EstimatorSpec, **kwargs: object) -> CovariateGridConfig:
   options: dict[str, object] = {
     "families": ["clayton"],
-    "scenarios": ["gampcc", "null"],
+    "scenarios": ["gampcc", "constant"],
     "n": [80],
     "n_rep": 1,
     "estimators": list(estimators),
@@ -172,7 +173,7 @@ def test_each_estimator_is_fitted_on_its_covariates(
   """The no-covariate and active-covariate arms must see what they claim.
 
   An arm handed every covariate would measure nothing; the active arm has no
-  covariate to see under null, where it is not fitted.
+  covariate to see under constant, where it is not fitted.
   """
   grid = _grid(
     _normal("all"),
@@ -182,12 +183,12 @@ def test_each_estimator_is_fitted_on_its_covariates(
     without_covariates=["none"],
   )
   metric_df, runtime_df, _ = run_covariate_study(grid, RunConfig(out=tmp_path))
-  # gampcc: all, active, none; null: all, none.
+  # gampcc: all, active, none; constant: all, none.
   assert pair_fit_widths == [15, len(cs.ACTIVE["gampcc"]), None, 15, None]
   fitted = runtime_df.groupby("scenario")["label"].apply(sorted).to_dict()
   assert fitted == {
     "gampcc": ["active", "all", "none"],
-    "null": ["all", "none"],
+    "constant": ["all", "none"],
   }
   assert set(metric_df["covariates"]) == {"all", "active", "none"}
 
@@ -216,7 +217,7 @@ def test_the_points_are_the_scenarios_alone() -> None:
     assert x is not None
     assert torch.equal(x, eval_points(grid, 7, cell.scenario))
   assert not torch.equal(
-    eval_points(grid, 7, "gampcc"), eval_points(grid, 7, "null")
+    eval_points(grid, 7, "gampcc"), eval_points(grid, 7, "constant")
   )
 
 
@@ -248,7 +249,7 @@ def test_a_script_gets_every_covariate_the_scenario_and_the_family(
   header = ",".join(cs.COVARIATES)
   assert [c.split(" ")[:2] for c in calls] == [
     ["gampcc", "clayton"],
-    ["null", "clayton"],
+    ["constant", "clayton"],
   ]
   for call in calls:
     _, _, train, evaluation = call.split(" ")
@@ -357,3 +358,40 @@ def test_a_missing_interpreter_stops_the_run(
   grid = _grid(_external_spec(stand_in))
   with pytest.raises(RuntimeError, match="must be on PATH"):
     run_covariate_study(grid, RunConfig(out=tmp_path / "out"))
+
+
+def test_predictions_that_break_the_exchange_stop_the_run(
+  tmp_path: Path, stand_in: Path
+) -> None:
+  """A harness or script defect must not be recorded as the method failing.
+
+  Recorded, a broken exchange would turn every fit of the script into a
+  ``failed`` count in the tables, and read as the method's record.
+  """
+  stand_in.write_text(
+    stand_in.read_text().replace('"pdf": 1.0', '"pdf": float("nan")')
+  )
+  grid = _grid(_external_spec(stand_in))
+  with pytest.raises(_external.ExchangeError, match="finite pdf"):
+    run_covariate_study(grid, RunConfig(out=tmp_path / "out"))
+
+
+@pytest.mark.skipif(shutil.which("Rscript") is None, reason="needs Rscript")
+def test_a_missing_package_stops_the_run_before_its_first_cell(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """A package missing from the machine would fail every fit of its script.
+
+  Each failure would be recorded as the method's own, so the run must stop
+  before it fits anything.
+  """
+  monkeypatch.setattr(_external, "RSCRIPT", shutil.which("Rscript"))
+  script = tmp_path / "needs_a_package.R"
+  script.write_text(
+    "suppressPackageStartupMessages({\n  library(npccNoSuchPackage)\n})\n"
+  )
+  grid = _grid(_external_spec(script))
+  out = tmp_path / "out"
+  with pytest.raises(RuntimeError, match="npccNoSuchPackage"):
+    run_covariate_study(grid, RunConfig(out=out))
+  assert not (out / "cells").exists() or not any((out / "cells").iterdir())

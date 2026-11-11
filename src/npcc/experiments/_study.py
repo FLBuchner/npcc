@@ -194,8 +194,13 @@ def read_table(base: Path, fmt: str) -> pd.DataFrame:
   if fmt == "parquet":
     return pd.read_parquet(path)
   # The default parser is not exact for float64, so a resumed run would
-  # differ from a fresh one in the last digits of every metric.
-  return pd.read_csv(path, float_precision="round_trip")
+  # differ from a fresh one in the last digits of every metric. Only an empty
+  # field, which is how `to_csv` writes a missing value, reads as missing:
+  # pandas' other defaults would turn a label such as "null" or "NA" into
+  # NaN, and every groupby would drop its rows.
+  return pd.read_csv(
+    path, float_precision="round_trip", keep_default_na=False, na_values=[""]
+  )
 
 
 def write_tables(

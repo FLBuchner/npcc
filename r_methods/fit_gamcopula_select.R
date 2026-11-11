@@ -12,7 +12,7 @@
 # fifteen), and writes `pred.csv` with one row per evaluation row, in order --
 # the row itself, then pdf, hfunc1, hfunc2, tau, fit_time, and the seconds
 # each prediction step took. The b's are 0/1, the z's standard normal, the
-# t's uniform on [0, 1]. `scenario` (gampcc, interaction or null) and
+# t's uniform on [0, 1]. `scenario` (gampcc, interaction or constant) and
 # `family` (gaussian or clayton) name the data-generating model; this method
 # uses neither, and only checks both and logs the scenario.
 #
@@ -35,11 +35,18 @@
 # method = "FS", tol.rel = 0.001, n.iters = 30 and select.once = FALSE. The
 # family set here is instead E1b's (fit_gamcopula.R): familyset = NA with
 # rotations = TRUE, so Gaussian, Student t, and the double Clayton and Gumbel
-# families with every rotation (1, 2, 301-304, 401-404). n.iters = 30 and
-# select.once = FALSE are gampcc's; fit_gamcopula.R ran the defaults, 10 and
-# TRUE. Everything else is the default in both. The vine's fallback to a
+# families with every rotation (1, 2, 301-304, 401-404). select.once = FALSE
+# is gampcc's; fit_gamcopula.R ran the defaults, n.iters = 10 and TRUE.
+# Everything else is the default in both. The vine's fallback to a
 # constant BiCopSelect when no covariate survives is not gamBiCopSelect's,
 # and a single pair does not take it: the intercept-only fit stands.
+#
+# **Iterations.** n.iters = 100, where gampcc ran 30: its oracle's Fisher
+# scoring can stop at 30 unconverged on gampcc's 30-odd coefficients, with
+# gamCopula's warning that the result is not to be trusted, and a higher cap
+# leaves every fit that converges sooner as it is. Both gamCopula arms run the
+# same cap, so their comparison isolates the selection. Each logs whether its
+# final fit converged.
 #
 # **Basis size.** gamBiCopVarSel hard-codes k = 10 for every smooth, at the
 # two sites that build its basis vector. K below replaces that literal, in a
@@ -53,12 +60,12 @@
 
 # Basis dimension of every smooth before gamBiCopVarSel's doubling step.
 K <- 10
-# The Fisher-scoring iteration cap, gampcc's.
-N_ITERS <- 30
+# The Fisher-scoring iteration cap (see **Iterations**).
+N_ITERS <- 100
 
 LINEAR <- c(paste0("b", 1:5), paste0("z", 1:5))
 SMOOTH <- paste0("t", 1:5)
-SCENARIOS <- c("gampcc", "interaction", "null")
+SCENARIOS <- c("gampcc", "interaction", "constant")
 FAMILIES <- c("gaussian", "clayton")
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -214,7 +221,8 @@ if (is.character(fit$value)) {
 }
 model <- fit$value$res
 # One line on the fitted model, which the harness logs: the selected formula,
-# its total EDF (mgcv's, which logLik counts) and each smooth's.
+# its total EDF (mgcv's, which logLik counts) and each smooth's, and whether
+# the selected family's final fit converged within n.iters.
 terms <- summary(model@model)
 smooths <- if (terms$m > 0) {
   paste(sprintf("%s %.2f", rownames(terms$s.table), terms$edf),
@@ -226,13 +234,14 @@ selected <- all.vars(model@model$pred.formula)
 cat(sprintf(
   paste0(
     "%s: scenario %s, family %d, %s, covariates selected %s, EDF %.2f ",
-    "(smooths: %s), par2 %g, K %d, n.iters %d\n"
+    "(smooths: %s), par2 %g, K %d, n.iters %d, converged %s\n"
   ),
   versions(c("gamCopula", "mgcv", "VineCopula")), scenario,
   model@family, gsub("\\s+", " ", paste(deparse(model@model$formula),
                                         collapse = " ")),
   if (length(selected) > 0) paste(selected, collapse = " ") else "none",
-  sum(model@model$edf), smooths, model@par2, K, N_ITERS
+  sum(model@model$edf), smooths, model@par2, K, N_ITERS,
+  if (identical(fit$value$conv, 0)) "yes" else "no"
 ))
 
 # The VineCopula copula at each row of `nd`.

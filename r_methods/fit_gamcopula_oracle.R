@@ -20,7 +20,7 @@
 #
 #   gampcc       ~ b1 + b2 + b3 + z1 + z2 + z3 + s(t1) + s(t2) + s(t3)
 #   interaction  ~ s(t1, by = b1) + b1, with b1 a factor
-#   null         ~ 1
+#   constant     ~ 1
 #
 # Each smooth is a penalized cubic regression spline, s(t, k = K, bs = "cr"),
 # the basis gamBiCopSelect builds and gampcc's true model is written in. A
@@ -35,8 +35,15 @@
 # **The family** is the true one, as gampcc's oracle had it: `family` is the
 # cell's (gaussian or clayton), fitted as gamCopula's Gaussian (1) or its
 # double Clayton type I (301), the Clayton where tau > 0 and its 90-degree
-# rotation below. The fit runs gampcc's settings, method = "FS" and
-# n.iters = 30, with the default tol.rel = 0.001.
+# rotation below. The fit runs gampcc's method = "FS", with the default
+# tol.rel = 0.001.
+#
+# **Iterations.** n.iters = 100, where gampcc ran 30: its oracle's Fisher
+# scoring can stop at 30 unconverged on gampcc's 30-odd coefficients, with
+# gamCopula's warning that the result is not to be trusted, and a higher cap
+# leaves every fit that converges sooner as it is. Both gamCopula arms run the
+# same cap, so their comparison isolates the selection. Each logs whether its
+# final fit converged.
 #
 # The h-functions are exact: VineCopula's, at the family, parameter and second
 # parameter the fitted model has at each row. hfunc1 is P(U2 <= u2 | U1 = u1),
@@ -44,12 +51,12 @@
 
 # Basis dimension of every smooth.
 K <- 10
-# The Fisher-scoring iteration cap, gampcc's.
-N_ITERS <- 30
+# The Fisher-scoring iteration cap (see **Iterations**).
+N_ITERS <- 100
 
 LINEAR <- c(paste0("b", 1:5), paste0("z", 1:5))
 SMOOTH <- paste0("t", 1:5)
-SCENARIOS <- c("gampcc", "interaction", "null")
+SCENARIOS <- c("gampcc", "interaction", "constant")
 # Each family of the study as gamCopula's family code.
 FAMILIES <- c(gaussian = 1L, clayton = 301L)
 
@@ -159,7 +166,7 @@ formula <- as.formula(switch(scenario,
     collapse = " + "
   )),
   interaction = paste("~", smooth("t1", by = "b1"), "+ b1"),
-  null = "~ 1"
+  constant = "~ 1"
 ))
 
 # The covariates as the formula reads them: b1 is a factor where it is a

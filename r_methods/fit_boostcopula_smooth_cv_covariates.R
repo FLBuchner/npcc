@@ -13,7 +13,7 @@
 # fifteen), and writes `pred.csv` with one row per evaluation row, in order --
 # the row itself, then pdf, hfunc1, hfunc2, tau, fit_time, and the seconds
 # each prediction step took. The b's are 0/1, the z's standard normal, the
-# t's uniform on [0, 1]. `scenario` (gampcc, interaction or null) and
+# t's uniform on [0, 1]. `scenario` (gampcc, interaction or constant) and
 # `family` (gaussian or clayton) name the data-generating model; this method
 # uses neither, and only checks both and logs the scenario.
 #
@@ -59,7 +59,7 @@ MAXIT <- 5000
 
 LINEAR <- c(paste0("b", 1:5), paste0("z", 1:5))
 SMOOTH <- paste0("t", 1:5)
-SCENARIOS <- c("gampcc", "interaction", "null")
+SCENARIOS <- c("gampcc", "interaction", "constant")
 FAMILIES <- c("gaussian", "clayton")
 
 args <- commandArgs(trailingOnly = TRUE)

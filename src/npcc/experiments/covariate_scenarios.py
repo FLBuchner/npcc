@@ -23,7 +23,7 @@ parameter depends on some of the covariates:
   ``b_1 = 0`` and E1's ``sin`` regime where ``b_1 = 1``, so an additive
   model without a ``t_1 x b_1`` term is misspecified. Two covariates have an
   effect.
-- ``null``: Kendall's tau is 0.5, and no covariate has an effect.
+- ``constant``: Kendall's tau is 0.5, and no covariate has an effect.
 
 Estimates are scored at a fixed set of covariate points (:func:`points`), the
 same for every family, ``n``, repetition and estimator of a scenario: at each,
@@ -50,7 +50,7 @@ from npcc.experiments.scenarios import (
 )
 
 #: The scenarios, in the order their cells sweep.
-SCENARIOS: tuple[str, ...] = ("gampcc", "interaction", "null")
+SCENARIOS: tuple[str, ...] = ("gampcc", "interaction", "constant")
 
 #: The families a scenario can take: the ``gampcc`` link is gamCopula's for
 #: these two.
@@ -72,14 +72,14 @@ BETA_Z: tuple[float, ...] = (0.25, -0.25, -0.25, 0.0, 0.0)
 ACTIVE: dict[str, tuple[str, ...]] = {
   "gampcc": ("b1", "b2", "b3", "z1", "z2", "z3", "t1", "t2", "t3"),
   "interaction": ("b1", "t1"),
-  "null": (),
+  "constant": (),
 }
 
 #: The ``interaction`` scenario's regime in ``t_1`` where ``b_1`` is 0 and 1.
 B1_REGIMES: tuple[str, str] = ("linear", "sin")
 
-#: The tau of the ``null`` scenario.
-NULL_TAU: float = 0.5
+#: The tau of the ``constant`` scenario.
+CONSTANT_TAU: float = 0.5
 
 _EPS: float = 1e-9
 
@@ -231,7 +231,7 @@ def copulas(family: str, scenario: str, x: torch.Tensor) -> list[pv.Bicop]:
   taus = (
     _interaction_tau(x)
     if scenario == "interaction"
-    else torch.full((x.shape[0],), NULL_TAU, dtype=torch.float64)
+    else torch.full((x.shape[0],), CONSTANT_TAU, dtype=torch.float64)
   )
   return [bicop(FAMILIES[family], value) for value in taus.tolist()]
 

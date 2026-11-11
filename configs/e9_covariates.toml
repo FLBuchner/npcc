@@ -4,7 +4,7 @@
 # Bernoulli(1/2), z1..z5 iid standard normal and t1..t5 iid uniform. Three
 # scenarios (npcc.experiments.covariate_scenarios): their partially linear
 # predictor through gamCopula's link (gampcc), E1's linear and sin regimes in
-# t1 switched by b1 (interaction), and tau = 0.5 (null). Every estimator is
+# t1 switched by b1 (interaction), and tau = 0.5 (constant). Every estimator is
 # scored at 20 covariate points per scenario, on E1's 20 x 20 uv grid and at
 # 2000 draws from the true copula at each point.
 #
@@ -14,7 +14,7 @@
 
 [grid]
 families = ["clayton", "gaussian"]
-scenarios = ["gampcc", "interaction", "null"]
+scenarios = ["gampcc", "interaction", "constant"]
 n = [500, 2000]
 n_rep = 10
 
@@ -25,7 +25,7 @@ uv_grid_n = 20
 holdout_n = 2000
 
 # TabPFN v3 fitted on the scenario's active covariates only (nine under
-# gampcc, b1 and t1 under interaction; not fitted under null), and on (U, V)
+# gampcc, b1 and t1 under interaction; not fitted under constant), and on (U, V)
 # alone. Both share TabPFN v3's backend settings; each one's seed also names
 # what it is fitted on.
 active_covariates = ["tabpfn-quantiles-v3-probit-active"]

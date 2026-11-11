@@ -360,10 +360,11 @@ def _external_rows(
 ) -> tuple[Rows, Rows]:
   """Fit one external script on every covariate, and score it at every point.
 
-  A script that fails, or whose predictions the exchange refuses, yields
-  :func:`_failed_rows` rather than stopping the cell: a selection that finds
-  nothing, or a family whose fit does not converge, is the method's outcome
-  on that sample, and the analysis reports it as such.
+  A script that exits with an error yields :func:`_failed_rows` rather than
+  stopping the cell: a selection that finds nothing, or a family whose fit
+  does not converge, is the method's outcome on that sample, and the
+  analysis reports it as such. Predictions that break the exchange, or a
+  missing interpreter, are not the method's and stop the run.
   """
   assert est.script is not None
   base = _base_row(cell, est, data.seed, "all")
@@ -377,10 +378,7 @@ def _external_rows(
       covariates=cs.COVARIATES,
       extra_args=(cell.scenario, cell.family),
     )
-  except (RuntimeError, ValueError) as exc:
-    # A missing interpreter is this machine's fault, not the method's.
-    if isinstance(exc.__cause__, FileNotFoundError):
-      raise
+  except _external.ScriptFailedError as exc:
     logger.warning("estimator %s [%s] failed: %s", est.label, cell.key, exc)
     return _failed_rows(base, data, str(exc))
   holdout = metrics.holdout_kl_by_x(
@@ -482,6 +480,11 @@ def run_covariate_study(
       The metric table, the runtime table, and the seconds the sweep took.
   """
   logger.info("Covariate study: %d estimators per cell", len(grid.estimators))
+  # A package missing from this machine would fail every fit of its script,
+  # each recorded as the method's failure; it must stop the run first.
+  for est in grid.estimators:
+    if est.script is not None:
+      _external.check_packages(est.script)
   (metric_df, runtime_df), wall = sweep(
     grid.cells(),
     lambda cell: summarize_one_cell(

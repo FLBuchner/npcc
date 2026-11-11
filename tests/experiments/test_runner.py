@@ -642,3 +642,21 @@ def test_the_signature_hashes_shape_settings_only_where_a_grid_has_them(
   assert runner_mod._grid_signature(_shape_grid([0.1, 0.5]), run) != base
   monkeypatch.setattr(scenarios, "STUDENT_NU_RANGE", (3.0, 30.0))
   assert runner_mod._grid_signature(_shape_grid([0.1, 0.9]), run) != base
+
+
+@pytest.mark.parametrize("label", ["null", "NA", "None", "nan"])
+def test_a_csv_checkpoint_keeps_a_label_pandas_would_read_as_missing(
+  tmp_path: Path, label: str
+) -> None:
+  """A label read back as NaN would drop its rows from every groupby.
+
+  A resumed or aggregated CSV run reads its checkpoints back; only the empty
+  field that ``to_csv`` writes for a missing value may become one.
+  """
+  frame = pd.DataFrame(
+    {"scenario": [label, "linear"], "IAE": [float("nan"), 0.5]}
+  )
+  _study.write_table(frame, tmp_path / "t", "csv")
+  back = _study.read_table(tmp_path / "t", "csv")
+  assert back["scenario"].tolist() == [label, "linear"]
+  assert back["IAE"].isna().tolist() == [True, False]

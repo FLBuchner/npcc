@@ -24,7 +24,7 @@ call the script with the four arguments above. E9's
 (:mod:`~npcc.experiments.covariate_scenarios`) has fifteen, ``b1``, ...,
 ``b5`` (each 0 or 1), ``z1``, ..., ``z5`` and ``t1``, ..., ``t5``, and passes
 two more arguments, the cell's scenario (``gampcc``, ``interaction`` or
-``null``) and family (``gaussian`` or ``clayton``), which the oracle, fitting
+``constant``) and family (``gaussian`` or ``clayton``), which the oracle, fitting
 the true model, reads::
 
     Rscript <script> <train.csv> <eval.csv> <pred.csv> <seed> <scenario> \
@@ -41,11 +41,19 @@ are not counted.
 What a script prints is logged: its stdout at ``INFO``, the place for a line
 on the model it fitted, such as the family it selected; its stderr, where R
 reports its warnings, at ``WARNING``.
+
+A script that exits with a nonzero status raises :class:`ScriptFailedError`:
+the method's own failure on that sample, which a study may record as a
+result. Predictions that break the exchange raise :class:`ExchangeError`, a
+defect of the script or of this harness, and a missing interpreter or
+package a plain :class:`RuntimeError`, a defect of the machine; neither is
+the method's outcome, and a study must stop on them.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -72,6 +80,19 @@ QUANTITIES: tuple[str, ...] = ("pdf", "hfunc1", "hfunc2", "tau")
 #: The stderr lines quoted in a failure message or a warning.
 _TAIL_LINES = 30
 
+#: A package a script attaches, as ``library(name)`` on a line of its own.
+_LIBRARY = re.compile(
+  r"^\s*library\((?P<name>[A-Za-z][A-Za-z0-9.]*)\)", re.MULTILINE
+)
+
+
+class ScriptFailedError(RuntimeError):
+  """A script exited with a nonzero status: the method failed on its input."""
+
+
+class ExchangeError(ValueError):
+  """A script's predictions, or the harness's input, break the exchange."""
+
 
 class ExternalFit(NamedTuple):
   """One script run: the fit, and every grid's predictions and timings."""
@@ -92,7 +113,7 @@ def _columns(
   """The covariate matrix ``x`` as named columns."""
   values = to_numpy(x, dtype=np.float64).reshape(x.shape[0], -1)
   if values.shape[1] != len(covariates):
-    raise ValueError(
+    raise ExchangeError(
       f"{what} must have one covariate column per name in {list(covariates)}; "
       f"got {values.shape[1]}"
     )
@@ -131,7 +152,7 @@ def _run(command: list[str], *, name: str) -> None:
       f"{command[0]} must be on PATH to run {name}; it was not found"
     ) from exc
   if done.returncode != 0:
-    raise RuntimeError(
+    raise ScriptFailedError(
       f"{command[1]} must exit with status 0 for {name}; got "
       f"{done.returncode}, with stdout:\n{_tail(done.stdout)}\n"
       f"and stderr:\n{_tail(done.stderr)}"
@@ -142,12 +163,46 @@ def _run(command: list[str], *, name: str) -> None:
     logger.warning("%s wrote to stderr:\n%s", name, _tail(done.stderr))
 
 
+def check_packages(script: str) -> None:
+  """Stop unless every package ``script`` attaches loads.
+
+  A package missing from this machine would otherwise make every fit of the
+  script fail, and each failure would read as the method's own.
+
+  Parameters
+  ----------
+  script : str
+      Path to the script; its ``library(name)`` lines name its packages.
+  """
+  packages = sorted(set(_LIBRARY.findall(Path(script).read_text())))
+  if not packages:
+    return
+  load = "; ".join(
+    f"suppressPackageStartupMessages(library({p}))" for p in packages
+  )
+  try:
+    done = subprocess.run(
+      [RSCRIPT, "-e", load], capture_output=True, text=True, check=False
+    )
+  except FileNotFoundError as exc:
+    raise RuntimeError(
+      f"{RSCRIPT} must be on PATH to run {script}; it was not found"
+    ) from exc
+  if done.returncode != 0:
+    raise RuntimeError(
+      f"{script} must find its packages {packages} installed; loading them "
+      f"failed with:\n{_tail(done.stderr)}"
+    )
+
+
 def _read_predictions(
   path: Path, points: pd.DataFrame, *, script: str
 ) -> pd.DataFrame:
   """The script's ``pred.csv``, checked against the rows it was handed."""
   if not path.is_file():
-    raise ValueError(f"{script} must write its predictions; got no {path.name}")
+    raise ExchangeError(
+      f"{script} must write its predictions; got no {path.name}"
+    )
   # The default parser is not exact for float64.
   pred = pd.read_csv(path, float_precision="round_trip")
   columns = [
@@ -158,11 +213,11 @@ def _read_predictions(
   ]
   missing = [c for c in columns if c not in pred.columns]
   if missing:
-    raise ValueError(
+    raise ExchangeError(
       f"{script} must write the columns {columns}; got no {missing}"
     )
   if len(pred) != len(points):
-    raise ValueError(
+    raise ExchangeError(
       f"{script} must write one row per evaluation point; got {len(pred)} "
       f"rows for {len(points)} points"
     )
@@ -178,7 +233,7 @@ def _read_predictions(
   )
   if not same.all():
     first = int(np.argmin(same))
-    raise ValueError(
+    raise ExchangeError(
       f"{script} must echo the evaluation points in their order; got "
       f"{pred.loc[first, ['grid', *coords]].tolist()} at row {first}, where "
       f"the point is {points.loc[first].tolist()}"
@@ -186,7 +241,7 @@ def _read_predictions(
   for q in QUANTITIES:
     bad = int((~np.isfinite(pred[q].to_numpy(dtype=np.float64))).sum())
     if bad:
-      raise ValueError(
+      raise ExchangeError(
         f"{script} must predict a finite {q} at every point; got {bad} "
         "non-finite values"
       )
@@ -232,10 +287,14 @@ def fit_and_predict(
 
   Raises
   ------
+  ScriptFailedError
+      If the script exits with a nonzero status.
+  ExchangeError
+      If the predictions do not match the points, or ``x`` the covariates.
   RuntimeError
-      If the interpreter is missing or the script exits with an error.
+      If the interpreter is missing.
   ValueError
-      If a grid is unconditional, or the predictions do not match the points.
+      If a grid is unconditional.
   """
   u, v = (to_numpy(t, dtype=np.float64).reshape(-1) for t in sample[:2])
   train = {

@@ -7,7 +7,7 @@
 
 [grid]
 families = ["clayton", "gaussian"]
-scenarios = ["gampcc", "interaction", "null"]
+scenarios = ["gampcc", "interaction", "constant"]
 n = [500, 2000]
 n_rep = 10
 n_points = 20
