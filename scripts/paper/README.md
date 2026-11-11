@@ -205,6 +205,103 @@ are from a clean worktree at 7567717.
   results/study_misspec_2026-11-06_r`, and `paired.py` with the same runs as
   in E1b.
 
+## E9 — several covariates (§3.2)
+
+The covariates of Vatter and Nagler (2018, JCGS, §4.1): `b1..b5` iid
+Bernoulli(1/2), `z1..z5` iid standard normal and `t1..t5` iid uniform, all
+independent, so fifteen covariates of three types, binary ones among them.
+`npcc.experiments.covariate_scenarios` defines the three scenarios, each
+with Clayton and Gaussian copulas:
+
+- **gampcc:** Vatter and Nagler's partially linear predictor, `eta =
+  (b1 + b2 - b3)/4 + (z1 - z2 - z3)/4 + s1(t1) + s2(t2) + s3(t3)`, with
+  `s1(t) = -1/4 + t/2`, `s2(t) = sin(2 pi t)/4` and `s3(t) = sin(6 pi t)/4`,
+  which calibrates Kendall's tau, `tau = tanh(eta/2)`, for either family:
+  gamCopula's `tau = TRUE` link, with which Vatter and Nagler's true model
+  was built. The Gaussian has `rho = sin(pi tau/2)`; the Clayton is
+  gamCopula's double Clayton type I, the Clayton at `theta = 2 tau/(1 - tau)`
+  where `tau > 0` and the Clayton rotated by 90 degrees at that of `|tau|`
+  below, so Kendall's tau changes sign. pyvinecopulib's rotated Clayton
+  equals VineCopula's family 23 at `-theta` to every printed digit, and a
+  gamCopula fit whose predictor is the true `eta` predicts the true tau to
+  `2e-8` and parameter to `1e-6` relative (gamCopula shrinks tau by `1 -
+  1e-8`; `tests/experiments/test_covariate_scenarios.py`); `theta` is
+  floored at pyvinecopulib's Clayton bound, `1e-10`. Nine covariates have an
+  effect, six none.
+- **interaction:** E1's `linear` regime in `t1` where `b1 = 0` and its `sin`
+  regime where `b1 = 1`. Two covariates have an effect, and an additive
+  model without a `t1 x b1` term is misspecified.
+- **constant:** Kendall's tau 0.5; no covariate has an effect. The
+  scenario is not named `null`, which pandas reads from a CSV as a missing
+  value.
+
+- Configs: `configs/e9_covariates.toml` (npcc) and
+  `configs/e9_covariates_r.toml` (the R competitors), on one `[grid]`: the
+  two families, the three scenarios, n in {500, 2000}, 10 reps, 120 cells.
+- Estimators:
+  - npcc on all fifteen covariates, probit: TabPFN v3 at softmax temperature
+    1.0, TabICLv2, and LightGBM, the gradient booster with the smallest mean
+    KL_mc at n = 2000 on E1's probit rerun (`results/study_2026-11-10`,
+    b7702e1: LightGBM 0.0300, CatBoost 0.0373, XGBoost 0.0458, each over 40
+    cells). E1's labels and backend settings, so E1's estimator ids.
+  - TabPFN v3 on the scenario's active covariates only
+    (`active_covariates`; not fitted under constant), and on `(U, V)` alone
+    (`without_covariates`).
+  - gamCopula as Vatter and Nagler run it, `gamBiCopSelect` with the `b`
+    and `z` linear and the `t` smooth, `s(t, k = 10, bs = "cr")`, from
+    E1b's family set (Gaussian, Student t, the double Clayton and Gumbel
+    with every rotation), with their `select.once = FALSE`
+    (`r_methods/fit_gamcopula_select.R`).
+  - Both gamCopula arms run `n.iters = 100` Fisher-scoring iterations
+    where Vatter and Nagler ran 30: at 30 the oracle can stop unconverged,
+    which gamCopula warns is not to be trusted, and a higher cap leaves a
+    fit that converges sooner as it is. Each script logs whether its fit
+    converged, and the analysis counts those that did not.
+  - The oracle, gamCopula with the cell's true family and the scenario's
+    true formula (`r_methods/fit_gamcopula_oracle.R`): under `gampcc`, `b1 +
+    b2 + b3 + z1 + z2 + z3` and a smooth of each of `t1..t3`; under
+    `interaction`, `s(t1, by = b1) + b1` with `b1` a factor; under `constant`,
+    the intercept. Each smooth starts at `k = 10` and grows by
+    `gamBiCopVarSel`'s own basis rule, ported line for line: double `k`
+    while its EDF exceeds `0.8 (k - 1)` and every `k` is below `n / 30`.
+    This is the one departure from gampcc's fixed-`k` oracle: at `k = 10`
+    the oracle underfits `s3(t) = sin(6 pi t)/4`, where the selection
+    arm's doubling does not, so with the same rule the two arms differ only
+    in the formula and the family.
+  - boostCopula with the `b` and `z` as linear columns and a cubic B-spline
+    basis per `t` (`df = 9`, boundary knots `[0, 1]`), stopped by 10-fold
+    cross-validation with E1b's cap, `maxit = 5000`
+    (`r_methods/fit_boostcopula_smooth_cv_covariates.R`). E1b's stops reach
+    the cap's last 5% in 8 of its 160 fits, so a lower cap would change
+    fits.
+  - Each script receives every covariate, the cell's scenario and its
+    family (`npcc.experiments._external`), and logs one line on its fit:
+    the family chosen, the covariates kept, and boostCopula's stop.
+- Scoring: 20 covariate points per scenario, drawn from the covariate
+  distribution with a seed of the scenario's own, so every family, n, rep
+  and estimator is scored at the same points (`points.parquet` lists them).
+  At each: IAE, ISE and grid KL of the density and both h-functions on E1's
+  20 x 20 `uv` grid, and the density's KL_mc at 2000 draws seeded per
+  (cell, point).
+- Run: the sharded commands above with `npcc-covstudy` for `npcc-simstudy`,
+  `--config configs/e9_covariates.toml` and `OUT=results/study_covariates_<TAG>`;
+  then `configs/e9_covariates_r.toml` into `results/study_covariates_<TAG>_r`
+  with `--device cpu`, single-threaded shards as E1b.
+- Analysis: `uv run --no-sync python scripts/paper/e9/analyze.py
+  results/study_covariates_<TAG> --with results/study_covariates_<TAG>_r`
+  writes `kl.csv` (the main text's table: KL by scenario x n x estimator,
+  averaged over points and families within each rep, with its paired
+  difference from TabPFN v3 on every covariate), `kl_by_family.csv`,
+  `iae.csv`, `per_point.csv` and `failures.csv` (every fit that failed, each
+  missing from every mean) into the npcc run's `analysis/`, and from the R
+  scripts' logged lines `fits.csv` and `fits_summary.csv`: per estimator,
+  scenario and n, how often the chosen family is the true one, the active
+  and inert covariates kept, and how many of boostCopula's stops landed
+  within 5% of the cap. It refuses runs that do not pair: a cell on
+  different seeds in two runs, or an estimator without every cell of TabPFN
+  v3's (the arm on the active covariates aside, under `constant`). A fit
+  with a non-finite KL_mc or IAE at any point counts as failed.
+
 ## E2 — vine study (§3.4)
 
 - Config: `configs/vine_study.toml`: TabPFN v3 with the probit transform;

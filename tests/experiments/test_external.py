@@ -620,3 +620,34 @@ def test_the_config_echo_records_the_script(external_run: Path) -> None:
     e for e in echo["grid"]["estimators"] if e["label"] == "normal-logit"
   ]
   assert "kind" not in backend[0]
+
+
+def test_every_way_an_r_script_names_a_package_is_read() -> None:
+  """A package the preflight misses fails every fit as the method's own.
+
+  Every load call, bare or quoted, with any arguments after it, one-line or
+  nested, and every namespace prefix; neither a comment nor a variable named
+  by ``character.only`` is a package.
+  """
+  text = """\
+library(alpha)
+library("beta")
+library('gamma.x', quietly = TRUE)
+require(delta)
+suppressPackageStartupMessages(library(epsilon))
+x <- zeta::f(1)
+y <- eta:::g(2)
+requireNamespace("theta", quietly = TRUE)
+# library(commented) and iota::h
+library(p, character.only = TRUE)
+"""
+  assert _external.script_packages(text) == [
+    "alpha",
+    "beta",
+    "delta",
+    "epsilon",
+    "eta",
+    "gamma.x",
+    "theta",
+    "zeta",
+  ]
