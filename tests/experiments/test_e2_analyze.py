@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import ModuleType
 
 import pandas as pd
 import pytest
+
+from npcc.experiments import vine_cli
 
 _SCRIPT = (
   Path(__file__).resolve().parents[2]
@@ -219,3 +222,55 @@ def test_the_selected_arm_is_paired_by_repetition(tmp_path: Path) -> None:
   assert row["selected_is_true"] == 1
   assert row["recovery_mean"] == pytest.approx(5 / 6)
   assert row["n_rep"] == 2
+
+
+_EVERY_ARM = """
+[grid]
+dims = [4]
+n = [40, 60]
+n_rep = 2
+arms = ["oracle", "random", "selected", "tll"]
+eval_x_n = 3
+eval_m = 20
+
+[[grid.estimators]]
+label = "uni"
+backend = "normal-quantile"
+transform = "logit"
+"""
+
+
+def test_a_run_holding_every_arm_is_analyzed_alone(
+  register_hermetic_backends: None,
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """E2 at d = 10 is one run with all four arms and none of the quoted cells.
+
+  Its selected arm's table must come from the run itself, not only through
+  --with, and the numbers the text quotes at d = 3 and 5 must be left out
+  rather than taken over no repetitions.
+  """
+  config = tmp_path / "vine.toml"
+  config.write_text(_EVERY_ARM)
+  run = tmp_path / "run"
+  assert (
+    vine_cli.main(
+      ["--config", str(config), "--out", str(run), "--device", "cpu"]
+    )
+    == 0
+  )
+  monkeypatch.setattr(sys, "argv", ["analyze.py", str(run)])
+  analyze.main()
+  out = run / "analysis"
+  selected = pd.read_csv(out / "vine_selected.csv")
+  assert sorted(zip(selected["d"], selected["n"], strict=True)) == [
+    (4, 40),
+    (4, 60),
+  ]
+  assert (selected["n_rep"] == 2).all()
+  assert len(pd.read_csv(out / "vine_table.csv")) == 2
+  numbers = json.loads((out / "vine_text_numbers.json").read_text())
+  assert numbers["joint_KL_at_x"] == []
+  assert numbers["joint_ISE"] == []
+  assert numbers["selected"]["run"] == str(run)
