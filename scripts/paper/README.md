@@ -205,7 +205,7 @@ are from a clean worktree at 7567717.
   results/study_misspec_2026-11-06_r`, and `paired.py` with the same runs as
   in E1b.
 
-## E9 — several covariates (§3.2)
+## E9 — several covariates (§3.3)
 
 The covariates of Vatter and Nagler (2018, JCGS, §4.1): `b1..b5` iid
 Bernoulli(1/2), `z1..z5` iid standard normal and `t1..t5` iid uniform, all
@@ -303,11 +303,13 @@ with Clayton and Gaussian copulas:
   cell's seeds depend on the cell alone, so the order changes nothing.
 - Analysis: `uv run --no-sync python scripts/paper/e9/analyze.py
   results/study_covariates_<TAG> --with results/study_covariates_<TAG>_r`
-  writes `kl.csv` (the main text's table: KL by scenario x n x estimator,
-  averaged over points and families within each rep, with its paired
-  difference from TabPFN v3 on every covariate), `kl_by_family.csv`,
-  `iae.csv`, `per_point.csv` and `failures.csv` (every fit that failed, each
-  missing from every mean) into the npcc run's `analysis/`, and from the R
+  writes `kl.csv` (the main text's `tab:covariates`: KL by scenario x n x
+  estimator, averaged over points and families within each rep, with its
+  paired difference from TabPFN v3 on every covariate), `kl_by_family.csv`
+  (the supplement's `tab:covariates-clayton` and `tab:covariates-gaussian`),
+  `iae.csv` (`tab:covariates-iae`), `per_point.csv` and `failures.csv`
+  (every fit that failed, each missing from every mean) into the npcc run's
+  `analysis/`, and from the R
   scripts' logged lines `fits.csv` and `fits_summary.csv`: per estimator,
   scenario and n, how often the chosen family is the true one, the active
   and inert covariates kept, and how many of boostCopula's stops landed
@@ -350,8 +352,40 @@ with Clayton and Gaussian copulas:
     1300 s at n = 2000, so at n = 10000 one fit would take hours.
   - **Run and analysis.** As E9's, into `results/study_covariates_n10000_<TAG>`
     and `..._r`.
+  - **Ran** on 2026-11-11 from a clean worktree at dd605f2, the tip of the
+    configs' pull request, into `results/study_covariates_n10000_2026-11-11`
+    and `..._r`, with these lanes:
+    - The npcc arms ran as one GPU process (`--workers 1 --resume
+      --gpu-mem-fraction 0.9`, 4 threads), which took 2 h 02 min for the 40
+      cells.
+    - The R arms ran beside it as 8 single-threaded shards with
+      `--device cpu`, then the aggregation pass, which took 28 min.
+    - The analysis, `analyze.py` on the npcc run with `--with` the R run,
+      wrote the npcc run's `analysis/`.
+    - A pilot of one cell (`interaction`, Clayton, rep 0) with every arm, in
+      `results/e9c_pilot_2026-11-11` and `..._r`, ran first from the same
+      commit to size the lanes.
+    - Each run's `logs/` holds the launcher, `e9c.sh`, and `provenance.txt`,
+      every command rendered.
+  - **Cited.** E9c has no table of its own. The paper cites
+    `results/study_covariates_n10000_2026-11-11/analysis`, and that folder
+    is frozen:
+    - `kl.csv` gives the n = 10^4 columns of `tab:covariates` (`gampcc` and
+      `interaction`; `constant` is not run, and boostCopula shows "--"),
+      and the n = 10,000 numbers in §3.3 and the discussion;
+    - `fits_summary.csv` gives the convergence counts in the supplement's
+      "Several covariates" subsection: 3 selection fits under `gampcc` that
+      did not converge, and none for the oracle;
+    - `iae.csv` and `kl_by_family.csv` back that subsection's statement
+      that the comparisons at n = 10,000 agree with the KL.
 
-## E2 — vine study (§3.4)
+    The n = 10,000 timings in that subsection come from each run's
+    `runtime_summary.parquet`, beside `analysis/`: gamCopula selection's
+    `fit_time_mean` from the R run, and TabPFN v3's `total_time_mean` from
+    the npcc run. The 8 R shards ran single-threaded beside one another and
+    beside the GPU process, so these times were taken within the study.
+
+## E2 — vine study (§3.5)
 
 - Config: `configs/vine_study.toml`: TabPFN v3 with the probit transform;
   oracle, random and TLL arms; d in {3, 5}, n in {500, 1000}, 20 reps; 80
@@ -363,7 +397,7 @@ with Clayton and Gaussian copulas:
   cell's seeds depend on the cell alone. A d = 5 shard peaks at about 7 GB,
   since every fitted margin held its own TabPFN model on the GPU before
   f4f17b5.
-- The rerun after E8, the one §3.4 cites: `results/vine_2026-11-10`, from
+- The rerun after E8, the one §3.5 cites: `results/vine_2026-11-10`, from
   b7702e1 on the same config. It ran as 4 shards (`--shard i/4 --resume
   --workers 1 --gpu-mem-fraction 0.15`) started at 19:20 on 2026-11-10,
   then the aggregation pass at 20:50.
@@ -408,6 +442,18 @@ with Clayton and Gaussian copulas:
     cited `results/vine_2026-11-10/analysis` as it was. Its `vine_table.csv`
     is byte-identical to the cited one. The run's `logs/provenance.txt` has
     both commands.
+  - **Why the first tree differs.** `scripts/paper/e2/tree1_diagnostic.py
+    <run>` compares, on each cell's true PITs, the summed pooled |tau| of the
+    true first tree, of the selected one, and of the maximum spanning tree.
+    It writes `tree1_diagnostic.csv` and `tree1_diagnostic_cells.csv` into
+    `<run>/analysis/`, on the CPU in about 30 s at d <= 5. On
+    `results/vine_2026-11-11_selected` it ran from 9b26ffa, its command
+    closing that run's `logs/provenance.txt`.
+  - **Cited.** The paper cites `results/vine_2026-11-11_selected/analysis`,
+    and that folder is frozen:
+    - its `vine_selected.csv` gives the d = 3 and 5 rows of
+      `tab:vine-selected`;
+    - its `tree1_diagnostic.csv` gives the tree-1 numbers at d = 3 and 5.
 - E2 at d = 10:
   - **Config.** `configs/vine_study_d10.toml` is E2 at `dims = [10]`, with all
     four arms in one run (oracle, random, selected, kde-tll).
@@ -425,13 +471,42 @@ with Clayton and Gaussian copulas:
     with this machine's only to about 1e-13, not bit for bit, so it is
     compared with nothing fitted elsewhere. Its `env.txt` records the
     machine.
+  - **Ran** on 2026-11-11 on gpu053, from a clean checkout at b6cb9af, the
+    merge of the d = 10 pull request, shipped there as a git bundle:
+    - The pilot, one cell (n = 1000, rep 0) with all four arms, went into
+      `vine_d10_pilot_2026-11-11` and took 13.5 min.
+    - The full run went into `vine_d10_2026-11-11` as one process
+      (`--workers 1 --resume --gpu-mem-fraction 0.9`, 4 threads) and took
+      6 h 14 min for the 40 cells.
+    - Each run's `logs/` holds the launcher, `vine_d10.sh`, and
+      `provenance.txt`. Both folders were then copied unchanged into
+      `results/`.
+  - **Analyzed** here on the CPU, from a clean worktree at 9b26ffa.
+    Relative to the run's merge, it adds the tree-1 diagnostic. It also
+    moves the runner's draw of a cell's training sample into
+    `training_sample`, unchanged, so the diagnostic redraws the data every
+    arm was fitted on. `analyze.py` and `tree1_diagnostic.py` on
+    `results/vine_d10_2026-11-11` wrote its `analysis/`. The tree-1
+    diagnostic takes about 80 s at d = 10. The commands close the run's
+    `logs/provenance.txt`, beneath gpu053's, with their logs beside them.
+  - **Cited.** The paper cites `results/vine_d10_2026-11-11/analysis`, and
+    that folder is frozen:
+    - `vine_table.csv` gives the d = 10 rows of `tab:vine-results`;
+    - `vine_selected.csv` gives the d = 10 rows of `tab:vine-selected`;
+    - `tree1_diagnostic.csv` gives the tree-1 numbers at d = 10;
+    - `vine_kl_by_x.pdf` is the supplement's Fig. B.3, copied to
+      `figures/vine_kl_by_x_d10.pdf`.
 
-## E3 — comparison with VDC (§3.3)
+    The d = 10 timings come from the run's own `runtime_summary.parquet`,
+    beside `analysis/`. They were timed within the study, on gpu053's A100,
+    not on an idle machine as E6's were.
+
+## E3 — comparison with VDC (§3.4)
 
 See `scripts/paper/e3/README.md` for VDC's environment, the weight check and
 the command behind every file in `results/e3_vdc/`.
 
-## E4 — numerical coherence (§3.5)
+## E4 — numerical coherence (§3.6)
 
 - Accuracy and coherence, as two runs that differ only in estimators and
   device; every row records the commit it ran from.
