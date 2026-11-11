@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pytest
@@ -14,8 +13,6 @@ import pyvinecopulib as pv
 import torch
 from pyvinecopulib.core import NonSimplifiedContext, SimplifiedContext
 
-from npcc.core import ConditionalMargin, registry
-from npcc.core.margin import MarginOptions
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.experiments import scenarios, vine_runner, vine_scenarios
 from npcc.experiments.config import EstimatorSpec, RunConfig
@@ -345,49 +342,6 @@ def test_more_repetitions_resume_on_the_finished_cells(
   assert kept["KL"].tolist() == pytest.approx(first["KL"].tolist())
 
 
-class LinearGaussianBackend(ConditionalMargin):
-  """Gaussian linear regression of the response on every feature.
-
-  Unlike the ``normal-quantile`` fake, whose pairs are all independent, its
-  pair copulas follow the data, so vines on different structures differ and a
-  mixture of them is not one of its members.
-  """
-
-  _beta: torch.Tensor
-  _sd: torch.Tensor
-
-  def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
-    design = torch.cat([torch.ones_like(z).unsqueeze(1), x], dim=1)
-    beta = torch.linalg.lstsq(design, z.unsqueeze(1)).solution.squeeze(1)
-    self._beta = beta
-    self._sd = (z - design @ beta).std()
-
-  def _predict_quantiles(
-    self, x: torch.Tensor, alphas: torch.Tensor
-  ) -> torch.Tensor:
-    ones = torch.ones(x.shape[0], 1, dtype=x.dtype, device=x.device)
-    mean = torch.cat([ones, x], dim=1) @ self._beta
-    normal = cast("torch.Tensor", torch.special.ndtri(alphas))
-    return mean.unsqueeze(1) + self._sd * normal
-
-
-@pytest.fixture
-def linear_gaussian_backend() -> Iterator[None]:
-  """Register :class:`LinearGaussianBackend` as ``"linear-gaussian"``."""
-
-  def factory(**kwargs: object) -> LinearGaussianBackend:
-    margin = {
-      k: v for k, v in kwargs.items() if k in MarginOptions.__annotations__
-    }
-    return LinearGaussianBackend(**cast("MarginOptions", margin))
-
-  registry.register_backend("linear-gaussian", factory)
-  try:
-    yield
-  finally:
-    registry._REGISTRY.pop("linear-gaussian", None)
-
-
 def _mixture_grid(
   *, arms: list[str], mixture_k: int, backend: str = "linear-gaussian"
 ) -> VineGridConfig:
@@ -465,7 +419,7 @@ def test_the_mixtures_kl_is_at_most_its_members_mean() -> None:
 
 
 def test_a_mixture_of_one_reproduces_the_selected_arm(
-  linear_gaussian_backend: None,
+  register_linear_gaussian_backend: None,
 ) -> None:
   """With k = 1 the mixture is the selected arm, fitted and scored the same.
 
@@ -489,7 +443,7 @@ def test_a_mixture_of_one_reproduces_the_selected_arm(
 
 
 def test_the_mixture_scores_itself_and_each_member(
-  linear_gaussian_backend: None,
+  register_linear_gaussian_backend: None,
 ) -> None:
   """Every member must be scored, and the mixture by at most their mean KL.
 
@@ -524,7 +478,7 @@ def test_the_mixture_scores_itself_and_each_member(
 
 
 def test_the_signature_reads_k_only_for_a_mixture(
-  linear_gaussian_backend: None,
+  register_linear_gaussian_backend: None,
 ) -> None:
   """k changes a mixture's cells, and nothing else's.
 

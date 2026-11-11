@@ -158,6 +158,32 @@ class NormalQuantileBackend(ConditionalMargin):
     return row.unsqueeze(0).expand(x.shape[0], -1).clone()
 
 
+class LinearGaussianBackend(ConditionalMargin):
+  """Gaussian linear regression of the modeled response on every feature.
+
+  Unlike :class:`NormalQuantileBackend`, whose pair copulas are all the
+  independence copula, its answers follow the data and the conditioning rows,
+  so vines on different structures differ, and a value read from the wrong
+  rows shows.
+  """
+
+  _beta: torch.Tensor
+  _sd: torch.Tensor
+
+  def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
+    design = torch.cat([torch.ones_like(z).unsqueeze(1), x], dim=1)
+    beta = torch.linalg.lstsq(design, z.unsqueeze(1)).solution.squeeze(1)
+    self._beta = beta
+    self._sd = (z - design @ beta).std()
+
+  def _predict_quantiles(
+    self, x: torch.Tensor, alphas: torch.Tensor
+  ) -> torch.Tensor:
+    ones = torch.ones(x.shape[0], 1, dtype=x.dtype, device=x.device)
+    mean = torch.cat([ones, x], dim=1) @ self._beta
+    return mean.unsqueeze(1) + self._sd * normal_quantiles(alphas)
+
+
 def normal_quantile_factory(**kwargs: object) -> NormalQuantileBackend:
   """A registry factory for :class:`NormalQuantileBackend`.
 
@@ -189,6 +215,23 @@ def register_hermetic_backends() -> Iterator[None]:
   """Register the hermetic ``normal-quantile`` backend."""
   with hermetic_backend():
     yield
+
+
+@pytest.fixture
+def register_linear_gaussian_backend() -> Iterator[None]:
+  """Register :class:`LinearGaussianBackend` as ``"linear-gaussian"``."""
+
+  def factory(**kwargs: object) -> LinearGaussianBackend:
+    margin = {
+      k: v for k, v in kwargs.items() if k in MarginOptions.__annotations__
+    }
+    return LinearGaussianBackend(**cast("MarginOptions", margin))
+
+  registry.register_backend("linear-gaussian", factory)
+  try:
+    yield
+  finally:
+    registry._REGISTRY.pop("linear-gaussian", None)
 
 
 @pytest.fixture
