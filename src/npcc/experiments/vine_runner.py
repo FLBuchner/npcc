@@ -27,6 +27,16 @@ copula density the members' mean. Each member is also scored on its own, as
 the arm ``mixture-member-<k>``, so the mixture can be read against its
 average member and against its first, the selected structure.
 
+**GAM vines.** E2b's arms are fitted in R by the grid's ``gamvine_script``,
+one script run per arm and cell (:mod:`~npcc.experiments._external_vine`),
+on the cell's training sample, and evaluated at its test points.
+``gamvine-oracle`` is handed the true structure and refused unless its fit
+has the truth's edges; the other two select their own. Each runtime row
+records the structure fitted and, in ``pairs``, every pair copula's family
+and calibration function. A script that fails on its sample leaves the
+arm's metrics ``nan`` in that cell and its message in the runtime row's
+``error``, as for E9's R methods.
+
 **Scoring.** At each evaluation ``x``, ``m`` points are drawn from the true
 distribution there, and the estimate is scored by Monte-Carlo integrals under
 the truth: ``KL = E[log f - log f_hat]``, ``L1 = E[|f_hat / f - 1|]`` (the
@@ -49,7 +59,7 @@ import logging
 import math
 from collections.abc import Mapping
 from time import perf_counter
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import numpy as np
 import pandas as pd
@@ -67,7 +77,12 @@ from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 from npcc.core.registry import create_backend
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.core.vinedist import RosenblattVinedist
-from npcc.experiments import scenarios, vine_scenarios
+from npcc.experiments import (
+  _external,
+  _external_vine,
+  scenarios,
+  vine_scenarios,
+)
 from npcc.experiments._study import (
   Rows,
   derive_seed,
@@ -79,7 +94,11 @@ from npcc.experiments._study import (
   sweep,
 )
 from npcc.experiments.config import EstimatorSpec, RunConfig
-from npcc.experiments.vine_config import VineCell, VineGridConfig
+from npcc.experiments.vine_config import (
+  GAMVINE_ARMS,
+  VineCell,
+  VineGridConfig,
+)
 from npcc.experiments.vine_scenarios import EvalPoints, VineTruth
 
 logger = logging.getLogger(__name__)
@@ -286,6 +305,10 @@ def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
     "base_seed": run.base_seed,
     "estimators": sorted(s.estimator_id for s in grid.estimators),
   }
+  # Only where a GAM-vine arm runs, so every other grid keeps its signature.
+  # An edited script is a new method, which a resume must refuse to mix in.
+  if any(a in GAMVINE_ARMS for a in grid.arms):
+    payload["gamvine_script_sha256"] = grid.gamvine_script_sha256
   encoded = json.dumps(payload, sort_keys=True).encode()
   return hashlib.sha256(encoded).hexdigest()
 
@@ -702,7 +725,92 @@ def summarize_one_cell(
     metric_rows += _metric_rows(base, points, preds, copula_preds)
     _record(base, fit_time, pdf_time)
 
+  for arm in (a for a in grid.arms if a in GAMVINE_ARMS):
+    base = {
+      **cell_base,
+      "arm": arm,
+      "label": arm,
+      "estimator_id": "",
+      "backend": "gamCopula",
+      "transform": "none",
+    }
+    metric_rows += _gamvine_rows(
+      arm, base, cell, grid, truth, (y, x), points, _record
+    )
+
   return metric_rows, runtime_rows
+
+
+class _Record(Protocol):
+  def __call__(
+    self,
+    base: Mapping[str, object],
+    fit_time: float,
+    pdf_time: float,
+    **extra: object,
+  ) -> None: ...
+
+
+def _gamvine_rows(
+  arm: str,
+  base: Mapping[str, object],
+  cell: VineCell,
+  grid: VineGridConfig,
+  truth: VineTruth,
+  sample: tuple[torch.Tensor, torch.Tensor],
+  points: EvalPoints,
+  record: _Record,
+) -> Rows:
+  """Fit one GAM-vine arm with one script run; return its metric rows.
+
+  The runtime row goes through ``record``. A script that fails on its sample
+  leaves every metric ``nan`` and its message in the runtime row: the
+  method's outcome, which the analysis counts, and not a reason to stop the
+  other cells.
+  """
+  m = grid.eval_m
+  x_all = points.x_axis.repeat_interleave(m).reshape(-1, 1)
+  name = f"{arm} on {cell.key}"
+  try:
+    fit = _external_vine.fit_and_evaluate(
+      grid.gamvine_script,
+      sample,
+      (torch.cat(points.y), torch.cat(points.u), x_all),
+      arm=arm,
+      seed=derive_seed(base["seed"], arm),
+      name=name,
+      structure=truth.structure if arm == "gamvine-oracle" else None,
+    )
+  except _external.ScriptFailedError as exc:
+    logger.warning("arm %s [%s] failed: %s", arm, cell.key, exc)
+    failed = [torch.full((m,), math.nan, dtype=torch.float64)] * len(
+      points.x_axis
+    )
+    record(base, math.nan, math.nan, error=str(exc))
+    return _metric_rows(base, points, failed, failed)
+  if arm == "gamvine-oracle" and _external_vine.edges(
+    fit.structure
+  ) != _external_vine.edges(truth.structure):
+    raise _external.ExchangeError(
+      f"{name} must fit the true structure; got the matrix "
+      f"{np.asarray(fit.structure.matrix).tolist()} for "
+      f"{np.asarray(truth.structure.matrix).tolist()}"
+    )
+  timings = fit.timings
+  record(
+    base,
+    timings["margin_time"] + timings["vine_time"],
+    timings["joint_pdf_time"] + timings["copula_pdf_time"],
+    structure=json.dumps(np.asarray(fit.structure.matrix).tolist()),
+    selection_time=math.nan,
+    pairs=json.dumps(fit.pairs),
+    wall_time=fit.wall_time,
+    error="",
+    **timings,
+  )
+  return _metric_rows(
+    base, points, list(fit.pdf.split(m)), list(fit.copula_pdf.split(m))
+  )
 
 
 def run_vine_study(
@@ -719,6 +827,10 @@ def run_vine_study(
     len(grid.arms),
     len(grid.estimators),
   )
+  # A package missing from this machine would fail every GAM-vine fit, each
+  # recorded as the method's failure; it must stop the run first.
+  if any(a in GAMVINE_ARMS for a in grid.arms):
+    _external.check_packages(grid.gamvine_script)
   (metrics, runtimes), wall = sweep(
     grid.cells(),
     lambda cell: summarize_one_cell(

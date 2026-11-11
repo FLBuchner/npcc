@@ -8,6 +8,7 @@ backend configuration in both studies.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,8 +39,26 @@ from npcc.experiments.config import (
 #   vine is consistent on any structure, so averaging over structures hedges
 #   selecting one; by Jensen's inequality the mixture's KL is at most its
 #   members' mean.
-ARMS: tuple[str, ...] = ("oracle", "random", "selected", "tll", "mixture")
+# `gamvine-oracle`, `gamvine-selected`, `gamvine-ns`: E2b's GAM vines, fitted
+#   in R by `gamvine_script` on mgcv margins with `x` a smooth term in every
+#   pair -- on the true structure, on a selected one, and on a selected one
+#   whose pairs also see their conditioning variables.
+ARMS: tuple[str, ...] = (
+  "oracle",
+  "random",
+  "selected",
+  "tll",
+  "mixture",
+  "gamvine-oracle",
+  "gamvine-selected",
+  "gamvine-ns",
+)
 NPCC_ARMS: tuple[str, ...] = ("oracle", "random", "selected", "mixture")
+GAMVINE_ARMS: tuple[str, ...] = (
+  "gamvine-oracle",
+  "gamvine-selected",
+  "gamvine-ns",
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +89,12 @@ class VineGridConfig:
   projection_grid_size: int = 30
   batch_size: int | None = None
   mixture_k: int = 5
+  #: The GAM vines' script, relative to the working directory unless
+  #: absolute; read only when a GAM-vine arm runs.
+  gamvine_script: str = "r_methods/fit_gamvine.R"
+  #: SHA-256 of the script's content, read at construction when a GAM-vine
+  #: arm runs.
+  gamvine_script_sha256: str | None = field(default=None, init=False)
 
   def __post_init__(self) -> None:
     if not self.dims or any(d < 2 for d in self.dims):
@@ -107,6 +132,16 @@ class VineGridConfig:
       raise ValueError(f"eval_m must be >= 10; got {self.eval_m}")
     if self.mixture_k < 1:
       raise ValueError(f"mixture_k must be >= 1; got {self.mixture_k}")
+    if any(a in GAMVINE_ARMS for a in self.arms):
+      script = Path(self.gamvine_script)
+      if not script.is_file():
+        raise ValueError(
+          f"gamvine_script must name an existing file when a GAM-vine arm "
+          f"({', '.join(GAMVINE_ARMS)}) runs; got {self.gamvine_script!r}, "
+          f"resolved against {Path.cwd()}"
+        )
+      digest = hashlib.sha256(script.read_bytes()).hexdigest()
+      self.gamvine_script_sha256 = digest
 
   def cells(self) -> list[VineCell]:
     """Every data cell of the grid, in sweep order."""
@@ -125,6 +160,7 @@ _VINE_OPTIONAL: dict[str, Callable[[Any], object]] = {
   "projection_grid_size": int,
   "batch_size": int,
   "mixture_k": int,
+  "gamvine_script": str,
 }
 
 

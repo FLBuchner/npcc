@@ -500,6 +500,95 @@ with Clayton and Gaussian copulas:
     The d = 10 timings come from the run's own `runtime_summary.parquet`,
     beside `analysis/`. They were timed within the study, on gpu053's A100,
     not on an idle machine as E6's were.
+- E2b, GAM vines (gamCopula) on E2's cells:
+  - **Arms.** Each fits mgcv margins `gam(y_j ~ s(x), method = "REML")`,
+    Gaussian, and a GAM vine on their PITs, with x a smooth term in every
+    pair and E1b's gamCopula settings, but for two:
+    - `gamvine-oracle`: `gamVineCopSelect` on the true structure,
+      simplified;
+    - `gamvine-selected`: `gamVineStructureSelect`, simplified,
+      `treecrit = "tau"`;
+    - `gamvine-ns`: `gamVineStructureSelect`, not simplified (Vatter and
+      Nagler, 2018).
+
+    The two settings that differ from E1b and E9:
+    - `n.iters = 100`, as E9, where E1b ran gamCopula's default of 10;
+    - `select.once = TRUE`, gamCopula's default, where E9 passes FALSE. With
+      x the only exogenous covariate it hardly matters to the simplified
+      arms, and for `gamvine-ns`, FALSE would redo the selection at every
+      iteration and multiply its cost.
+
+    **Margins by REML.** mgcv's default smoothing, GCV, undersmoothed 3 of
+    the 10 margins on the d = 10 pilot cell (EDF 6 to 8, against linear true
+    means). There, against REML, it raised the margins' KL from 0.018 to
+    0.050 and gamvine-oracle's joint KL from 0.526 to 0.764, so the margins,
+    not the vine, would have decided the comparison. At d = 5 the two agree.
+
+    The joint KL scores the margins and the vine together; the copula KL
+    scores the vine at the true PITs, as for every arm.
+  - **How it runs.** `r_methods/fit_gamvine.R`, once per arm and cell,
+    through `npcc.experiments._external_vine`: it is handed the cell's
+    training sample and test points, and the oracle the true structure,
+    converted to VineCopula's matrix convention. It checks `gamVinePDF`
+    against the product of the fitted pairs' `gamBiCopPDF` densities on
+    every fit. Each runtime row records the fitted structure and, in
+    `pairs`, every pair copula's family, kind and calibration function. A
+    fit that fails is recorded with nan metrics and its `error`.
+  - **Three gamCopula 0.0.8 defects, worked around in the script.** In a
+    vine, it stores a negatively dependent pair's double family with its
+    90- and 270-degree rotations exchanged (`gamVineCopSelect` with its
+    default `rotations = TRUE`), and `gamVineStructureSelect` fits each next
+    tree on the h-functions of that mirror. And a non-simplified pair reads
+    a conditioning variable named `u1` or `u2` as its own argument. The
+    script passes `rotations = FALSE` (the same family set), runs the
+    structure selection with each pair's h-functions its own, and names the
+    copula columns `v1`, ..., `vd`. And with igraph >= 2,
+    `gamVineStructureSelect` stops ("Length of new attribute value must be
+    1 or ...") whenever a next tree's first candidate pair breaks the
+    proximity condition: gamCopula sets the candidates' conditioning sets one
+    at a time from none, which older igraph recycled with a warning. It
+    stopped the selected and non-simplified fits on 10 of E2's 40 d = 5
+    cells in a first run. The script starts those attributes as full-length
+    lists, which changes no selected vine (a cell that ran before gives the
+    same densities to every digit). `tests/experiments/test_gamvine.py` shows
+    each defect's cost or failure.
+  - **Configs.** One per E2 run it pairs with, every key but `arms` and the
+    script E2's: `configs/vine_study_gamvine.toml` (d = 3, 5),
+    `configs/vine_study_gamvine_d10.toml` (d = 10), and their `_n2000`
+    versions for E2d's n = 2000 runs. Run each on the CPU from the
+    repository root, as single-threaded shards
+    (`OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+    npcc-vinestudy --config <config> --device cpu --out <run> --shard i/8
+    --resume`, then once without `--shard`), with R, gamCopula, mgcv and
+    VineCopula installed.
+  - **Analysis.** Pass the run after `--with` to the analysis of the E2 run
+    it pairs with. It then writes `vine_gamvine.csv`, one row per (d, n,
+    arm): the arm's joint and copula KL, its joint KL paired with the
+    oracle's and the random arm's, and its failed fits; and
+    `vine_gamvine_families.csv`, the selected pair families per tree.
+  - **Pilot.** On 2026-11-11, from cd312e2, into
+    `results/e2b_pilot_2026-11-11`: one cell at d = 5 and one at d = 10
+    (n = 1000, rep 0), the three arms, R single-threaded, beside other CPU
+    jobs. Both cells pair with E2's rows (same seed and true log-density at
+    every x). Fit seconds per arm, oracle / selected / ns: 28 / 38 / 94 at
+    d = 5, and 135 / 197 / 740 at d = 10; evaluation takes 2 to 8 s. The
+    whole d = 10 cell took 18.5 min. `logs/compare_with_e2.txt` has the KLs
+    beside E2's arms, and `logs/margins_side_check.txt` what mgcv's default
+    smoothing (GCV) costs the margins at d = 10, against REML. The pilot ran
+    with GCV margins; the study runs with REML.
+
+- E2d, E2 at n = 2000:
+  - **Config.** `configs/vine_study_n2000.toml` (d = 3 and 5) and
+    `configs/vine_study_d10_n2000.toml` (d = 10) are E2's configs at
+    `n = [2000]`, with all four arms in one run. A cell's truth, test points
+    and random structure are drawn from (d, rep) alone, so each cell pairs
+    with E2's at n = 500 and 1000 by (d, rep); only the training sample is
+    new.
+  - **Where it runs.** d = 3 and 5 run here as one GPU process; d = 10 runs
+    on gpu053, as a whole experiment, like E2 at d = 10.
+  - **Analysis.** `analyze.py` and `tree1_diagnostic.py` on each run alone,
+    as at d = 10. The rows for n = 2000 come from these runs and the rows
+    for n = 500 and 1000 from E2's.
 
 ## E10 — structure mixtures
 
@@ -752,3 +841,82 @@ uv run --no-sync python scripts/qt_ab/report.py --out $O/tabpfn \
   $O/tabpfn_temp1.0 --baseline 'm21:wh0.65|current' --compare-labels \
   tabpfn-quantiles-v3-probit tabpfn-quantiles-v3-temp1.0-probit
 ```
+
+## The qnorm screen (TabPFN's conditioning feature)
+
+**A screen only.** It asks whether TabPFN v3 fits better when the
+copula-scale score it conditions on reaches it as `qnorm(u) = Phi^{-1}(u)`
+rather than as `u`. Every TabPFN experiment above hands it `u`. Adopting
+`qnorm(u)` would mean rerunning all of them, which is the user's decision,
+not this screen's.
+
+- **The setting.** `feature_transform` in the fit controls
+  (`FitControlsRosenblattBicop`) and in a config's `[[grid.estimators]]`
+  entry. It maps the conditioning score of each Rosenblatt direction (`u` for
+  `V | U, X`, `v` for `U | V, X`) after the clamp at `eps`. `"identity"`, the
+  default, leaves every fit as before, bit for bit, and enters no estimator
+  id. Covariates are never mapped. In a non-simplified vine, the
+  conditioning-set values `u_D` reach each pair among its covariates, so
+  they stay on the `u` scale: the pair cannot tell them from `x`.
+- **The arms.** E1's `tabpfn-quantiles-v3-probit` (v3, probit, softmax
+  temperature 1.0, E1's estimator id) and `tabpfn-quantiles-v3-qnorm-probit`,
+  the same with `feature_transform = "probit"`, an estimator id of its own.
+  Both are in `configs/qnorm_screen.toml`.
+- **The cells.** The two arms are paired on identical data:
+  - E1's 16 cells at reps 5-9, the reps E7a held out, 80 pairs. The config
+    is E1's grid with `first_rep = 5`, so rep 5 is E1's rep 5, and no
+    surfaces.
+  - E3a's nine copulas, five seeds each, at `n_train` 2000 and 10000: 90
+    pairs, from E3a's samples in `results/e3_vdc/e3a`, which the fits only
+    read (`e3a_npcc_fit.py --out`). These five seeds are all E3a has; they
+    are not held out.
+- **The metric.** Each study's pdf KL: E1's Monte Carlo KL averaged over a
+  cell's 10 x values, and E3a's KL at its 20,000 test points.
+- **The rule**, fixed before any result of the screen was read
+  (`scripts/paper/qnorm_screen/report.py`'s `verdict`):
+  - per pair, `d = KL(qnorm) - KL(u)`;
+  - a stratum is a study at one n: E1 at 200, 500, 1000 and 2000, E3a at
+    2000 and 10000;
+  - a group's score is the mean of `d` within each of its strata, averaged
+    over the strata with equal weight, with SE `sqrt(sum se_s^2) / S`;
+  - `qnorm(u)` is adopted only if the score over all pairs is below -2 SE
+    (a paired gain beyond 2 SE overall) and no n and no family has a score
+    above +2 SE (no loss beyond 2 SE). The n are 200, 500, 1000, 2000 and
+    10000. The families are E1's clayton and gaussian and E3a's seven; a
+    family in both studies is one group;
+  - otherwise `u` is kept. pdf IAE is reported the same way and does not
+    decide.
+
+  The differences are absolute: E3a's independence copula has a KL below
+  its own Monte Carlo error, so a ratio to it would be noise.
+- **Why not E7a's harness.** E7a's and the temperature A/B's scripts
+  (`scripts/qt_ab/`) live on the `qt-ab-probit` branch, and replay quantile
+  read-outs on cb04041's package, which has no `feature_transform`. The
+  screen runs E1's own runner and E3a's own fit script instead, from this
+  branch.
+- **Run.** From a clean worktree at the pushed tip of the screen's PR, as
+  one GPU process at a time (`--workers 1`, 4 threads on cores 0-3, no
+  `PYTORCH_CUDA_ALLOC_CONF`):
+
+  ```bash
+  WANT=<sha> TAG=<tag> setsid -f nohup \
+    bash <worktree>/scripts/paper/qnorm_screen/run.sh > qnorm_screen.out 2>&1
+  ```
+
+  It refuses an existing `results/qnorm_screen_<TAG>`, a worktree that is
+  not clean or not at `WANT`, a package imported from elsewhere, and a busy
+  GPU. It writes `COMMIT`, `env.txt` and `logs/` (the launcher,
+  `provenance.txt` with every command, `steps.log`), then `e1/`, `e3a/`, and
+  `analysis/` with `pairs.csv`, `groups.csv` and `report.txt`, whose last
+  line is the verdict. A step that fails stops the run; its command in
+  `provenance.txt` resumes from its own checkpoints.
+- **Expected time:** about 1 h on an otherwise idle GPU. E1's cells take
+  about 10 s each per arm (E6's clean E3a pdf time, 5.8 s for 20,000
+  points, sets the holdout; the grid, h-functions and tau take the rest),
+  so 80 cells and two arms are about 27 min. E3a's fits take about 7 s at
+  `n_train` = 2000 and 12 s at 10000, so 90 fits and two arms are about
+  29 min. If it runs much longer, the baseline arm can be dropped and the
+  qnorm arm paired with E1's `results/study_2026-11-10` and E3a's stored
+  `tabpfn-quantiles-v3-probit` fits, both from b7702e1, whose
+  `src/npcc/core` this branch leaves as it was with the setting off: half
+  the time, at the cost of pairing across runs.

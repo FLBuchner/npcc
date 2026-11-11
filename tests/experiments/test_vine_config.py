@@ -64,6 +64,31 @@ def test_e2_at_d10_is_e2_at_another_dimension() -> None:
 @pytest.mark.parametrize(
   ("name", "dims", "e2_name"),
   [
+    ("vine_study_n2000.toml", [3, 5], "vine_study.toml"),
+    ("vine_study_d10_n2000.toml", [10], "vine_study_d10.toml"),
+  ],
+)
+def test_e2d_is_e2_at_n_2000(name: str, dims: list[int], e2_name: str) -> None:
+  """E2d must differ from E2 at its dimension only in n and the arms.
+
+  Its cells pair with E2's at n = 500 and 1000 by (d, rep), which holds only
+  while the repetitions, evaluation points, projection grid and estimator
+  are E2's; a drift in any would score n = 2000 on other test points or
+  another model.
+  """
+  e2 = load_vine_grid(_CONFIGS / e2_name)
+  e2d = load_vine_grid(_CONFIGS / name)
+  assert e2d.dims == dims == e2.dims
+  assert e2d.n == [2000]
+  assert e2d.arms == ["oracle", "random", "selected", "tll"]
+  for f in fields(VineGridConfig):
+    if f.name not in {"n", "arms"}:
+      assert getattr(e2d, f.name) == getattr(e2, f.name), f.name
+
+
+@pytest.mark.parametrize(
+  ("name", "dims", "e2_name"),
+  [
     ("vine_study_mixture.toml", [3, 5], "vine_study.toml"),
     ("vine_study_mixture_d10.toml", [10], "vine_study_d10.toml"),
   ],
@@ -96,10 +121,18 @@ def test_e10_mixtures_run_on_e2s_cells(
     ({"dims": [1]}, "dims must be"),
     ({"eval_m": 5}, "eval_m must be"),
     ({"mixture_k": 0}, "mixture_k must be"),
+    (
+      {"arms": ["gamvine-ns"], "gamvine_script": "missing.R"},
+      "gamvine_script must name an existing file",
+    ),
   ],
 )
 def test_bad_grid_is_refused(overrides: dict[str, object], match: str) -> None:
-  """An unknown or repeated arm would silently drop or double-count a column."""
+  """An unknown or repeated arm would silently drop or double-count a column.
+
+  A GAM-vine arm without its script would fail every fit, each recorded as
+  the method's failure.
+  """
   kwargs: dict[str, object] = {
     "dims": [3],
     "n": [40],
@@ -110,3 +143,34 @@ def test_bad_grid_is_refused(overrides: dict[str, object], match: str) -> None:
   kwargs.update(overrides)
   with pytest.raises(ValueError, match=match):
     VineGridConfig(**kwargs)  # ty: ignore[invalid-argument-type] - mistyped values exercise the guard
+
+
+@pytest.mark.parametrize(
+  ("config", "e2", "n"),
+  [
+    ("vine_study_gamvine.toml", "vine_study.toml", None),
+    ("vine_study_gamvine_d10.toml", "vine_study_d10.toml", None),
+    ("vine_study_gamvine_n2000.toml", "vine_study.toml", [2000]),
+    ("vine_study_gamvine_d10_n2000.toml", "vine_study_d10.toml", [2000]),
+  ],
+)
+def test_the_gam_vines_run_on_e2s_cells(
+  monkeypatch: pytest.MonkeyPatch, config: str, e2: str, n: list[int] | None
+) -> None:
+  """Each GAM-vine run must hold E2's cells, so --with can pair it.
+
+  Each pairs with one E2 run -- d = 3 and 5 or d = 10, at n = 500 and 1000
+  or, as E2d, at 2000 -- by cell, so a dimension, repetition count or
+  evaluation key that drifted would score its arms on other truths or test
+  points, which the analysis would then refuse.
+  """
+  monkeypatch.chdir(_CONFIGS.parent)
+  grid = load_vine_grid(_CONFIGS / config)
+  reference = load_vine_grid(_CONFIGS / e2)
+  assert grid.arms == ["gamvine-oracle", "gamvine-selected", "gamvine-ns"]
+  assert grid.estimators == []
+  assert grid.n == (reference.n if n is None else n)
+  for f in fields(VineGridConfig):
+    if f.name not in {"arms", "estimators", "n", "gamvine_script_sha256"}:
+      assert getattr(grid, f.name) == getattr(reference, f.name), f.name
+  assert grid.gamvine_script_sha256 is not None

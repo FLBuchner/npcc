@@ -71,6 +71,11 @@ the normal scores behind TLL in (py)vinecopulib, and their configs name no
 other transform (E8 in [`scripts/paper/README.md`](scripts/paper/README.md)).
 Logit stays the library's default.
 
+The transform maps the response only. The conditioning score reaches the
+backend as a feature, by default as `u` itself; `feature_transform="probit"`
+hands it $\Phi^{-1}(u)$ instead, after the same clamp at `eps`. Covariates
+are never mapped. Of the paper's configs, only the qnorm screen's sets it.
+
 ---
 
 ## Pluggable backends
