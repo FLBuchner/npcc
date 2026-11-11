@@ -47,7 +47,10 @@ the method's own failure on that sample, which a study may record as a
 result. Predictions that break the exchange raise :class:`ExchangeError`, a
 defect of the script or of this harness, and a missing interpreter or
 package a plain :class:`RuntimeError`, a defect of the machine; neither is
-the method's outcome, and a study must stop on them.
+the method's outcome, and a study must stop on them. A caller may also name
+a status, :data:`REFUSED_STATUS` for E9's scripts, with which a script
+reports that it refused its input or failed a check of its own; that exit
+raises :class:`ExchangeError` too.
 """
 
 from __future__ import annotations
@@ -80,9 +83,17 @@ QUANTITIES: tuple[str, ...] = ("pdf", "hfunc1", "hfunc2", "tau")
 #: The stderr lines quoted in a failure message or a warning.
 _TAIL_LINES = 30
 
-#: A package a script attaches, as ``library(name)`` on a line of its own.
-_LIBRARY = re.compile(
-  r"^\s*library\((?P<name>[A-Za-z][A-Za-z0-9.]*)\)", re.MULTILINE
+#: The exit status with which E9's scripts refuse their input or report a
+#: failed check of their own, as opposed to the method failing.
+REFUSED_STATUS: int = 3
+
+#: A call that loads a package, with its arguments.
+_LOAD = re.compile(r"\b(?:library|require|requireNamespace)\((?P<args>[^)]*)\)")
+#: A package's namespace prefix, ``name::`` or ``name:::``.
+_PREFIX = re.compile(r"\b(?P<name>[A-Za-z][A-Za-z0-9.]*):::?(?=[A-Za-z.`])")
+#: The package a load call names first, bare or quoted.
+_NAME = re.compile(
+  r"^\s*(?:package\s*=\s*)?(?P<q>[\"']?)(?P<name>[A-Za-z][A-Za-z0-9.]*)(?P=q)\s*$"
 )
 
 
@@ -143,7 +154,9 @@ def _tail(text: str) -> str:
   return "\n".join(text.strip().splitlines()[-_TAIL_LINES:])
 
 
-def _run(command: list[str], *, name: str) -> None:
+def _run(
+  command: list[str], *, name: str, refused_status: int | None = None
+) -> None:
   """Run one script to completion; raise with its stderr if it fails."""
   try:
     done = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -151,6 +164,12 @@ def _run(command: list[str], *, name: str) -> None:
     raise RuntimeError(
       f"{command[0]} must be on PATH to run {name}; it was not found"
     ) from exc
+  if refused_status is not None and done.returncode == refused_status:
+    raise ExchangeError(
+      f"{command[1]} must accept its input and pass its own checks for "
+      f"{name}; it refused with status {refused_status} and stderr:\n"
+      f"{_tail(done.stderr)}"
+    )
   if done.returncode != 0:
     raise ScriptFailedError(
       f"{command[1]} must exit with status 0 for {name}; got "
@@ -163,8 +182,40 @@ def _run(command: list[str], *, name: str) -> None:
     logger.warning("%s wrote to stderr:\n%s", name, _tail(done.stderr))
 
 
+def script_packages(text: str) -> list[str]:
+  """The packages an R script's code loads or calls into.
+
+  Every ``library``, ``require`` or ``requireNamespace`` call's package,
+  bare or quoted, whatever arguments follow it, and every ``name::`` or
+  ``name:::`` prefix, outside comments. A call with ``character.only`` names
+  a variable rather than a package, and is skipped.
+
+  Parameters
+  ----------
+  text : str
+      The script.
+
+  Returns
+  -------
+  list of str
+      The package names, sorted, each once.
+  """
+  # A `#` inside a string would cut its line short here; none of the
+  # scripts this reads has one before a package name.
+  code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+  names = set(_PREFIX.findall(code))
+  for call in _LOAD.finditer(code):
+    args = call["args"]
+    if "character.only" in args:
+      continue
+    first = _NAME.match(args.split(",", 1)[0])
+    if first is not None:
+      names.add(first["name"])
+  return sorted(names)
+
+
 def check_packages(script: str) -> None:
-  """Stop unless every package ``script`` attaches loads.
+  """Stop unless every package ``script`` loads or calls into loads.
 
   A package missing from this machine would otherwise make every fit of the
   script fail, and each failure would read as the method's own.
@@ -172,9 +223,9 @@ def check_packages(script: str) -> None:
   Parameters
   ----------
   script : str
-      Path to the script; its ``library(name)`` lines name its packages.
+      Path to the script; :func:`script_packages` reads its packages.
   """
-  packages = sorted(set(_LIBRARY.findall(Path(script).read_text())))
+  packages = script_packages(Path(script).read_text())
   if not packages:
     return
   load = "; ".join(
@@ -257,6 +308,7 @@ def fit_and_predict(
   name: str,
   covariates: Sequence[str] = ("x",),
   extra_args: Sequence[str] = (),
+  refused_status: int | None = None,
 ) -> ExternalFit:
   """Fit ``script`` on ``sample`` once and predict at every point of ``grids``.
 
@@ -278,6 +330,10 @@ def fit_and_predict(
       grid's ``x_flat``.
   extra_args : sequence of str, default ()
       Arguments passed to the script after the seed.
+  refused_status : int, optional
+      The exit status with which the script refuses its input or reports a
+      failed check of its own, if it has one: :data:`REFUSED_STATUS` for
+      E9's scripts. Otherwise every nonzero exit is the method's failure.
 
   Returns
   -------
@@ -288,9 +344,11 @@ def fit_and_predict(
   Raises
   ------
   ScriptFailedError
-      If the script exits with a nonzero status.
+      If the script exits with a nonzero status other than
+      ``refused_status``.
   ExchangeError
-      If the predictions do not match the points, or ``x`` the covariates.
+      If the script exits with ``refused_status``, or the predictions do not
+      match the points, or ``x`` the covariates.
   RuntimeError
       If the interpreter is missing.
   ValueError
@@ -324,6 +382,7 @@ def fit_and_predict(
         *extra_args,
       ],
       name=name,
+      refused_status=refused_status,
     )
     wall_time = perf_counter() - t0
     pred = _read_predictions(pred_csv, points, script=script)

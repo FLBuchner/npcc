@@ -68,19 +68,27 @@ SMOOTH <- paste0("t", 1:5)
 SCENARIOS <- c("gampcc", "interaction", "constant")
 FAMILIES <- c("gaussian", "clayton")
 
+# Stops with status 3, which the harness reads as a refused input or a failed
+# check of this script's own -- its defect or the harness's, which stops the
+# run -- rather than the method failing on its sample, which stop() reports.
+refuse <- function(...) {
+  message("Error: ", ...)
+  quit(save = "no", status = 3)
+}
+
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) != 6) {
-  stop("usage: Rscript fit_gamcopula_select.R ",
-       "<train.csv> <eval.csv> <pred.csv> <seed> <scenario> <family>")
+  refuse("usage: Rscript fit_gamcopula_select.R ",
+         "<train.csv> <eval.csv> <pred.csv> <seed> <scenario> <family>")
 }
 scenario <- args[[5]]
 if (!scenario %in% SCENARIOS) {
-  stop("scenario must be one of ", paste(SCENARIOS, collapse = ", "),
-       "; got ", scenario)
+  refuse("scenario must be one of ", paste(SCENARIOS, collapse = ", "),
+         "; got ", scenario)
 }
 if (!args[[6]] %in% FAMILIES) {
-  stop("family must be one of ", paste(FAMILIES, collapse = ", "),
-       "; got ", args[[6]])
+  refuse("family must be one of ", paste(FAMILIES, collapse = ", "),
+         "; got ", args[[6]])
 }
 
 suppressPackageStartupMessages({
@@ -122,23 +130,23 @@ check_columns <- function(df, what, extra = character(0)) {
   needed <- c(extra, "u1", "u2", LINEAR, SMOOTH)
   missing <- setdiff(needed, names(df))
   if (length(missing) > 0) {
-    stop(what, " must have the columns ", paste(needed, collapse = ", "),
-         "; got no ", paste(missing, collapse = ", "))
+    refuse(what, " must have the columns ", paste(needed, collapse = ", "),
+           "; got no ", paste(missing, collapse = ", "))
   }
   if (nrow(df) == 0) {
-    stop(what, " must have at least one row; got none")
+    refuse(what, " must have at least one row; got none")
   }
   numbers <- setdiff(needed, extra)
   bad <- numbers[!vapply(df[numbers], function(v) {
     is.numeric(v) && all(is.finite(v))
   }, logical(1))]
   if (length(bad) > 0) {
-    stop(what, " must hold finite numbers in ", paste(bad, collapse = ", "))
+    refuse(what, " must hold finite numbers in ", paste(bad, collapse = ", "))
   }
   inside <- function(columns, ok, values) {
     bad <- columns[!vapply(df[columns], function(v) all(ok(v)), logical(1))]
     if (length(bad) > 0) {
-      stop(what, " must hold ", values, " in ", paste(bad, collapse = ", "))
+      refuse(what, " must hold ", values, " in ", paste(bad, collapse = ", "))
     }
   }
   inside(c("u1", "u2"), function(v) v > 0 & v < 1, "values in (0, 1)")
@@ -184,9 +192,9 @@ select_with_basis <- function(k) {
   var_sel <- gamCopula:::gamBiCopVarSel
   body(var_sel) <- swap(body(var_sel))
   if (sites != 2) {
-    stop("gamBiCopVarSel must set its basis size at two rep(10, ...) sites ",
-         "for K to replace; got ", sites, ", so this gamCopula differs from ",
-         "the 0.0-8 this script was written against")
+    refuse("gamBiCopVarSel must set its basis size at two rep(10, ...) sites ",
+           "for K to replace; got ", sites, ", so this gamCopula differs from ",
+           "the 0.0-8 this script was written against")
   }
   scope <- new.env(parent = asNamespace("gamCopula"))
   assign("gamBiCopVarSel", var_sel, envir = scope)
@@ -195,9 +203,14 @@ select_with_basis <- function(k) {
   select
 }
 
-seed <- suppressWarnings(as.integer(args[[4]]))
+# as.integer() alone truncates "1.5" to 1; the digits test refuses it.
+seed <- if (grepl("^-?[0-9]+$", args[[4]])) {
+  suppressWarnings(as.integer(args[[4]]))
+} else {
+  NA_integer_
+}
 if (is.na(seed)) {
-  stop("seed must be an integer; got ", args[[4]])
+  refuse("seed must be an integer within R's range; got ", args[[4]])
 }
 set.seed(seed)
 train <- read.csv(args[[1]])
@@ -281,7 +294,7 @@ for (g in unique(points$grid)) {
     tolerance = 1e-10
   )
   if (!isTRUE(check)) {
-    stop("the family map disagrees with gamBiCopPDF on grid ", g, ": ", check)
+    refuse("the family map disagrees with gamBiCopPDF on grid ", g, ": ", check)
   }
   for (q in quantities) {
     values[rows, q] <- as.numeric(steps[[q]]$value)

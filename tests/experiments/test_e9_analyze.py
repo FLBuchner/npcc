@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
 from collections.abc import Sequence
 from pathlib import Path
@@ -52,11 +53,13 @@ def _rows(
   covariates: str = "all",
   seed: int = 7,
   kl_mc: float = 0.1,
+  n_points: int = 2,
+  tau: float = 0.5,
 ) -> list[dict[str, object]]:
   rows: list[dict[str, object]] = []
   for family, scenario, n, rep in cells:
     for quantity in ("pdf", "hfunc1", "hfunc2"):
-      for point in range(2):
+      for point in range(n_points):
         pdf = quantity == "pdf"
         rows.append(
           {
@@ -70,7 +73,7 @@ def _rows(
             "error": "",
             "quantity": quantity,
             "point": point,
-            "tau_true": 0.5,
+            "tau_true": tau,
             "IAE": 0.2,
             "KL_mc": kl_mc if pdf else math.nan,
             "KL_mc_n": 2000.0 if pdf else math.nan,
@@ -79,8 +82,13 @@ def _rows(
   return rows
 
 
-def _run(path: Path, rows: list[dict[str, object]]) -> Path:
+def _run(
+  path: Path, rows: list[dict[str, object]], *, uv_grid_n: int = 20
+) -> Path:
   """A run folder holding ``rows``, one checkpoint per cell, as CSV."""
+  path.mkdir(parents=True)
+  grid = {"n_points": 2, "uv_grid_n": uv_grid_n, "holdout_n": 2000}
+  (path / "config.json").write_text(json.dumps({"grid": grid}))
   frame = pd.DataFrame(rows)
   for keys, cell in frame.groupby(analyze.CELL):
     family, scenario, n, rep = cast("Cell", keys)
@@ -96,6 +104,32 @@ def test_runs_on_other_seeds_are_refused(tmp_path: Path) -> None:
   npcc = _run(tmp_path / "a", _rows(analyze.BASELINE, CELLS))
   r = _run(tmp_path / "b", _rows("gamcopula-select", CELLS, seed=8))
   with pytest.raises(SystemExit, match="one seed"):
+    analyze.load([npcc, r])
+
+
+def test_runs_scored_at_other_points_are_refused(tmp_path: Path) -> None:
+  """Two estimators scored at different points do not differ by method alone.
+
+  The same base seed with another ``n_points`` gives the same cells and
+  seeds but other points, and other true taus at them.
+  """
+  npcc = _run(tmp_path / "a", _rows(analyze.BASELINE, CELLS))
+  r = _run(tmp_path / "b", _rows("gamcopula-select", CELLS, n_points=1))
+  with pytest.raises(SystemExit, match="same points"):
+    analyze.load([npcc, r])
+  r = _run(tmp_path / "c", _rows("gamcopula-select", CELLS, tau=0.4))
+  with pytest.raises(SystemExit, match="one true tau"):
+    analyze.load([npcc, r])
+
+
+def test_runs_scored_on_other_grids_are_refused(tmp_path: Path) -> None:
+  """An IAE on a 10 x 10 grid is not comparable to one on a 20 x 20 grid."""
+  npcc = _run(tmp_path / "a", _rows(analyze.BASELINE, CELLS))
+  r = _run(tmp_path / "b", _rows("gamcopula-select", CELLS), uv_grid_n=10)
+  with pytest.raises(SystemExit, match="uv_grid_n"):
+    analyze.load([npcc, r])
+  (r / "config.json").unlink()
+  with pytest.raises(SystemExit, match="config.json"):
     analyze.load([npcc, r])
 
 

@@ -30,9 +30,12 @@ writes into ``<first run>/analysis/`` (or ``--out``):
   gamCopula fits stopped at the iteration cap unconverged, which gamCopula
   warns should not be trusted.
 
-The runs must pair: every cell has one seed across them, so each holds the
-same data, and every estimator has every cell the baseline has, except the
-one on the active covariates where a scenario has none.
+The runs must pair: they score at the same settings (``n_points``,
+``uv_grid_n`` and ``holdout_n``, from each run's ``config.json``); every cell
+has one seed across them, so each holds the same data; every estimator is
+scored at the same points, with the same true tau at each; and every
+estimator has every cell the baseline has, except the one on the active
+covariates where a scenario has none.
 
 Usage (from the npcc repository root)::
 
@@ -44,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import math
 import re
 from pathlib import Path
@@ -71,6 +75,13 @@ DISPLAY: dict[str, str] = {
 }
 
 CELL: list[str] = ["family", "scenario", "n", "rep"]
+
+#: The grid settings that decide where and how a fit is scored, which every
+#: run must share.
+SCORING: tuple[str, ...] = ("n_points", "uv_grid_n", "holdout_n")
+
+#: How far apart two runs' true tau at one point may be.
+TAU_TOLERANCE: float = 1e-12
 
 #: The scenarios whose true tau changes sign. Elsewhere it is positive, and
 #: the double Claytons 301 and 302 both are the Clayton there.
@@ -154,8 +165,33 @@ def flag_nonfinite(metrics: pd.DataFrame) -> pd.DataFrame:
   return out.drop(columns="bad")
 
 
+def check_scoring(runs: list[Path]) -> None:
+  """Stop unless the runs score at the same points, grids and draws.
+
+  Parameters
+  ----------
+  runs : list of pathlib.Path
+      The run folders; each one's ``config.json``, which its aggregation
+      pass writes.
+  """
+  settings = {}
+  for run in runs:
+    path = run / "config.json"
+    if not path.is_file():
+      raise SystemExit(
+        f"{run} must hold config.json, which its aggregation pass writes; "
+        "got none"
+      )
+    grid = json.loads(path.read_text())["grid"]
+    settings[str(run)] = {key: grid.get(key) for key in SCORING}
+  if len({tuple(s.values()) for s in settings.values()}) > 1:
+    raise SystemExit(
+      f"the runs must score with the same {list(SCORING)}; got {settings}"
+    )
+
+
 def check_pairing(metrics: pd.DataFrame) -> None:
-  """Stop unless the runs hold the same data and the same cells.
+  """Stop unless the runs hold the same data, points and cells.
 
   Parameters
   ----------
@@ -171,6 +207,22 @@ def check_pairing(metrics: pd.DataFrame) -> None:
     )
   if BASELINE not in set(metrics["label"]):
     raise SystemExit(f"the runs must hold {BASELINE!r}, the baseline; got none")
+  where = ["family", "scenario"]
+  points = metrics.groupby([*where, "label"])["point"].agg(frozenset)
+  sets = points.groupby(level=[0, 1]).nunique()
+  if (sets > 1).any():
+    raise SystemExit(
+      f"every estimator must be scored at the same points; got different "
+      f"sets of points for {sets[sets > 1].index.tolist()}"
+    )
+  tau = metrics.groupby([*where, "point"])["tau_true"].agg(["min", "max"])
+  apart = tau["max"] - tau["min"]
+  if (apart > TAU_TOLERANCE).any():
+    raise SystemExit(
+      f"each point must have one true tau across the runs; got values up to "
+      f"{float(apart.max()):.3g} apart at {apart[apart > TAU_TOLERANCE].size} "
+      "points"
+    )
   cells = metrics[[*CELL, "label", "covariates"]].drop_duplicates()
   base = {
     tuple(row)
@@ -208,6 +260,7 @@ def load(runs: list[Path]) -> pd.DataFrame:
   pandas.DataFrame
       One row per (cell, estimator, quantity, point).
   """
+  check_scoring(runs)
   frames = []
   for run in runs:
     done = sorted(glob.glob(str(run / "cells" / "*" / "DONE")))

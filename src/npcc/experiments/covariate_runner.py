@@ -363,8 +363,10 @@ def _external_rows(
   A script that exits with an error yields :func:`_failed_rows` rather than
   stopping the cell: a selection that finds nothing, or a family whose fit
   does not converge, is the method's outcome on that sample, and the
-  analysis reports it as such. Predictions that break the exchange, or a
-  missing interpreter, are not the method's and stop the run.
+  analysis reports it as such. Predictions that break the exchange, a
+  script refusing its input or failing a check of its own
+  (:data:`~npcc.experiments._external.REFUSED_STATUS`), or a missing
+  interpreter, are not the method's and stop the run.
   """
   assert est.script is not None
   base = _base_row(cell, est, data.seed, "all")
@@ -377,6 +379,7 @@ def _external_rows(
       name=f"{est.label} on {cell.key}",
       covariates=cs.COVARIATES,
       extra_args=(cell.scenario, cell.family),
+      refused_status=_external.REFUSED_STATUS,
     )
   except _external.ScriptFailedError as exc:
     logger.warning("estimator %s [%s] failed: %s", est.label, cell.key, exc)

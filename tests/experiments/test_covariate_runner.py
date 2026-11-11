@@ -376,6 +376,45 @@ def test_predictions_that_break_the_exchange_stop_the_run(
     run_covariate_study(grid, RunConfig(out=tmp_path / "out"))
 
 
+def test_a_script_refusing_its_input_stops_the_run(
+  tmp_path: Path, stand_in: Path
+) -> None:
+  """A script's own check failing is not the method failing on its sample.
+
+  E9's scripts exit with ``REFUSED_STATUS`` when they refuse their input or
+  a check of their own fails; recorded as failed fits, a harness defect
+  would read as the method's record.
+  """
+  stand_in.write_text(
+    "import sys\nsys.stderr.write('train.csv must have the columns')\n"
+    f"sys.exit({_external.REFUSED_STATUS})\n"
+  )
+  grid = _grid(_external_spec(stand_in))
+  with pytest.raises(_external.ExchangeError, match="must have the columns"):
+    run_covariate_study(grid, RunConfig(out=tmp_path / "out"))
+
+
+@pytest.mark.parametrize(
+  "script",
+  sorted((_ROOT / "r_methods").glob("*_covariates.R"))
+  + [
+    _ROOT / "r_methods" / f"fit_gamcopula_{s}.R" for s in ("select", "oracle")
+  ],
+  ids=lambda p: p.name,
+)
+def test_e9s_scripts_refuse_with_the_refused_status(script: Path) -> None:
+  """A check of the script's own must exit with the status the harness reads.
+
+  With ``stop()``, R's status 1, a bad input would be recorded as the
+  method failing; the harness's checks call ``refuse``, which quits with
+  ``REFUSED_STATUS``.
+  """
+  text = script.read_text()
+  assert f'quit(save = "no", status = {_external.REFUSED_STATUS})' in text
+  assert 'refuse("usage: ' in text and "refuse(what, " in text
+  assert 'refuse("the family map disagrees' in text
+
+
 @pytest.mark.skipif(shutil.which("Rscript") is None, reason="needs Rscript")
 def test_a_missing_package_stops_the_run_before_its_first_cell(
   tmp_path: Path, monkeypatch: pytest.MonkeyPatch
