@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 from pathlib import Path
@@ -667,3 +668,66 @@ def test_the_signature_reads_chain_k_only_for_a_chain(
   assert len({vine_runner.grid_signature(g, run) for g in plain}) == 1
   chained = [_chain_grid(arms=["chain"], chain_k=k) for k in (3, 5)]
   assert len({vine_runner.grid_signature(g, run) for g in chained}) == 2
+
+
+#: fa7aee3's ``chain_orders(317, d, rep, 5)``, when an order could repeat:
+#: the rule's backward compatibility is pinned against these draws.
+_FA7AEE3_ORDERS = {
+  (10, 0): [
+    [1, 7, 6, 3, 9, 10, 4, 8, 2, 5],
+    [1, 3, 6, 9, 5, 2, 4, 7, 10, 8],
+    [2, 1, 4, 7, 9, 10, 5, 6, 8, 3],
+    [3, 5, 1, 6, 10, 4, 9, 2, 7, 8],
+    [10, 9, 6, 7, 4, 1, 2, 8, 5, 3],
+  ],
+  (5, 0): [
+    [5, 1, 2, 3, 4],
+    [4, 5, 3, 1, 2],
+    [1, 4, 3, 5, 2],
+    [1, 4, 5, 2, 3],
+    [4, 5, 1, 3, 2],
+  ],
+  (5, 7): [
+    [1, 3, 4, 2, 5],
+    [1, 5, 2, 4, 3],
+    [4, 5, 1, 3, 2],
+    [5, 1, 3, 2, 4],
+    [1, 3, 4, 2, 5],
+  ],
+  (3, 0): [[1, 2, 3], [3, 2, 1], [3, 1, 2], [2, 1, 3], [1, 2, 3]],
+}
+
+
+@pytest.mark.parametrize(("d", "rep"), sorted(_FA7AEE3_ORDERS))
+def test_chain_orders_are_distinct_and_unchanged_where_none_repeated(
+  d: int, rep: int
+) -> None:
+  """K = min(k, d!) distinct orders, the earlier draws kept where distinct.
+
+  An order drawn twice weighs twice in an equal-weight mixture, which at
+  d = 3 is the rule rather than the exception. The fix redraws a repeat from
+  the same order's generator, so a cell whose orders were already distinct,
+  as every d = 10 cell of the runs before it, keeps them bitwise; only a
+  repeated order changes.
+  """
+  old = _FA7AEE3_ORDERS[(d, rep)]
+  new = vine_runner.chain_orders(317, d, rep, 5)
+  assert len({tuple(o) for o in new}) == len(new) == 5
+  for j, order in enumerate(old):
+    if order not in old[:j]:
+      assert new[j] == order
+    else:
+      assert new[j] not in old[:j]
+  if len({tuple(o) for o in old}) == 5:
+    assert new == old
+
+
+def test_every_order_is_drawn_when_fewer_exist_than_asked() -> None:
+  """With d! < k the mixture is over every order, each once."""
+  orders = vine_runner.chain_orders(317, 3, 0, 9)
+  assert sorted(map(tuple, orders)) == sorted(itertools.permutations([1, 2, 3]))
+  assert vine_runner.chain_orders(317, 3, 0, 5) == orders[:5]
+  assert sorted(map(tuple, vine_runner.chain_orders(317, 2, 4, 5))) == [
+    (1, 2),
+    (2, 1),
+  ]

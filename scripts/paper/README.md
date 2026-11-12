@@ -1069,10 +1069,20 @@ and E10 on E3d (unconditional).
   Jacobian included. At d = 2 an order is one direction of the pair
   copula, to rounding (`tests/experiments/test_chain.py`).
 - **The arm.** `chain` in the vine study (`vine_runner.py`), with
-  `chain_k = 5` orders:
-  - The orders are drawn uniformly, order k from a NumPy generator seeded
-    `derive_seed(base_seed, "chain", d, rep, k)`, so they depend on
-    (d, rep) alone.
+  K = min(5, d!) distinct orders drawn uniformly at random (`chain_k = 5`):
+  - Order k is drawn from a NumPy generator seeded
+    `derive_seed(base_seed, "chain", d, rep, k)`, so the orders depend on
+    (d, rep) alone. Where order k's draw repeats an earlier order, the same
+    generator draws again until it is new (`chain.draw_orders`), as the
+    mixture's structures are distinct. Five draws from the six orders at
+    d = 3 repeat one with probability 0.91, which would weigh it twice.
+  - The orders were not always distinct: the runs from fa7aee3 drew each
+    order once and kept repeats. Every d = 10 cell of those runs has five
+    distinct orders, so its orders are this rule's bitwise; at d = 5, two
+    conditional repetitions (7 and 9) and one E3d cell (`decay`, seed 202)
+    repeated an order, and those runs are superseded by reruns under this
+    rule. A chain run's resume signature records the rule, so a folder of
+    the earlier draws is not resumed.
   - Factor f of order k has the torch seed
     `derive_seed(cell_seed, "chain", estimator_id, k, f)`.
   - The margins are fitted once, as every NPCC arm fits them, and shared by
