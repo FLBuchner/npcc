@@ -673,14 +673,30 @@ how many seeds the chain is lower.
   `COMMIT` and `env.txt`). `compare_e3d_chain.py` against E3d, E10 on E3d
   (`results/e10_e3d_2026-11-11`) and E3e (`results/e3e_simplification_2x2`),
   all made here, wrote `analysis_d5/`.
-- d = 10, both designs, on gpu053 from a checkout at fa7aee3, into
-  `e11_e3d_d10_2026-11-12` there: `decay` by its queue's version 4, `strong`
-  by version 5.
+- d = 10, both designs, on gpu053 from a clean worktree at fa7aee3, into
+  `e11_e3d_d10_2026-11-12` there: `decay` by its queue's version 4, 17:49
+  to 18:25 on 2026-11-12, and `strong` by version 5, 18:30 to 19:01, in
+  batches of five seeds (both queue scripts in its `logs/`). Copied back
+  with every file's SHA-256 unchanged (`logs/COPIED_FROM.txt`). Every cell
+  has five distinct orders. `compare_e3d_chain.py` wrote, here:
+  - `analysis_d10_decay/`, against E3d (here), and E10 on E3d
+    (`e10_e3d_gpu053_2026-11-11`) and E3e (`e3e_simplification_2x2_gpu053`)
+    from gpu053;
+  - `analysis_d10_strong/`, against E3d and E10 on E3d
+    (`e10_e3d_2026-11-11`), both from this machine, so the chain's
+    comparisons there cross machines (up to about 4e-3 per seed). E3e had
+    no `strong` d = 10 cell yet, so `--e3e` held none.
+
+  Each folder's `provenance.txt` has the command and says which machine made
+  each reference.
 
 **Cost, per cell, on one machine.** Fit plus scoring of the 20,000 test
 points, from the rows' `fit_s` and `inference_s`, at d = 5, here: the chain
 72.5 s on `decay` and 66.2 s on `strong`, E10's TabPFN mixture 330.3 s and
-327.6 s, ratios of 0.22 and 0.20.
+327.6 s, ratios of 0.22 and 0.20. At d = 10 `decay`, on gpu053: the chain
+135.0 s and the mixture 1270.7 s, a ratio of 0.11. The chain took 128.1 s
+at `strong` there, but that mixture ran on this machine, so there is no
+ratio on one machine.
 
 ### The summaries
 
