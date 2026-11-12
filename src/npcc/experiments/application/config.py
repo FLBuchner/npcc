@@ -39,7 +39,9 @@ from npcc.experiments.application.data import (
 from npcc.experiments.application.derived import (
   DERIVATIONS,
   DEW_POINT,
+  SONNTAG_1990,
   TEMPERATURE,
+  Derivation,
 )
 from npcc.experiments.config import EstimatorSpec, _parse_estimator
 
@@ -213,6 +215,12 @@ class ApplicationConfig:
       RH points: a case whose dew point equals its temperature has its dew
       point moved to where the Magnus RH is ``100 - saturation_nudge``,
       before its margins see it. 0, the default, moves none.
+  clip_dew_point : bool
+      Whether a copula draw's dew point above its temperature is clipped at
+      it before RH and w are derived, as the data clips; off by default.
+  magnus : str
+      The Magnus formula of the derivations and the nudge, a key of
+      :data:`~npcc.experiments.application.derived.MAGNUS`.
   devices : mapping of str to str
       The device of each backend named; an unnamed one picks its own.
   n_levels : int
@@ -241,6 +249,8 @@ class ApplicationConfig:
   modeled_responses: tuple[str, ...] | None = None
   derived_responses: tuple[str, ...] = ()
   saturation_nudge: float = 0.0
+  clip_dew_point: bool = False
+  magnus: str = SONNTAG_1990.name
   devices: Mapping[str, str] = field(default_factory=dict)
   n_levels: int = 199
   n_draws: int = 200
@@ -358,10 +368,11 @@ class ApplicationConfig:
           f"{name} must be derived from modeled responses; its inputs "
           f"{missing} are not modeled"
         )
-    left = [v for v in names if v not in self.modeled and v not in self.derived]
-    if left:
+    Derivation(self.magnus, self.clip_dew_point)
+    if self.clip_dew_point and not self.derived:
       raise ValueError(
-        f"every response must be modeled or derived; got neither for {left}"
+        "clip_dew_point must be false unless responses are derived, since "
+        "it clips the dew point of the draws they are derived from"
       )
     if not 0.0 <= self.saturation_nudge < 100.0:
       raise ValueError(
@@ -374,6 +385,11 @@ class ApplicationConfig:
       raise ValueError(
         f"saturation_nudge must be 0 unless {TEMPERATURE} and {DEW_POINT} "
         f"are both modeled; got modeled {list(self.modeled)}"
+      )
+    left = [v for v in names if v not in self.modeled and v not in self.derived]
+    if left:
+      raise ValueError(
+        f"every response must be modeled or derived; got neither for {left}"
       )
 
   @property
@@ -400,7 +416,13 @@ class ApplicationConfig:
       self.modeled == self.variables
       and not self.derived
       and self.saturation_nudge == 0.0
+      and not self.clip_dew_point
     )
+
+  @property
+  def derivation(self) -> Derivation:
+    """The Magnus formula and the dew-point clip of the derivations."""
+    return Derivation(self.magnus, self.clip_dew_point)
 
   def _design(self) -> dict[str, object]:
     """The modeled subset's settings, recorded only off the default design.
@@ -414,6 +436,8 @@ class ApplicationConfig:
       "modeled": list(self.modeled),
       "derived": list(self.derived),
       "saturation_nudge": self.saturation_nudge,
+      "clip_dew_point": self.clip_dew_point,
+      "magnus": self.magnus,
     }
 
   @property
@@ -580,7 +604,13 @@ _TABLES: dict[str, tuple[str, ...]] = {
   ),
 }
 #: The keys of ``[responses]`` that are settings rather than a response.
-_DESIGN_KEYS = ("modeled", "derived", "saturation_nudge")
+_DESIGN_KEYS = (
+  "modeled",
+  "derived",
+  "saturation_nudge",
+  "clip_dew_point",
+  "magnus",
+)
 _TOP_LEVEL = (*_TABLES, "responses", "devices", "estimators", "base_seed")
 
 
@@ -748,6 +778,15 @@ def load_config(path: str | Path) -> ApplicationConfig:
         f"responses.saturation_nudge must be a number; got {nudge!r}"
       )
     options["saturation_nudge"] = float(nudge)
+  if "clip_dew_point" in responses:
+    clip = responses["clip_dew_point"]
+    if not isinstance(clip, bool):
+      raise TypeError(
+        f"responses.clip_dew_point must be true or false; got {clip!r}"
+      )
+    options["clip_dew_point"] = clip
+  if "magnus" in responses:
+    options["magnus"] = str(responses["magnus"])
   for key, value in devices.items():
     if not isinstance(value, str):
       raise TypeError(f"devices.{key} must be a string; got {value!r}")

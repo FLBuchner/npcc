@@ -41,6 +41,7 @@ import pandas as pd
 from npcc.experiments._study import code_provenance
 from npcc.experiments.application.config import ApplicationConfig
 from npcc.experiments.application.data import StationData, data_sha256
+from npcc.experiments.application.derived import Derivation
 from npcc.experiments.application.marginal_set import MarginalSet
 from npcc.experiments.application.scores import sample_crps_column
 
@@ -91,8 +92,8 @@ class CopulaResultLike(Protocol):
     ...
 
   @property
-  def clipped_share(self) -> np.ndarray | None:
-    """Each test case's share of draws whose dew point was clipped."""
+  def dew_point_above_share(self) -> np.ndarray | None:
+    """Each test case's share of draws whose dew point exceeds T."""
     ...
 
 
@@ -508,6 +509,7 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
   # response and derives none.
   modeled = tuple(info.get("modeled", data.variables))
   derived = tuple(info.get("derived", ()))
+  derivation = Derivation(**info.get("derivation", {}))
   modeled_columns = [data.column(v) for v in modeled]
   derived_columns = [data.column(v) for v in derived]
   predictions = pd.read_parquet(unit / "predictions.parquet")
@@ -547,6 +549,7 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
     levels=levels,
     quantiles_test=np.stack(quantiles, axis=2),
     derived=derived,
+    derivation=derivation,
     y_derived_train=data.y_train[:, derived_columns],
     y_derived_test=data.y_test[:, derived_columns],
   )
@@ -714,8 +717,8 @@ def write_copula(
         for v, values in result.sample_crps.items()
       },
     }
-    if result.clipped_share is not None:
-      columns["clipped_share"] = result.clipped_share
+    if result.dew_point_above_share is not None:
+      columns["dew_point_above_share"] = result.dew_point_above_share
     for name, values in columns.items():
       values = np.asarray(values)
       if values.shape != (n_test,) or not np.isfinite(values).all():

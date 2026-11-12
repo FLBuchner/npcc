@@ -55,7 +55,12 @@ pressure `p` (hPa):
 - `Td` is clipped at `T`: `RH = 100` exactly where `Td = T` exactly, in 4.4%
   of the training rows, at 104 stations; `Td > T` never occurs.
 
-The constants are in `src/npcc/experiments/application/derived.py`.
+The constants are in `src/npcc/experiments/application/derived.py`, one
+`Magnus` object per set, chosen by `[responses] magnus`: `"sonntag1990"`,
+above, or `"meteoswiss"`, the piecewise set Zanetta et al. (2023) use
+(`a = 17.368, b = 238.83, c = 6.107` hPa at and above 0 C; `17.856, 245.52,
+6.108` below). Which set the data was computed with is pending; both
+configs of the triple name `"sonntag1990"` until it is settled.
 
 **Why a five-variable log score is not defined.** The five responses lie on
 a three-dimensional surface of five-dimensional space, so their joint
@@ -72,20 +77,27 @@ top of that, `RH = 100` is an atom.
 [responses]
 modeled = ["obs:air_temperature", "obs:dew_point_temperature", "obs:surface_air_pressure"]
 derived = ["obs:relative_humidity", "obs:water_vapor_mixing_ratio"]
-saturation_nudge = 0.05
+clip_dew_point = false   # pending
+saturation_nudge = 0.0   # pending
+magnus = "sonntag1990"   # pending
 ```
 
 The margins are fitted to the three, and the copulas to their PITs (d = 3).
 `configs/application.toml`, the five-response design, stays the default and
-is unchanged; neither list nor the nudge is set there.
+is unchanged; none of these keys is set there. A derivation reads `T`, `Td`
+and `p` from the modeled responses through `derived.QUANTITIES`, so a triple
+that models another function of them, such as the dew-point deficit
+`T - Td` as Zanetta et al. do, would name it there.
 
 **Derived responses.** Each copula draw of `(T, Td, p)`, mapped through the
 margins' quantiles, gives a draw of RH and w by the formulas above. A draw
-with `Td > T`, which the data never has, is clipped as the data clips:
-`min(Td, T)` in both formulas, so RH = 100 there. Each test case's share of
-clipped draws is stored (`clipped_share`) and averaged per station, marginal
-model and arm in the copula tables. A derived response must have its inputs
-modeled; the mixing ratio's are all three, the temperature for the clip.
+can have `Td > T`, which the data never has. With `clip_dew_point = true`
+it is clipped as the data clips, `min(Td, T)` in both formulas, so RH = 100
+there; with `false`, the default while the choice is pending, RH exceeds
+100 there. Either way each test case's share of draws with `Td > T` is
+stored (`dew_point_above_share`) and averaged per station, marginal model
+and arm in the copula tables. A derived response must have its inputs
+modeled; both read the temperature.
 
 **Scores of the triple.** Per copula arm and test case:
 
@@ -102,13 +114,14 @@ modeled; the mixing ratio's are all three, the temperature for the clip.
 The margins themselves are scored on the three modeled responses with the
 quantile CRPS, as in the default design.
 
-**The saturation atom.** Nothing models it. As FLBuchner's RH nudge moves
-an RH of exactly 100 to 99.95, a case of the triple with `Td = T` has its
-dew point moved, before its margins see it, to `T - delta(T)`, where the
-Magnus RH is `100 - saturation_nudge` (0.05 points). The counts of moved
-training and test cases are stored per station and marginal model and
-written to `tables/saturation_by_station.csv`; the CRPS and the copula's
-energy and variogram scores use the observed dew point.
+**The saturation atom.** Nothing models it. With `saturation_nudge > 0`, as
+FLBuchner's RH nudge moves an RH of exactly 100 to 99.95, a case of the
+triple with `Td = T` has its dew point moved, before its margins see it, to
+`T - delta(T)`, where the Magnus RH is `100 - saturation_nudge`; at 0, the
+default while the choice is pending, nothing moves. Either way the cases
+with `Td = T` are counted per station, training and test, stored with each
+margin unit and written to `tables/saturation_by_station.csv`; the CRPS and
+the copula's energy and variogram scores use the observed dew point.
 
 **boostCopula at d = 3.** `r_methods/fit_boostcopula_vine.R` fits any
 d >= 2, starting from an initial matrix of the same pattern as FLBuchner's

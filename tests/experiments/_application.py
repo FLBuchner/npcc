@@ -125,7 +125,7 @@ class FakeCopulaResult:
   timings: dict[str, float] = field(default_factory=dict)
   info: dict[str, object] = field(default_factory=dict)
   sample_crps: dict[str, np.ndarray] = field(default_factory=dict)
-  clipped_share: np.ndarray | None = None
+  dew_point_above_share: np.ndarray | None = None
 
 
 class FakeCopulaFailure(ValueError):

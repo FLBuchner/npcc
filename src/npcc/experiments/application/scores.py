@@ -402,7 +402,7 @@ def copula_tables(
   cases : pandas.DataFrame
       One row per ``(station, model, arm, row)``, ``model`` being the
       marginal model, with the columns of :func:`copula_score_columns` and,
-      where responses are derived, ``clipped_share``. Within a marginal
+      where responses are derived, ``dew_point_above_share``. Within a marginal
       model, every arm must cover the same cases.
   reference : str, default="independence"
       The reference arm; skills are ``nan`` without it.
@@ -416,7 +416,7 @@ def copula_tables(
       :func:`marginal_tables`: each score's mean, the log score's gain
       (``joint_nll_gain``, the additive improvement on the reference) and
       every other score's skill (``energy_skill``, ``variogram_skill``, a
-      ratio of means), and ``clipped_share``'s mean where present; and
+      ratio of means), and ``dew_point_above_share``'s mean where present; and
       ``cases``, the input with each case's log-score gain and its
       ``energy_gain`` and ``variogram_gain`` over the reference's pooled
       mean.
@@ -424,7 +424,8 @@ def copula_tables(
   _check_paired(cases, "arm", ["station", "row"], ["model"])
   nll, scores = copula_score_columns(cases)
   skilled = scores[1:]
-  means = [*scores, *(["clipped_share"] if "clipped_share" in cases else [])]
+  above = "dew_point_above_share"
+  means = [*scores, *([above] if above in cases else [])]
   by_station = (
     cases.groupby(["station", "model", "arm"], sort=True)
     .agg(n_cases=("row", "size"), **{m: (m, "mean") for m in means})

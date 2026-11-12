@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from npcc.experiments.application.derived import Derivation
+
 
 @dataclass(frozen=True)
 class MarginalSet:
@@ -47,6 +49,8 @@ class MarginalSet:
       The ``k`` responses a copula's draws derive from the modeled ones
       (:mod:`~npcc.experiments.application.derived`); empty when every
       response is modeled.
+  derivation : Derivation
+      The Magnus formula and dew-point clip the derived responses use.
   y_derived_train, y_derived_test : numpy.ndarray, shape (n_train, k) and (n_test, k)
       Their observations, which the joint forecast is scored against.
   """
@@ -67,6 +71,7 @@ class MarginalSet:
   levels: np.ndarray
   quantiles_test: np.ndarray
   derived: tuple[str, ...] = ()
+  derivation: Derivation = field(default_factory=Derivation)
   y_derived_train: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))
   y_derived_test: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))
 

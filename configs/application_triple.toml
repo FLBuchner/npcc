@@ -31,13 +31,22 @@ n_levels = 199
 # The modeled triple. Relative humidity and the mixing ratio are functions of
 # it (npcc.experiments.application.derived): they are computed from every
 # copula draw of (T, Td, p), and scored with it, but no margin or copula is
-# fitted to them, so their scales below are unused. A case whose dew point
-# equals its temperature has it moved to where the Magnus RH is
-# 100 - saturation_nudge, as an RH of exactly 100 is moved to 99.95.
+# fitted to them, so their scales below are unused.
 [responses]
 modeled = ["obs:air_temperature", "obs:dew_point_temperature", "obs:surface_air_pressure"]
 derived = ["obs:relative_humidity", "obs:water_vapor_mixing_ratio"]
-saturation_nudge = 0.05
+# PENDING the user's decision; both off until then. clip_dew_point = true
+# would clip a draw's dew point at its temperature before RH and w are
+# derived, as the data clips; saturation_nudge > 0 would move a case whose
+# dew point equals its temperature to where the Magnus RH is
+# 100 - saturation_nudge, as FLBuchner's RH nudge moves 100 to 99.95. Draws
+# with Td > T and cases with Td = T are counted either way.
+clip_dew_point = false
+saturation_nudge = 0.0
+# PENDING: the Magnus constants the data was computed with. "sonntag1990"
+# (17.62, 243.12, 6.112) or "meteoswiss" (piecewise at 0 C, as Zanetta et
+# al. 2023 use).
+magnus = "sonntag1990"
 "obs:air_temperature" = { transform = "identity" }
 "obs:dew_point_temperature" = { transform = "identity" }
 "obs:relative_humidity" = { transform = "logit", scale = 100.0, boundary_nudge = 0.05 }

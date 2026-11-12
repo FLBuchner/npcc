@@ -211,8 +211,8 @@ def build(
       report.table(
         pd.read_csv(saturation),
         "Cases moved off saturation (dew point equal to temperature)",
-        "Their dew point is moved to where the Magnus RH is 100 less the "
-        "configured saturation_nudge, before the margins see it.",
+        "Cases whose dew point equals their temperature, counted whether or "
+        "not saturation_nudge moves them before the margins see them.",
       )
     common.timing_pages(
       report,

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from time import perf_counter
 from typing import Protocol, TypeVar
 
@@ -329,15 +329,23 @@ def fit_margin(
   names = [data.feature_names[c] for c in columns]
   x_train, x_test = data.x_train[:, columns], data.x_test[:, columns]
   observed_train, observed_test = data.y_train[:, j], data.y_test[:, j]
-  saturated: dict[str, int] = {}
-  if variable == DEW_POINT and config.saturation_nudge > 0.0:
+  saturated: dict[str, float] = {}
+  # Off the default design, the cases at saturation are counted whether or
+  # not they are moved.
+  if (
+    variable == DEW_POINT
+    and not config.is_default_design
+    and TEMPERATURE in config.modeled
+  ):
     t = data.column(TEMPERATURE)
+    formula = config.derivation.formula
     observed_train, saturated["saturated_train"] = nudge_saturated(
-      data.y_train[:, t], observed_train, config.saturation_nudge
+      data.y_train[:, t], observed_train, config.saturation_nudge, formula
     )
     observed_test, saturated["saturated_test"] = nudge_saturated(
-      data.y_test[:, t], observed_test, config.saturation_nudge
+      data.y_test[:, t], observed_test, config.saturation_nudge, formula
     )
+    saturated["saturation_nudge"] = config.saturation_nudge
   y_train = response.to_model(observed_train, variable)
   y_test = response.to_model(observed_test, variable)
   seed = derive_seed(
@@ -524,7 +532,11 @@ def fit_station(
       **(
         {}
         if config.is_default_design
-        else {"modeled": list(config.modeled), "derived": list(config.derived)}
+        else {
+          "modeled": list(config.modeled),
+          "derived": list(config.derived),
+          "derivation": asdict(config.derivation),
+        }
       ),
     },
   )
