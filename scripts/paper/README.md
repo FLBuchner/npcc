@@ -681,6 +681,35 @@ Monte-Carlo KL point by point.
   repetition, and against E2's arms on the cells both runs hold. It also
   writes `vine_mixture_checks.json`, which holds Jensen's bound and how far
   member 1 is from the selected arm.
+- **Against the GAM vines.** `scripts/paper/e10/analyze_mixture_gamvine.py
+  <run> --with <E2b runs> --out <dir>` reads the mixture against E2b's three
+  GAM arms and writes `vine_mixture_gamvine.csv`, one row per (d, n, GAM
+  arm). For the joint and the copula KL, each averaged over x within a
+  repetition first, it gives the paired difference mixture - GAM arm as mean
+  and SE over repetitions, and the repetitions in which the mixture is
+  lower. It reuses `analyze_mixture.py`'s loading and pairing, so it refuses
+  a `--with` run that does not hold the same cell seed and true log-density
+  at every (d, n, rep, x) both runs hold, or that shares no cell with the
+  mixture run: pass the E2b runs at the mixture run's d and n only. `--out`
+  has no default, since the mixture runs' `analysis/` folders are cited:
+
+  ```bash
+  A=scripts/paper/e10/analyze_mixture_gamvine.py
+  R=results
+  uv run --no-sync python $A $R/vine_study_mixture_2026-11-11 \
+      --with $R/vine_study_gamvine_2026-11-11b $R/vine_study_gamvine_n2000_2026-11-11b \
+      --out <dir>
+  uv run --no-sync python $A $R/vine_study_mixture_d10_2026-11-11 \
+      --with $R/vine_study_gamvine_d10_2026-11-11b --out <dir>
+  ```
+
+  At d = 10 the pairing crosses machines: the mixture ran on gpu053 and the
+  GAM vines here, on the same cells, whose truths and test points the check
+  finds equal bit for bit. While the d = 10 mixture run holds n = 1000 only,
+  `vine_study_gamvine_d10_n2000_2026-11-11b` shares no cell with it and is
+  refused. On 2026-11-12 both commands, from this branch, reproduced an
+  ad hoc computation from the same `metrics_by_x.parquet` files to the
+  fourth decimal, every mean, SE and count.
 - **Reusing quantile tables.** A pair copula in a vine reads each direction
   twice at the same conditioning rows, for its density and then for its
   h-function. Each `ConditionalMargin` now keeps its last table and returns
