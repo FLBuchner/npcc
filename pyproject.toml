@@ -66,6 +66,7 @@ backends = [
 npcc-simstudy = "npcc.experiments.cli:main"
 npcc-vinestudy = "npcc.experiments.vine_cli:main"
 npcc-covstudy = "npcc.experiments.covariate_cli:main"
+npcc-application = "npcc.experiments.application.cli:main"
 
 [dependency-groups]
 dev = [
