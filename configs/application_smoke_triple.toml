@@ -1,5 +1,8 @@
-# configs/application_triple.toml on station 0 alone, so every arm's cost on
-# the triple is seen once before the full run.
+# The station-0 smoke run of the triple, as run into
+# results/application_triple_smoke_2026-11-12: every arm on both margins, so
+# every arm's cost on the triple was seen once before the full run. The full
+# run, configs/application_triple.toml, keeps its data, margins and settings
+# but runs the npcc arms on the TabPFN margins alone and drops the random arm.
 #   npcc-application margins  --config configs/application_smoke_triple.toml --out <folder>
 #   npcc-application copulas  --config configs/application_smoke_triple.toml --out <folder>
 #   npcc-application evaluate --config configs/application_smoke_triple.toml --out <folder>

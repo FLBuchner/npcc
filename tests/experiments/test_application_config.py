@@ -203,6 +203,36 @@ def _write(tmp_path: Path, text: str) -> Path:
       ValueError,
       "unique",
     ),
+    (
+      'arms = ["independence", "gaussian"]',
+      'arms = ["independence", "gaussian"]\narms_by_margin = { "no-such-model" = ["gaussian"] }',
+      ValueError,
+      "marginal models",
+    ),
+    (
+      'arms = ["independence", "gaussian"]',
+      'arms = ["independence", "gaussian"]\narms_by_margin = { "emos-seasonal" = ["boostcopula-all"] }',
+      ValueError,
+      "drawn from copulas.arms",
+    ),
+    (
+      'arms = ["independence", "gaussian"]',
+      'arms = ["independence", "gaussian"]\narms_by_margin = { "emos-seasonal" = [] }',
+      ValueError,
+      "at least one arm",
+    ),
+    (
+      'arms = ["independence", "gaussian"]',
+      'arms = ["independence", "gaussian"]\narms_by_margin = { "emos-seasonal" = ["gaussian", "gaussian"] }',
+      ValueError,
+      "unique",
+    ),
+    (
+      'arms = ["independence", "gaussian"]',
+      'arms = ["independence", "gaussian"]\narms_by_margin = ["gaussian"]',
+      TypeError,
+      "table of arm lists",
+    ),
   ],
 )
 def test_a_config_no_run_could_honor_is_refused(
@@ -222,6 +252,44 @@ def test_a_config_no_run_could_honor_is_refused(
   assert old in text
   with pytest.raises(error, match=match):
     load_config(_write(tmp_path, text.replace(old, new, 1)))
+
+
+@pytest.mark.usefixtures("register_linear_gaussian_backend")
+def test_a_margin_may_run_only_some_of_the_arms(tmp_path: Path) -> None:
+  """A per-margin arm list must narrow that margin's arms and no other's.
+
+  The arms keep ``copulas.arms``'s order whatever order the list gives, the
+  echo records each margin's arms, and the signature does not change, since
+  the list only selects work.
+  """
+  plain = config_text(Path("data"))
+  arms = 'arms = ["independence", "gaussian"]'
+  narrowed = plain.replace(
+    arms,
+    f'{arms}\narms_by_margin = {{ "linear-gaussian-all" = '
+    '["gaussian", "independence"], "emos-seasonal" = ["gaussian"] }',
+    1,
+  )
+  config = load_config(_write(tmp_path, narrowed))
+
+  assert config.copula_arms_for("emos-seasonal") == ("gaussian",)
+  assert config.copula_arms_for("linear-gaussian-all") == (
+    "independence",
+    "gaussian",
+  )
+  assert config.copula_arms_for("linear-gaussian-emos") == config.copula_arms
+  assert config.echo()["copula_arms_by_margin"] == {
+    "emos-seasonal": ["gaussian"],
+    "linear-gaussian-all": ["independence", "gaussian"],
+    "linear-gaussian-emos": ["independence", "gaussian"],
+  }
+  (tmp_path / "plain").mkdir()
+  assert (
+    config.signature()
+    == load_config(_write(tmp_path / "plain", plain)).signature()
+  )
+  with pytest.raises(ValueError, match="copula stage's marginal models"):
+    config.copula_arms_for("tabpfn-quantiles-all")
 
 
 @pytest.mark.usefixtures("register_linear_gaussian_backend")

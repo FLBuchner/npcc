@@ -34,6 +34,7 @@ from npcc.experiments.application.store import (
 from tests.experiments._application import (
   MODELS,
   FakeCopulas,
+  config_text,
   write_config,
   write_data,
 )
@@ -255,6 +256,52 @@ def test_the_copula_stage_reads_only_its_own_marginal_sets(
     "linear-gaussian-all",
   }
   assert len(fake_copulas.calls) == 3
+
+
+def test_a_margin_runs_and_is_scored_on_its_own_arms_only(
+  data_dir: Path,
+  tmp_path: Path,
+  fake_copulas: FakeCopulas,
+  register_linear_gaussian_backend: None,
+) -> None:
+  """An arm left out of one margin's list must not be fitted there.
+
+  Nor may evaluate then demand that unit: it reads each margin's own arms,
+  and still scores the other margin's every arm.
+  """
+  del register_linear_gaussian_backend
+  config = tmp_path / "app.toml"
+  config.write_text(
+    config_text(
+      data_dir,
+      stations="[0, 2]",
+      copula_margins=["emos-seasonal", "linear-gaussian-all"],
+    ).replace(
+      'arms = ["independence", "gaussian"]',
+      'arms = ["independence", "gaussian"]\n'
+      'arms_by_margin = { "emos-seasonal" = ["independence"] }',
+      1,
+    )
+  )
+  out = tmp_path / "run"
+  assert _margins(config, out) == 0
+  assert main(["copulas", "--config", str(config), "--out", str(out)]) == 0
+
+  ran = {(c["model"], c["arm"]) for c in fake_copulas.calls}
+  assert ran == {
+    ("emos-seasonal", "independence"),
+    ("linear-gaussian-all", "independence"),
+    ("linear-gaussian-all", "gaussian"),
+  }
+  assert len(fake_copulas.calls) == 2 * 3
+  assert copula_status(out, 0, "emos-seasonal", "gaussian") is None
+  assert main(["evaluate", "--config", str(config), "--out", str(out)]) == 0
+  pooled = pd.read_csv(out / "tables" / "copulas_pooled.csv")
+  arms = pooled.groupby("model")["arm"].apply(set).to_dict()
+  assert arms == {
+    "emos-seasonal": {"independence"},
+    "linear-gaussian-all": {"independence", "gaussian"},
+  }
 
 
 def test_an_unknown_arm_or_a_missing_r_stops_before_any_fit(

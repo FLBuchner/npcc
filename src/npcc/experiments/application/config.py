@@ -198,6 +198,10 @@ class ApplicationConfig:
   copula_margins : tuple of str or None
       The marginal models whose sets enter the copula stage, drawn from
       ``models``; ``None`` for all of them (see :attr:`copula_models`).
+  copula_arms_by_margin : mapping of str to tuple of str
+      For a copula stage's marginal model named here, the only arms it runs,
+      drawn from ``copula_arms``; a model not named runs every arm (see
+      :meth:`copula_arms_for`). Empty by default.
   verify_data : bool
       Whether to refuse input files that are not the published ones, by
       their SHA-256; off only for files of another source, such as
@@ -236,6 +240,9 @@ class ApplicationConfig:
   estimators: tuple[EstimatorSpec, ...]
   copula_arms: tuple[str, ...]
   copula_margins: tuple[str, ...] | None = None
+  copula_arms_by_margin: Mapping[str, tuple[str, ...]] = field(
+    default_factory=dict
+  )
   verify_data: bool = True
   modeled_responses: tuple[str, ...] | None = None
   derived_responses: tuple[str, ...] = ()
@@ -252,6 +259,13 @@ class ApplicationConfig:
     """Refuse a configuration no run could honor."""
     object.__setattr__(
       self, "responses", MappingProxyType(dict(self.responses))
+    )
+    object.__setattr__(
+      self,
+      "copula_arms_by_margin",
+      MappingProxyType(
+        {m: tuple(a) for m, a in self.copula_arms_by_margin.items()}
+      ),
     )
     object.__setattr__(self, "devices", MappingProxyType(dict(self.devices)))
     if self.stations is not None:
@@ -282,6 +296,7 @@ class ApplicationConfig:
           f"copula_margins must be drawn from the marginal models "
           f"{list(self.models)}; got {unknown}"
         )
+    self._check_arms_by_margin()
     self._check_devices()
     self._check_modeled()
     for name, low in (
@@ -314,6 +329,28 @@ class ApplicationConfig:
         f"estimators must name each backend once, since a marginal model "
         f"names its estimator by backend; got {backends}"
       )
+
+  def _check_arms_by_margin(self) -> None:
+    """Refuse a per-margin arm list that no copula stage could run."""
+    unknown = sorted(set(self.copula_arms_by_margin) - set(self.copula_models))
+    if unknown:
+      raise ValueError(
+        f"copulas.arms_by_margin must name the copula stage's marginal models "
+        f"{list(self.copula_models)}; got {unknown}"
+      )
+    for model, arms in self.copula_arms_by_margin.items():
+      if not arms:
+        raise ValueError(
+          f"copulas.arms_by_margin.{model} must name at least one arm; to "
+          f"run no arm on {model}, leave it out of copulas.margins"
+        )
+      _unique(f"copulas.arms_by_margin.{model}", arms)
+      stray = [a for a in arms if a not in self.copula_arms]
+      if stray:
+        raise ValueError(
+          f"copulas.arms_by_margin.{model} must be drawn from copulas.arms "
+          f"{list(self.copula_arms)}; got {stray}"
+        )
 
   def _check_devices(self) -> None:
     """Refuse a device for a backend no estimator uses, or a bad device."""
@@ -409,6 +446,33 @@ class ApplicationConfig:
   def copula_models(self) -> tuple[str, ...]:
     """The marginal models of the copula stage, in the configured order."""
     return self.models if self.copula_margins is None else self.copula_margins
+
+  def copula_arms_for(self, model: str) -> tuple[str, ...]:
+    """The arms the copula stage runs on one marginal model's sets.
+
+    Parameters
+    ----------
+    model : str
+        One of :attr:`copula_models`.
+
+    Returns
+    -------
+    tuple of str
+        Its entry in :attr:`copula_arms_by_margin`, or every arm when it has
+        none; in the order of :attr:`copula_arms` either way.
+
+    Raises
+    ------
+    ValueError
+        If ``model`` is not a copula stage's marginal model.
+    """
+    if model not in self.copula_models:
+      raise ValueError(
+        f"model must be one of the copula stage's marginal models "
+        f"{list(self.copula_models)}; got {model!r}"
+      )
+    chosen = self.copula_arms_by_margin.get(model, self.copula_arms)
+    return tuple(a for a in self.copula_arms if a in chosen)
 
   @property
   def data_sha256(self) -> Mapping[str, str] | None:
@@ -516,6 +580,9 @@ class ApplicationConfig:
       ],
       "copula_arms": list(self.copula_arms),
       "copula_margins": list(self.copula_models),
+      "copula_arms_by_margin": {
+        m: list(self.copula_arms_for(m)) for m in self.copula_models
+      },
       "verify_data": self.verify_data,
       "data_sha256": dict(DATA_SHA256) if self.verify_data else None,
       "devices": dict(self.devices),
@@ -563,6 +630,7 @@ _TABLES: dict[str, tuple[str, ...]] = {
   "copulas": (
     "arms",
     "margins",
+    "arms_by_margin",
     "n_draws",
     "sample_batch_size",
     "mixture_k",
@@ -721,6 +789,17 @@ def load_config(path: str | Path) -> ApplicationConfig:
     options["verify_data"] = data["verify"]
   if "margins" in copulas:
     options["copula_margins"] = _strings(copulas["margins"], "copulas.margins")
+  if "arms_by_margin" in copulas:
+    by_margin = copulas["arms_by_margin"]
+    if not isinstance(by_margin, dict):
+      raise TypeError(
+        f"copulas.arms_by_margin must be a table of arm lists by marginal "
+        f"model; got {by_margin!r}"
+      )
+    options["copula_arms_by_margin"] = {
+      str(m): _strings(a, f"copulas.arms_by_margin.{m}")
+      for m, a in by_margin.items()
+    }
   tables = {k: v for k, v in responses.items() if k not in _DESIGN_KEYS}
   if "modeled" in responses:
     options["modeled_responses"] = _strings(

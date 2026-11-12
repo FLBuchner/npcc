@@ -23,6 +23,7 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from time import perf_counter
 
@@ -178,6 +179,33 @@ def _arms(config: ApplicationConfig, options: RunOptions) -> tuple[str, ...]:
   return _subset("copulas", options.arms, config.copula_arms)
 
 
+def _arms_by_model(
+  config: ApplicationConfig, models: Sequence[str], arms: Sequence[str]
+) -> dict[str, tuple[str, ...]]:
+  """The selected arms each selected model runs, as the configuration allows.
+
+  A model left with none is dropped, so its marginal sets are not read.
+  """
+  chosen = {
+    m: tuple(a for a in arms if a in config.copula_arms_for(m)) for m in models
+  }
+  return {m: a for m, a in chosen.items() if a}
+
+
+def _read_copula_units(
+  out: Path, stations: Sequence[int], units: Mapping[str, Sequence[str]]
+) -> dict[str, pd.DataFrame]:
+  """:func:`read_copula_tables` over each model's own arms, stacked."""
+  parts = [read_copula_tables(out, stations, [m], a) for m, a in units.items()]
+  stacked: dict[str, pd.DataFrame] = {}
+  for key in parts[0]:
+    frames = [p[key] for p in parts if not p[key].empty]
+    stacked[key] = (
+      pd.concat(frames, ignore_index=True) if frames else parts[0][key]
+    )
+  return stacked
+
+
 def _check_arms(arms: Sequence[str]) -> None:
   """Refuse an arm the copula stage does not know, before fitting any."""
   from npcc.experiments.application.copulas import COPULA_ARMS
@@ -303,6 +331,11 @@ def preflight(config: ApplicationConfig, options: RunOptions) -> list[str]:
       ) from exc
     lines.append(f"copula arms: {', '.join(arms)}")
     lines.append(f"copula margins: {', '.join(config.copula_models)}")
+    lines.extend(
+      f"copula arms on {m}: {', '.join(config.copula_arms_for(m))}"
+      for m in config.copula_models
+      if m in config.copula_arms_by_margin
+    )
     if any(a.startswith("boostcopula") for a in arms):
       lines.append(f"boostCopula: {check_boostcopula()}")
   return lines
@@ -380,16 +413,16 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
   )
 
   out = _out(options)
-  models = _copula_models(config, options)
   arms = _arms(config, options)
   _check_arms(arms)
+  units = _arms_by_model(config, _copula_models(config, options), arms)
   stations = _stations(config, options, from_data=False)
   if not options.resume:
     done = [
       str(copula_dir(out, s, m, a))
       for s in stations
-      for m in models
-      for a in arms
+      for m, model_arms in units.items()
+      for a in model_arms
       if copula_status(out, s, m, a) is not None
     ]
     if done:
@@ -397,7 +430,7 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
         f"the copula arms must not be stored yet without --resume; found "
         f"{done[:5]}{' ...' if len(done) > 5 else ''}"
       )
-  if any(a.startswith("boostcopula") for a in arms):
+  if any(a.startswith("boostcopula") for a in chain(*units.values())):
     check_boostcopula()
   # The copula stage derives each fit's seed from this one, the station, the
   # marginal model and the arm; its random structures from this one and the
@@ -405,16 +438,16 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
   seed = derive_seed(config.base_seed, "copulas")
   start_run(out, config, {"stage": "copulas", **options.echo()})
   logger.info(
-    "copulas: %d stations, %d models, %d arms",
+    "copulas: %d stations, %d models, %d arms on them",
     len(stations),
-    len(models),
-    len(arms),
+    len(units),
+    sum(len(a) for a in units.values()),
   )
   for station in stations:
     rows = read_station_data(out, station).row_test
-    for model in models:
+    for model, model_arms in units.items():
       ms = read_marginal_set(out, station, model)
-      for arm in arms:
+      for arm in model_arms:
         status = copula_status(out, station, model, arm)
         if status is not None:
           logger.info(
@@ -570,9 +603,9 @@ def evaluate(config: ApplicationConfig, options: RunOptions) -> list[str]:
     for s in stations
     for m in copula_models
   )
-  if ran:
-    arms = _arms(config, options)
-    copula = read_copula_tables(out, stations, copula_models, arms)
+  units = _arms_by_model(config, copula_models, _arms(config, options))
+  if ran and units:
+    copula = _read_copula_units(out, stations, units)
     cases = copula["scores"]
     failures = copula["failures"]
     if not failures.empty:

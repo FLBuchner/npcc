@@ -217,7 +217,12 @@ def test_the_triple_config_reads_its_design(tmp_path: Path) -> None:
   "name", ["application_triple", "application_smoke_triple"]
 )
 def test_the_shipped_triple_configs(name: str) -> None:
-  """The measured triple, with the full run's margins and arms."""
+  """The measured triple, with each run's margins and arms.
+
+  The full run must not fit an npcc copula to the EMOS margins, whose PITs
+  are not uniform given the covariates; the smoke run fitted every arm to
+  both, and its config must still say so.
+  """
   config = load_config(_ROOT / "configs" / f"{name}.toml")
 
   assert config.modeled == _MODELED
@@ -225,16 +230,27 @@ def test_the_shipped_triple_configs(name: str) -> None:
   assert config.magnus == "meteoswiss"
   assert config.models == ("emos-seasonal", "tabpfn-quantiles-all")
   assert config.copula_models == config.models
-  assert config.copula_arms == (
+  classical = (
     "independence",
     "gaussian",
     "boostcopula-all",
     "boostcopula-time",
-    "npcc-random-tabpfn-quantiles-all",
-    "npcc-random-tabpfn-quantiles-time",
+  )
+  mixtures = (
     "npcc-mixture-tabpfn-quantiles-all",
     "npcc-mixture-tabpfn-quantiles-time",
   )
+  if "smoke" in name:
+    randoms = (
+      "npcc-random-tabpfn-quantiles-all",
+      "npcc-random-tabpfn-quantiles-time",
+    )
+    assert config.copula_arms == (*classical, *randoms, *mixtures)
+    assert config.copula_arms_for("emos-seasonal") == config.copula_arms
+  else:
+    assert config.copula_arms == (*classical, *mixtures)
+    assert config.copula_arms_for("emos-seasonal") == classical
+  assert config.copula_arms_for("tabpfn-quantiles-all") == config.copula_arms
   assert config.responses[RELATIVE_HUMIDITY].transform == "logit"
   assert config.responses[RELATIVE_HUMIDITY].boundary_nudge == 0.05
   assert config.device_for("tabpfn-quantiles") == "cuda"
