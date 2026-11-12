@@ -27,6 +27,7 @@ direction is evaluated.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Self
 
@@ -41,7 +42,7 @@ from npcc.core.controls import FitControlsRosenblattBicop
 from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 from npcc.core.registry import create_backend
 
-__all__ = ["ChainCopula", "draw_order"]
+__all__ = ["ChainCopula", "draw_order", "draw_orders"]
 
 
 def draw_order(d: int, seed: int) -> list[int]:
@@ -62,6 +63,49 @@ def draw_order(d: int, seed: int) -> list[int]:
   """
   rng = np.random.default_rng(seed)
   return [int(v) + 1 for v in rng.permutation(d)]
+
+
+def draw_orders(d: int, seeds: Sequence[int]) -> list[list[int]]:
+  """Distinct variable orders, ``min(len(seeds), d!)`` of them.
+
+  Order ``j`` is drawn from the generator seeded by ``seeds[j - 1]``, as
+  :func:`draw_order` draws it; where that draw repeats an earlier order, the
+  same generator draws again until the order is new. A set of seeds whose
+  first draws are already distinct gives exactly :func:`draw_order`'s orders,
+  and every order is still a function of its own seed and the orders before
+  it. Once all ``d!`` orders are drawn, the remaining seeds are not used.
+
+  Parameters
+  ----------
+  d : int
+      The number of variables, at least 2.
+  seeds : sequence of int
+      One seed per order wanted.
+
+  Returns
+  -------
+  list of list of int
+      ``min(len(seeds), d!)`` distinct permutations of ``1, ..., d``, as
+      1-based variable labels.
+
+  Raises
+  ------
+  ValueError
+      If ``d`` is below 2.
+  """
+  if d < 2:
+    raise ValueError(f"d must be at least 2; got {d}")
+  available = math.factorial(d)
+  orders: list[list[int]] = []
+  taken: set[tuple[int, ...]] = set()
+  for seed in seeds[:available]:
+    rng = np.random.default_rng(seed)
+    order = tuple(int(v) + 1 for v in rng.permutation(d))
+    while order in taken:
+      order = tuple(int(v) + 1 for v in rng.permutation(d))
+    taken.add(order)
+    orders.append(list(order))
+  return orders
 
 
 def _controls(
