@@ -565,12 +565,16 @@ records it; `script_repo_commit` is the worktree's.
   `tll-ns` bit for bit. Copied back as `results/e10_e3d_gpu053_2026-11-11`,
   with `env_gpu053.txt` and the queue in `logs/`; `compare_e3d.py` wrote its
   `analysis_d10/` here.
-- d = 10 `strong`, here, from the same worktree at d9dc80e, from 2026-11-12:
-  TabPFN one seed at a time on the GPU (`local_queue4.sh` in `$O/logs/`),
-  and the competitors and CatBoost on cores 4 to 7
-  (`cpu_d10_strong_v2.sh`). A first CPU launcher left out `--folder` and
-  stopped at start with nothing written; its logs are the
-  `*_v1_failed_no_folder.log` files.
+- d = 10 `strong`, here, from the same worktree at d9dc80e, on 2026-11-12:
+  TabPFN one seed at a time on the GPU, 11:22 to 15:17 (`local_queue4.sh`
+  in `$O/logs/`, about 26 minutes a seed), and the competitors and CatBoost
+  on cores 4 to 7, 10:58 to 11:40 (`cpu_d10_strong_v2.sh`). A first CPU
+  launcher left out `--folder` and stopped at start with nothing written;
+  its logs are the `*_v1_failed_no_folder.log` files. Member 1 reproduces
+  E3d's `npcc-tabpfn-quantiles-v3-probit-tll-ns` bit for bit on seeds 101
+  to 505, the five E3d holds at d = 10 `strong`. `compare_e3d.py --designs
+  strong --dims 10`, from this branch at aa48017, wrote
+  `$O/analysis_d10_strong/` and its `provenance.txt`.
 
 ### The summaries
 
