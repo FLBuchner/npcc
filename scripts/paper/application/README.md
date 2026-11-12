@@ -136,12 +136,12 @@ since at d = 3 it is one of the mixture's members.
 
 **The chain mixture.** `npcc-chain-<backend>-<scope>` is E11's chain rule
 (`npcc.experiments.chain.ChainCopula`, `scripts/paper/README.md`, E11) on a
-marginal set: `mixture_k` copula densities, each written down along a
-variable order, `c(u | x) = prod_k f(u_pi(k) | u_pi(<k), x)`, with one
-TabPFN regression per factor. The orders are drawn uniformly per station by
-the vine study's own functions (`chain_orders`, the station in the
-repetition's place), so at d = 3 five draws from the six orders may repeat
-one, as in the simulations. The density is the orders' mean. The draws are
+marginal set: `min(mixture_k, d!)` copula densities, each written down
+along a variable order, `c(u | x) = prod_k f(u_pi(k) | u_pi(<k), x)`, with
+one TabPFN regression per factor. The orders are distinct and drawn
+uniformly per station by the vine study's own functions (`chain_orders`, the
+station in the repetition's place): five of the six at d = 3. The density
+is the orders' mean. The draws are
 split equally across the orders (40 of a case's 200 each), and each order
 draws its share by its own inverse Rosenblatt transform, from the quantile
 tables its density reads, so the mixture's density and its draws describe

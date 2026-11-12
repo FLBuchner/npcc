@@ -423,6 +423,7 @@ def test_the_chain_mixture_returns_itself_and_each_order(run: Run) -> None:
     assert np.isfinite(scores).all()
   orders = chain_orders(1, 3, 4, 5)
   assert mixture.info["orders"] == orders
+  assert len({tuple(o) for o in orders}) == 5
   assert mixture.info["draws_per_case"] == [2, 2, 2, 1, 1]
   cell_seed = derive_seed(1, 4, ms.model, arm)
   estimator_id = mixture.info["estimator_id"]
@@ -474,7 +475,7 @@ def test_a_chain_splits_the_draws_and_refuses_more_orders_than_draws(
   with pytest.raises(ValueError, match="every order"):
     copulas.split_draws(8, 9)
   with pytest.raises(ValueError, match="every order"):
-    run("npcc-chain-lightgbm-all", gaussian_set(d=3), mixture_k=9)
+    run("npcc-chain-lightgbm-all", gaussian_set(d=4), mixture_k=9)
 
 
 def test_member_draws_are_reproducible_from_the_seed(

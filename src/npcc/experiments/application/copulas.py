@@ -28,10 +28,10 @@ covariates are passed as they are.
   copula density is the members' mean. Each member is also returned and
   scored as ``<arm>-m<k>``, so the selected structure's vine is ``-m1``;
 - ``npcc-chain-<backend>-<scope>``, E11's chain-rule mixture
-  (:class:`~npcc.experiments.chain.ChainCopula`): ``mixture_k`` copula
-  densities written down by the chain rule along variable orders drawn
-  uniformly per station, as the vine study's ``chain`` arm draws them per
-  repetition, by the same functions, on the same margins. Its copula density
+  (:class:`~npcc.experiments.chain.ChainCopula`): ``min(mixture_k, d!)``
+  copula densities written down by the chain rule along distinct variable
+  orders drawn uniformly per station, as the vine study's ``chain`` arm draws
+  them per repetition, by the same functions, on the same margins. Its copula density
   is the orders' mean, and its draws are exact for it: each order draws its
   share of every case's ``n_draws``. Each order is also returned as
   ``<arm>-m<k>``, scored by its log score alone (its energy, variogram and
@@ -1035,7 +1035,7 @@ class _Vines:
     return [mixture, *members]
 
   def chain(self, arm: str, k: int) -> list[CopulaResult]:
-    """The chain-rule mixture over ``k`` variable orders, then each order.
+    """The chain-rule mixture over ``min(k, d!)`` orders, then each order.
 
     Each order is fitted, evaluated at the test cases, sampled for its share
     of the draws (:func:`split_draws`) and released before the next, so only
@@ -1044,8 +1044,8 @@ class _Vines:
     """
     ms = self.inputs.ms
     d = len(ms.variables)
-    counts = split_draws(self.inputs.n_draws, k)
     orders = chain_orders(self.inputs.seed, d, ms.station, k)
+    counts = split_draws(self.inputs.n_draws, len(orders))
     cell_seed = derive_seed(*self.inputs.salt(arm))
     estimator_id = str(self.info["estimator_id"])
     members: list[CopulaResult] = []
@@ -1102,7 +1102,8 @@ class _Vines:
     info = {
       **self.info,
       "context": "chain-rule",
-      "mixture_k": k,
+      "mixture_k": len(orders),
+      "mixture_k_requested": k,
       "orders": orders,
       "n_distinct_orders": len({tuple(o) for o in orders}),
       "cell_seed": cell_seed,
