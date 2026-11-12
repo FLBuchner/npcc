@@ -119,13 +119,18 @@ def stat(values: pd.Series) -> tuple[float, float]:
   return float(np.mean(v)), se
 
 
-def others(paths: list[Path], ours: pd.DataFrame) -> pd.DataFrame:
-  """The ``--with`` runs' rows for E2's arms, checked to pair with ours."""
+def others(
+  paths: list[Path], ours: pd.DataFrame, arms: tuple[str, ...] = OTHER_ARMS
+) -> pd.DataFrame:
+  """The ``--with`` runs' rows for ``arms``, checked to pair with ours.
+
+  E2's arms by default; ``analyze_mixture_gamvine.py`` passes E2b's.
+  """
   frames = []
   mine = ours.groupby(KEY)[["seed", "loglik_true"]].first()
   for path in paths:
     theirs = load(path)
-    theirs = theirs[theirs["arm"].isin(OTHER_ARMS)]
+    theirs = theirs[theirs["arm"].isin(arms)]
     got = theirs.groupby(KEY)[["seed", "loglik_true"]].first()
     shared = mine.index.intersection(got.index)
     if len(shared) == 0:

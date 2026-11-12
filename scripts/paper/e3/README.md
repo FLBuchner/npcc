@@ -1,4 +1,4 @@
-# E3 — comparison with VDC (§3.3)
+# E3 — comparison with VDC (§3.4)
 
 The scripts here compare NPCC with VDC (Safaai 2026, the vine denoising
 copula; <https://github.com/KempnerInstitute/vine-denoising-copula>) on VDC's
@@ -21,10 +21,12 @@ its weights, and which command produces each output file.
   Outputs go to `results/e3d_unknown_structure/`.
 - **E3e**: on E3d's truths and samples, the 2 x 2 of NPCC fitted simplified
   or non-simplified on TLL's selected or on the true structure. Outputs go to
-  `results/e3e_simplification_2x2/`, beside E3d's.
+  `results/e3e_simplification_2x2/` (d = 5, beside E3d's) and
+  `results/e3e_simplification_2x2_gpu053/` (d = 10).
 - **E10 on E3d**: on the same truths and samples, equal-weight mixtures of
   K = 5 vines, one per structure, for NPCC and for each competitor. Outputs
-  go to `results/e10_e3d_2026-11-11/`.
+  go to `results/e10_e3d_2026-11-11/`, and TabPFN's at d = 10 on `decay` to
+  `results/e10_e3d_gpu053_2026-11-11/`.
 
 Two environments are involved. VDC's code runs only in its own (`~/vdc/env`,
 Python 3.10, pyvinecopulib 0.7.5). Everything else runs in npcc's (`uv run
@@ -32,6 +34,54 @@ Python 3.10, pyvinecopulib 0.7.5). Everything else runs in npcc's (`uv run
 npcc's `.venv`. Where an npcc-side fit needs VDC's estimate — the adapted VDC
 pair copula of E3a's cross-check and of E3c — it gets it from
 `e3_vdc_server.py`, a process in VDC's environment.
+
+## The runs the paper cites
+
+The paper's E3a to E3d rows are the summaries `e3_collect.py` wrote in the
+finish of the probit rerun (TAG 2026-11-10, b7702e1; `../README.md`), at
+03:05 on 2026-11-11: `results/e3_vdc/e3{a,b,c}_summary.csv` and
+`results/e3d_unknown_structure/e3d_{summary,paired}.csv`. The rerun refitted
+every NPCC arm; every competitor row was reused from the runs before E8, and
+the rerun checked that none of those files changed. Every row records the
+commit it ran from in `npcc_commit`:
+
+| rows | commit | how they ran |
+|---|---|---|
+| E3a, E3b: every NPCC arm | b7702e1 | the rerun: the gradient boosters in lane C, one core each, `--device cpu`; the in-context learners in lane B (`e3_run_gpu_arms.py --main-tabpfn v3 --stages e3a e3b --no-collect`) |
+| E3a, E3b: VDC, TLL, parametric and the references | c2f0cb7 | reused |
+| E3a: `vdc_adapted`, the cross-check | 349ec08 | reused |
+| E3c: every NPCC arm and `rosenblatt-vinecop-check` | b7702e1 | the rerun: the boosters in lane C; TabPFN v3 in lane V, d = 10 and then d = 5 on each design |
+| E3c `decay`: VDC, TLL, `tll_cpp` and parametric | d10182b | reused |
+| E3c `strong`: the same | d18480b | reused |
+| E3c: VDC's own vine (`vdc_own`), both designs | d10182b | reused |
+| E3d: CatBoost's `random-ns`, `random-s`, `tll-ns` and `true-s` | b7702e1 | the rerun's lane C |
+| E3d: TabPFN v3's `random-ns` and `tll-ns` | b7702e1 | the rerun's lane V: d = 5 on both designs; d = 10 on `decay`, ten seeds; `tll-ns` at d = 10 on `strong`, seeds 101-505 |
+| E3d: VDC, TLL, parametric, `tll_true` and `parametric_true` | 2b319b7 | reused |
+| E3d: `vdc_true` | 4b83733; 2b319b7 in one d = 10 seed of each design | reused |
+| `e3_nan_diagnostics.csv` | 73a78c9 | not rerun: its rows are parametric fits, which the rerun reused |
+
+E3e and E10 on E3d, which `tab:unknown-structure` adds, ran later from
+d9dc80e; their sections below have their records.
+
+**Logs.** The rerun's NPCC logs are in `results/rerun_2026-11-10/logs/`
+(`laneC_*.log`, `laneV.log`, `e3ab_gpu.log`, `e3_collect.log`). Of the logs
+in `results/e3_vdc/`, the `*_vdc_side.log`, `*_competitors.log`,
+`e3a_npcc_vdc_adapted.log` and `table1_rerun_cpu.log` belong to reused rows;
+`e3a_npcc_gpu.log` and `e3b_npcc_gpu.log` hold every run's in-context arms,
+appended in turn, the rerun's probit lines last; the other `*_npcc_*.log`
+files, `gpu_mem_monitor.log` and `gpu_queue.log` belong to superseded NPCC
+arms. Likewise, of the `e3d_unknown_structure_*.log` files at the results
+root, `truth`, `vdc_side` and `competitors*` belong to reused rows, and
+`catboost_*` and `gpu_*` to superseded arms.
+
+### Superseded
+
+- The NPCC arms from before E8, on logit, written beside the competitor rows
+  above on 2026-11-05 and 06. The logit rerun (TAG 2026-11-09) moved them,
+  with the collector's tables of the time, into
+  `results/superseded_2026-11-06/` (`MANIFEST.txt`).
+- The logit rerun's own NPCC arms, from 50d2ca5, moved by the probit rerun
+  into `results/superseded_2026-11-10/` (`MANIFEST.txt`).
 
 ## The scripts
 
@@ -48,8 +98,9 @@ pair copula of E3a's cross-check and of E3c — it gets it from
 | `e3d_structure.py` | both | Vine edges from a structure matrix or a D-vine order, and their recovery of a true structure |
 | `e3d_truth.py` | npcc | E3d truths: uniform random R-vines (E2's sampler), the nine cases, both designs, a random structure per cell |
 | `e3d_vdc_side.py` | VDC | E3d `vdc`: VDC's own pipeline, choosing its own greedy D-vine |
-| `e3d_npcc_fit.py` | npcc | E3d `parametric` and `tll` with Dissmann selection, true-structure references, and NPCC on random, TLL-selected and true structures; E3e's `tll-s` and `true-ns` |
+| `e3d_npcc_fit.py` | npcc | E3d `parametric` and `tll` with Dissmann selection, true-structure references, and NPCC on random, TLL-selected and true structures; E3e's variants |
 | `e3d_mixture.py` | npcc | E10 on E3d: mixtures of vines on TLL's selected structure and four weighted random ones, for NPCC, TLL, parametric and VDC's pairs |
+| `e3e_report.py` | npcc | E3e's 2 x 2: each variant's mean excess NLL and the paired effects of simplifying and of the structure |
 | `e3_vdc_server.py` | VDC | VDC's density estimate as a service (started by `e3_vdc_pair.VdcServer`) |
 | `e3_vdc_pair.py` | npcc | The server client and `VdcBicop`: VDC's 64 x 64 grid replicate-padded and held by pyvinecopulib 1.0's `TorchTllBicop` with `norm_maxiter=0`, adapted from pyvinecopulib PR #217 |
 | `e3_vine.py` | npcc | `SharedVinecop`: a simplified pyvinecopulib 1.0 `VinecopBase` hosting any torch pair copula |
@@ -57,7 +108,7 @@ pair copula of E3a's cross-check and of E3c — it gets it from
 | `e3_collect.py` | npcc | Long tables, summaries, cross-checks, the common-set scoring, and the code check |
 | `e3_nan_diagnostics.py` | npcc | Which arms, trees and pair copulas give non-finite vine densities |
 | `e3_run_gpu_arms.py` | npcc | The pending GPU arms, once the GPU is free |
-| `e6_timing.sh` | both | E6's §3.3 part: clean timings of E3a's pairs and E3d's vines, one job at a time |
+| `e6_timing.sh` | both | E6's part for §3.6's `tab:cost`: clean timings of E3a's pairs and E3d's vines, one job at a time |
 | `e6_timing.py` | npcc | Its vine timings (competitors with and without selection, the TabPFN v3 vine) and `e3_timing.csv` |
 | `e6_timing_vdc.py` | VDC | Its VDC vine timings, with and without VDC's order selection |
 
@@ -111,12 +162,13 @@ The download comes from Hugging Face, `hsafaai/vdc-denoiser-m64-v1`
 
 Every NPCC arm is one of E1's estimators at the probit transform, the only
 one the paper presents (E8, in `../README.md`); `e3_npcc.py` lists them. The
-run recorded before E8 used the same commands with E1's logit estimators.
+runs before E8 used the same commands with E1's logit estimators. "The runs
+the paper cites" (above) says which run wrote each row.
 
 Run everything from the npcc repository root. The CPU runs pin each process
 to one core and one BLAS/OpenMP thread, as VDC's runner times its methods;
 those are the settings below, with `nice -n 10` because the machine was
-shared. The core numbers are what the recorded run used and only matter for
+shared. The core numbers are what the run before E8 used and only matter for
 timings. First, in the shell that runs them:
 
 ```bash
@@ -191,8 +243,8 @@ taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3b_npcc_fit.p
 ### E3c
 
 The two designs share `e3c_npcc_fit.py`, which takes the design's folder.
-For the primary `decay` design (`results/e3_vdc/e3c_decay/`; the recorded
-run used cores 10–13):
+For the primary `decay` design (`results/e3_vdc/e3c_decay/`; the run before
+E8 used cores 10–13):
 
 ```bash
 taskset -c 10 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3c_decay_vdc_side.py \
@@ -232,9 +284,10 @@ Each design's folder then holds:
 
 The collector labels every merged E3c row with its `design`.
 
-The recorded run of E3a, E3b and the strong design ran as five chains, one
-per core (11–15), starting each npcc-side command once its VDC side had
-written `vdc_side.json`. An npcc-side script needs nothing else, so the order
+The run before E8, whose VDC-side and competitor rows the paper cites, ran
+E3a, E3b and the strong design as five chains, one per core (11–15),
+starting each npcc-side command once its VDC side had written
+`vdc_side.json`. An npcc-side script needs nothing else, so the order
 across sub-experiments is free.
 
 ### E3d (unknown structure)
@@ -285,33 +338,76 @@ the structure. It crosses the two:
 
 `e3d_npcc_fit.py` reads E3d's `samples.npz` and `truths.json` from `--folder`
 (E3d's, by default) and writes its cells under `--out`. `tll-s` and
-`true-ns` refuse E3d's folder, which the paper cites. E3d already holds
-TabPFN v3's `tll-ns` (d = 5 on both designs, d = 10 on `decay`, ten seeds
-each), but not its `true-s`, so E3e runs three variants. Each variant's torch
+`true-ns` refuse E3d's folder, which the paper cites. Each variant's torch
 seed is `derive_seed("E3d", design, d, seed, variant, estimator_id)`, as
 E3d's.
 
+Where each part runs:
+- **d = 5, both designs, here.** E3d holds TabPFN v3's `tll-ns` at d = 5,
+  ten seeds on each design, and this machine reproduces it bit for bit
+  (E10's member 1 below is that fit), so E3e runs the other three variants.
+- **d = 10, on gpu053, all four variants**, one design at a time, as a whole
+  experiment of that machine. The same d = 10 fit there and here differs by
+  up to about 4e-3 in excess NLL, the size of some of the effects, so a 2 x 2
+  takes no cell from the other machine. E3d's own d = 10 `tll-ns` (ten
+  seeds on `decay`, five on `strong`) is not used.
+
 ```bash
 E=scripts/paper/e3/e3d_npcc_fit.py
+# Here, TabPFN v3: d = 5 on both designs (20 cells per variant).
 F=results/e3e_simplification_2x2
-# GPU, TabPFN v3: d = 5 on both designs (20 cells per variant) ...
 for v in tll-s true-ns true-s; do
-  uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-probit-$v --out $F --dims 5 \
-      --device cuda --gpu-is-free >> results/e3e_simplification_2x2_gpu.log 2>&1
+  uv run --no-sync python $E --folder results/e3d_unknown_structure \
+      --arms npcc-tabpfn-quantiles-v3-probit-$v --out $F --dims 5 --designs decay strong \
+      --device cuda --gpu-is-free >> $F/logs/tabpfn_d5_$v.log 2>&1
 done
-# ... then d = 10 on the decay design, in two batches of five seeds.
+# On gpu053, TabPFN v3: d = 10, one design (D) at a time, in two batches of
+# five seeds, every variant; then copied back as results/e3e_simplification_2x2_gpu053.
+F=results/e3e_simplification_2x2
 for seeds in "101 202 303 404 505" "606 707 808 909 1010"; do
-  for v in tll-s true-ns true-s; do
-    uv run --no-sync python $E --arms npcc-tabpfn-quantiles-v3-probit-$v --out $F --designs decay \
-        --dims 10 --seeds $seeds --device cuda --gpu-is-free >> results/e3e_simplification_2x2_gpu.log 2>&1
+  for v in tll-ns tll-s true-ns true-s; do
+    uv run --no-sync python $E --folder results/e3d_unknown_structure \
+        --arms npcc-tabpfn-quantiles-v3-probit-$v --out $F --designs $D --dims 10 \
+        --seeds $seeds --device cuda --gpu-is-free >> $F/logs/tabpfn_d10_${D}_$v.log 2>&1
   done
 done
 ```
 
 Every run resumes by cell: a cell whose JSON row exists is skipped.
-`$F/cells/<arm>/` and `$F/npcc_<arm>.csv` then hold E3e's three variants; the
-fourth is `results/e3d_unknown_structure/cells/npcc-tabpfn-quantiles-v3-probit-tll-ns/`.
+`$F/cells/<arm>/` and `$F/npcc_<arm>.csv` then hold the variants. At d = 5
+the fourth is `results/e3d_unknown_structure/cells/npcc-tabpfn-quantiles-v3-probit-tll-ns/`.
 `e3_collect.py` reads neither folder for E3e.
+
+`e3e_report.py` reads the variants' CSVs and prints, per design and d, the
+four cells' mean excess NLL and four paired effects: simplifying on each
+structure, and TLL's structure against the true one under each fit. With
+`--out` it writes `e3e_wide.csv` and `e3e_effects.csv`. Give it folders from
+one machine; where E3d's folder supplies `tll-ns`, it goes first:
+
+```bash
+R=scripts/paper/e3/e3e_report.py
+uv run --no-sync python $R results/e3d_unknown_structure results/e3e_simplification_2x2 \
+    --dims 5 --out results/e3e_simplification_2x2/analysis_d5
+# The folder held the decay design only when this ran, hence the name.
+uv run --no-sync python $R results/e3e_simplification_2x2_gpu053 \
+    --dims 10 --out results/e3e_simplification_2x2_gpu053/analysis_d10_decay
+```
+
+**Ran.**
+- d = 5, here, from a clean worktree at d9dc80e (the tip of E10's pull
+  request, #51, before the base was merged into it), one GPU process at a
+  time on 2026-11-11: `tll-s` 21:54 to 22:15, `true-ns` to 22:38, `true-s`
+  to 22:59. `e3e_report.py` wrote `analysis_d5/`.
+- d = 10 `decay`, on gpu053 from a checkout at d9dc80e, on 2026-11-12:
+  seeds 101-505 from 00:23 to 02:07 and seeds 606-1010 from 03:59 to 05:44,
+  about 26 min per variant and batch, interleaved with E10's batches below.
+  Copied back unchanged as `results/e3e_simplification_2x2_gpu053`, whose
+  `env_gpu053.txt` records the machine and whose `logs/` holds the queue
+  and its log. `e3e_report.py` on `decay` alone wrote `analysis_d10_decay/`
+  there. Its `tll-ns` differs from E3d's, fitted here, by -0.0026 to
+  +0.0042 per seed, -4e-5 on average.
+- d = 10 `strong`, on gpu053 under the same checkout, is queued behind
+  E10's conditional run there (`gpu053_queue_v3.sh`).
 
 **Check (CPU, CatBoost, `decay`, d = 5, seed 101).** Run into a scratch
 folder, `tll-ns` and `true-s` reproduced E3d's CatBoost cells bit for bit
@@ -368,9 +464,23 @@ taskset -c 6 nice -n 10 uv run --no-sync python $M --arms vdc_shared --vdc-core 
     --dims 5 --out $O > $O/logs/vdc_shared_d5.log 2>&1
 taskset -c 6 nice -n 10 uv run --no-sync python $M --arms vdc_shared --vdc-core 7 --designs decay \
     --dims 10 --out $O > $O/logs/vdc_shared_d10_decay.log 2>&1
-# GPU, TabPFN v3, here: d = 5 on both designs.
+# CPU, the competitors and CatBoost at d = 10 on strong (with --folder, which
+# a worktree outside the main checkout needs).
+E3D=results/e3d_unknown_structure
+taskset -c 4 nice -n 10 uv run --no-sync python $M --folder $E3D --arms tll parametric \
+    --designs strong --dims 10 --out $O > $O/logs/tll_parametric_d10_strong.log 2>&1
+taskset -c 5 nice -n 10 uv run --no-sync python $M --folder $E3D --arms npcc-catboost-probit \
+    --designs strong --dims 10 --out $O > $O/logs/catboost_d10_strong.log 2>&1
+taskset -c 6 nice -n 10 uv run --no-sync python $M --folder $E3D --arms vdc_shared --vdc-core 7 \
+    --designs strong --dims 10 --out $O > $O/logs/vdc_shared_d10_strong.log 2>&1
+# GPU, TabPFN v3, here: d = 5 on both designs, then d = 10 on strong, one
+# process per seed.
 uv run --no-sync python $M --arms npcc-tabpfn-quantiles-v3-probit --designs decay strong --dims 5 \
     --out $O --device cuda --gpu-is-free >> $O/logs/tabpfn_d5.log 2>&1
+for s in 101 202 303 404 505 606 707 808 909 1010; do
+  uv run --no-sync python $M --folder $E3D --arms npcc-tabpfn-quantiles-v3-probit --designs strong \
+      --dims 10 --seeds $s --out $O --device cuda --gpu-is-free >> $O/logs/tabpfn_d10_strong.log 2>&1
+done
 # GPU, TabPFN v3, on gpu053: d = 10 on decay, in two batches of five seeds,
 # into a copy of $O (so its structures are checked against the competitors').
 for seeds in "101 202 303 404 505" "606 707 808 909 1010"; do
@@ -381,9 +491,25 @@ done
 
 On gpu053, `E3_NPCC_REPO` names the checkout there, whose
 `results/e3d_unknown_structure/` holds a copy of E3d's `samples.npz` and
-`truths.json` (or pass `--folder`). Copying `cells/npcc-tabpfn-quantiles-v3-probit/`
-back into `$O` and rerunning any of the commands above, which then has no
-cell left to fit, rewrites `summary.csv` with every method.
+`truths.json` (or pass `--folder`). That copy of `$O` comes back whole as
+`results/e10_e3d_gpu053_2026-11-11`, which keeps gpu053's TabPFN cells apart
+from this machine's: the same fit on the two machines differs by about 1e-3
+at d = 10 (E3e above). Its `summary.csv` already has every method at d = 10
+on `decay`.
+
+`scripts/paper/e10/compare_e3d.py` scores the TabPFN mixture against every
+reference on each cell's common finite points (its docstring lists them),
+and writes `compare_cells.csv` and `compare.csv`:
+
+```bash
+C=scripts/paper/e10/compare_e3d.py
+uv run --no-sync python $C --e10 results/e10_e3d_2026-11-11 --dims 5 \
+    --out results/e10_e3d_2026-11-11/analysis_d5
+uv run --no-sync python $C --e10 results/e10_e3d_gpu053_2026-11-11 --designs decay --dims 10 \
+    --out results/e10_e3d_gpu053_2026-11-11/analysis_d10
+uv run --no-sync python $C --e10 results/e10_e3d_2026-11-11 --designs strong --dims 10 \
+    --out results/e10_e3d_2026-11-11/analysis_d10_strong
+```
 
 `$O` holds:
 - `cells/<arm>/<design>_d<d>_s<seed>.json`, the row;
@@ -426,6 +552,29 @@ records it; `script_repo_commit` is the worktree's.
 - With `--k 1`, the mixture is E3d's `tll`. Member 1, mixed with K - 1 copies
   of itself, scores as itself to within 4e-15.
 - On every cell, the mixture's excess NLL is at most the members' mean.
+
+**Ran (TabPFN v3).**
+- d = 5, both designs, here, from a clean worktree at d9dc80e (the tip of
+  E10's pull request, #51, before the base was merged into it), one GPU
+  process, 20:03 to 21:54 on 2026-11-11, into `$O`. Its member 1 reproduces
+  E3d's `npcc-tabpfn-quantiles-v3-probit-tll-ns` bit for bit on every cell.
+  `compare_e3d.py --dims 5` wrote `$O/analysis_d5/`.
+- d = 10 `decay`, on gpu053 from a checkout at d9dc80e, into its copy of
+  `$O`: seeds 101-505 from 22:22 on 2026-11-11 to 00:23, and seeds
+  606-1010 from 02:07 to 03:59 on 2026-11-12. Its member 1 is gpu053's E3e
+  `tll-ns` bit for bit. Copied back as `results/e10_e3d_gpu053_2026-11-11`,
+  with `env_gpu053.txt` and the queue in `logs/`; `compare_e3d.py` wrote its
+  `analysis_d10/` here.
+- d = 10 `strong`, here, from the same worktree at d9dc80e, on 2026-11-12:
+  TabPFN one seed at a time on the GPU, 11:22 to 15:17 (`local_queue4.sh`
+  in `$O/logs/`, about 26 minutes a seed), and the competitors and CatBoost
+  on cores 4 to 7, 10:58 to 11:40 (`cpu_d10_strong_v2.sh`). A first CPU
+  launcher left out `--folder` and stopped at start with nothing written;
+  its logs are the `*_v1_failed_no_folder.log` files. Member 1 reproduces
+  E3d's `npcc-tabpfn-quantiles-v3-probit-tll-ns` bit for bit on seeds 101
+  to 505, the five E3d holds at d = 10 `strong`. `compare_e3d.py --designs
+  strong --dims 10`, from this branch at aa48017, wrote
+  `$O/analysis_d10_strong/` and its `provenance.txt`.
 
 ### The summaries
 
@@ -478,7 +627,7 @@ resuming from its per-fit files, then the collector. It removes
 `PYTORCH_CUDA_ALLOC_CONF` from the children's environment, since
 `expandable_segments` fails on this machine's vGPU.
 
-### E6's timings (§3.3)
+### E6's timings (§3.6)
 
 E6's driver, `scripts/paper/e6/run_all.sh`, runs this part last, on an idle
 machine, one job at a time:
