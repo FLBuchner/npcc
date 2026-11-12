@@ -22,7 +22,8 @@ files and options to `provenance.jsonl` in the run's folder.
 ## Paper map
 
 Where each table, figure and quoted number of the paper comes from, as the
-paper's source comments name the folders. Folders are under `results/`, and
+paper's source comments name the folders, read at the paper's 80ebb89
+("Restructure the paper around one story"). Folders are under `results/`, and
 scripts under `scripts/paper/`, except `qt_ab/`: `scripts/qt_ab/` at the
 commit named, on the `qt-ab-probit` branch (E7a). Each commit was read from
 the folder itself: its `COMMIT`, `provenance.jsonl`, `logs/provenance.txt`,
@@ -32,20 +33,17 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 
 | Paper item | Exp. | Folders | Analysis | Commits | Machine |
 |---|---|---|---|---|---|
-| `tab:inner-model-accuracy`, `tab:accuracy-by-n`, `fig:accuracy-by-n`, `fig:conditional-tau` (§3.2) | E1, E1b | `study_2026-11-10`, with `study_2026-11-10_r` and `study_2026-11-10_r_smooth_cv` | `e1/analyze.py`, `e1/paired.py` | b7702e1 | main: 3 GPU shards; R on 8 CPU shards |
+| `tab:inner-model-accuracy`, `fig:accuracy-by-n`, `fig:conditional-tau` (§3.2); `tab:accuracy-by-n` (supp.) | E1, E1b | `study_2026-11-10`, with `study_2026-11-10_r` and `study_2026-11-10_r_smooth_cv` | `e1/analyze.py`, `e1/paired.py` | b7702e1 | main: 3 GPU shards; R on 8 CPU shards |
 | `fig:misspecified` (§3.2), `tab:misspecified-by-n` (supp.) | E1c | `study_misspec_2026-11-10`, with `study_misspec_2026-11-10_r` | `e1/analyze.py`, `e1/paired.py` | b7702e1 | main: 2 GPU shards; R on 8 CPU shards |
-| §3.2 timings | E6 | `e6_timing` (`timings_summary.csv`, section bivariate) | `e6/consolidate.py` | b7702e1; R rows 725ac8c, reused from `e6_timing_stopped_2026-11-06` | main, idle |
 | `tab:covariates` (§3.3); `tab:covariates-iae`, `-clayton`, `-gaussian` and the timings (supp.) | E9, E9c | `study_covariates_2026-11-11{,_r,_v35}`, `study_covariates_n10000_2026-11-11{,_r}` | `e9/analyze.py` | b74aee4; v3.5 run and analysis f8878a7; E9c dd605f2 | main |
-| `tab:unconditional-pairs`, `tab:non-simplified-pair` (§3.4); `tab:vines-true-structure` (supp.) | E3a, E3b, E3c | `e3_vdc` | `e3/e3_collect.py` | npcc rows b7702e1; competitors c2f0cb7, d10182b, d18480b, per row | main: CPU, one core a fit; vGPU |
-| `tab:unknown-structure` (§3.4) | E3d, E3e, E10 | `e3d_unknown_structure`, `e3e_simplification_2x2{,_gpu053}`, `e10_e3d{,_gpu053}_2026-11-11` | `e3/e3_collect.py`, `e3/e3e_report.py`, `e10/compare_e3d.py` | E3d's npcc rows b7702e1, competitors 2b319b7 and 4b83733; E3e and E10's TabPFN d9dc80e | main; gpu053 for TabPFN at d = 10 `decay` |
-| §3.4 timings | E6 | `e6_timing` (`e3_timing.csv`, sections e3a and e3d) | `e3/e6_timing.sh`, `e6/consolidate.py` | b7702e1 | main, idle |
-| `tab:vine-results`, `tab:vine-paired`, `fig:vine-kl-by-x` (§3.5); `tab:vine-copula`, `fig:vine-kl-by-x-d10` (supp.): oracle, random, selected, kde-tll | E2, E2d | `vine_2026-11-10`, `vine_2026-11-11_selected`, `vine_n2000_2026-11-11`; at d = 10, `vine_d10_2026-11-11` and `vine_d10_n2000_2026-11-11` | `e2/analyze.py`, `e2/tree1_diagnostic.py` | b7702e1, f8878a7, b0523c5; at d = 10, b6cb9af and b0523c5, analyzed at 9b26ffa and 2f300e9 | main; gpu053 for d = 10 |
+| `tab:unconditional-pairs` (§3.4); `tab:non-simplified-pair`, `tab:vines-true-structure` (supp.) | E3a, E3b, E3c | `e3_vdc` | `e3/e3_collect.py` | npcc rows b7702e1; competitors c2f0cb7, d10182b, d18480b, per row | main: CPU, one core a fit; vGPU |
+| `tab:unknown-structure` (§3.4); `tab:unknown-structure-catboost` (supp.) | E3d, E3e, E10 | `e3d_unknown_structure`, `e3e_simplification_2x2{,_gpu053}`, `e10_e3d{,_gpu053}_2026-11-11` | `e3/e3_collect.py`, `e3/e3e_report.py`, `e10/compare_e3d.py` | E3d's npcc rows b7702e1, competitors 2b319b7 and 4b83733; E3e and E10's TabPFN d9dc80e; E10's CPU arms as each row records | main; gpu053 for TabPFN at d = 10 `decay` |
+| `tab:vine-results` (§3.5); `tab:vine-paired`, `tab:vine-copula`, `fig:vine-kl-by-x`, `fig:vine-kl-by-x-d10` (supp.): oracle, random, selected, kde-tll | E2, E2d | `vine_2026-11-10`, `vine_2026-11-11_selected`, `vine_n2000_2026-11-11`; at d = 10, `vine_d10_2026-11-11` and `vine_d10_n2000_2026-11-11` | `e2/analyze.py`, `e2/tree1_diagnostic.py` | b7702e1, f8878a7, b0523c5; at d = 10, b6cb9af and b0523c5, analyzed at 9b26ffa and 2f300e9 | main; gpu053 for d = 10 |
 | the same tables: the mixture | E10 | `vine_study_mixture_2026-11-11`; `vine_study_mixture_d10_2026-11-11` (n = 1000 so far) | `e10/analyze_mixture.py`, `e10/analyze_mixture_gamvine.py` | d9dc80e | main; gpu053 for d = 10 |
 | the same tables: the GAM vines; `app:gamvine` (supp.) | E2b | `vine_study_gamvine{,_d10,_n2000,_d10_n2000}_2026-11-11b`; the pilot `e2b_pilot_2026-11-11` | `e2/analyze.py` with `--with` | c6a876a; pilot cd312e2 | main: CPU, 6 single-threaded shards |
-| §3.5 timings | E6, E2, E10, E2b | `e6_timing` (section vine, d <= 5); at d = 10, each run's `runtime_summary.parquet` | `e6/consolidate.py` | b7702e1; at d = 10, each run's | main, idle; gpu053 and main CPU for d = 10 |
-| §3.6; `tab:coherence-directions`, `tab:coherence-projection` (supp.) | E4 | `e4_coherence` | `e4/summarize.py` | b7702e1 | main: boosters on CPU, TabPFN on the vGPU |
-| §3.6, the finer projection grid | E4 | `e4_projection_grid_converge` | `e4/summarize.py` | b7702e1 | main |
-| §3.6, the projection's cost | E6 | `e6_timing` (section projection) | `e6/consolidate.py` | b7702e1 | main, idle |
+| `tab:cost` (§3.6) | E6; E2, E10 and E2b at d = 10 | `e6_timing` (`timings_summary.csv`, sections bivariate, e3a, e3d and vine); at d = 10, the `runtime_summary.parquet` of `vine_d10{,_n2000}_2026-11-11`, `vine_study_mixture_d10_2026-11-11` and `vine_study_gamvine_d10{,_n2000}_2026-11-11b` | `e6/consolidate.py` | b7702e1, the R rows 725ac8c (reused from `e6_timing_stopped_2026-11-06`); at d = 10, each run's | main, idle; at d = 10, gpu053, and main's CPU for the GAM vines |
+| §3.7; `tab:coherence-directions`, `tab:coherence-projection` (supp.) | E4, E6 | `e4_coherence`; the projection's cost from `e6_timing` (section projection) | `e4/summarize.py`, `e6/consolidate.py` | b7702e1 | main: boosters on CPU, TabPFN on the vGPU; E6 idle |
+| the finer projection grid (supp., "Coherence diagnostics") | E4 | `e4_projection_grid_converge` | `e4/summarize.py` | b7702e1 | main |
 | `fig:density-recovery-icl`, `-gb` (supp.) | E1 | `study_2026-11-10/analysis/slices` | `e1/density_slices.py` | b7702e1 | main GPU |
 | `app:competitors` (supp.) | E1b, E1c | `study_2026-11-10_r`, `study_2026-11-10_r_smooth_cv`, `study_misspec_2026-11-10_r` | `e1/r_selection.py`, `e1/cv_stops.py` | b7702e1 | main |
 | `tab:releases-transforms` and the temperature ablation (supp.) | E1, E8 | `study_2026-11-10`, `study_2026-11-10_tabpfn_temperature` | `e1/analyze.py`, `e1/paired.py` | b7702e1 | main GPU |
@@ -328,8 +326,8 @@ launchers are in `results/rerun_2026-11-09/scripts/` and its logs in
     three `paired.py` comparisons above into that folder's `analysis/`.
 - **Cited**, and frozen:
   - `study_2026-11-10/analysis`: `overall.csv`, `by_n.csv`, `ranking.csv`
-    and `paired.csv` (`tab:inner-model-accuracy`, `tab:accuracy-by-n`, the
-    supplement's `tab:releases-transforms`, and §3.2's numbers),
+    and `paired.csv` (`tab:inner-model-accuracy`, the supplement's
+    `tab:accuracy-by-n` and `tab:releases-transforms`, and §3.2's numbers),
     `accuracy_by_n_with_competitors.pdf` (`fig:accuracy-by-n`, copied to
     the paper's `figures/accuracy_by_n.pdf`) and `conditional_tau.pdf`
     (`fig:conditional-tau`);
@@ -675,8 +673,9 @@ with Clayton and Gaussian copulas:
     which wrote `results/vine_2026-11-10/analysis/`.
   - **Cited**, and frozen: its `vine_table.csv` and `vine_text_numbers.json`
     give the oracle, random and kde-tll entries of `tab:vine-results` and
-    `tab:vine-paired` at d = 3 and 5, n = 500 and 1000, and §3.5's numbers
-    there; its `vine_kl_by_x.pdf` is `fig:vine-kl-by-x`.
+    the supplement's `tab:vine-paired` at d = 3 and 5, n = 500 and 1000, and
+    §3.5's numbers there; its `vine_kl_by_x.pdf` is the supplement's
+    `fig:vine-kl-by-x`.
 - **Superseded:**
   - `results/vine_2026-11-06`, before E8, on logit, from a clean worktree
     at d10182b: 4 shards of `npcc-vinestudy` with the flags above on two GPU
@@ -727,8 +726,8 @@ with Clayton and Gaussian copulas:
     closing that run's `logs/provenance.txt`.
   - **Cited.** The paper cites `results/vine_2026-11-11_selected/analysis`,
     and that folder is frozen:
-    - its `vine_selected.csv` gives the d = 3 and 5 rows of
-      `tab:vine-selected`;
+    - its `vine_selected.csv` gives the selected arm's entries of
+      `tab:vine-results` and `tab:vine-paired` at d = 3 and 5;
     - its `tree1_diagnostic.csv` gives the tree-1 numbers at d = 3 and 5.
 - E2 at d = 10:
   - **Config.** `configs/vine_study_d10.toml` is E2 at `dims = [10]`, with all
@@ -768,9 +767,9 @@ with Clayton and Gaussian copulas:
   - **Cited.** The paper cites `results/vine_d10_2026-11-11/analysis`, and
     that folder is frozen:
     - `vine_table.csv` gives the d = 10 rows of `tab:vine-results`;
-    - `vine_selected.csv` gives the d = 10 rows of `tab:vine-selected`;
+    - `vine_selected.csv` gives the selected arm's rows there;
     - `tree1_diagnostic.csv` gives the tree-1 numbers at d = 10;
-    - `vine_kl_by_x.pdf` is the supplement's Fig. B.3, copied to
+    - `vine_kl_by_x.pdf` is the supplement's `fig:vine-kl-by-x-d10`, copied to
       `figures/vine_kl_by_x_d10.pdf`.
 
     The d = 10 timings come from the run's own `runtime_summary.parquet`,
@@ -1047,7 +1046,7 @@ E3e (`results/e3e_simplification_2x2/`) and E10 on E3d's truths
 commit and run behind every row: the NPCC arms of E3a to E3d are the probit
 rerun's (above), and the competitors' rows are reused from before E8.
 
-## E4 — numerical coherence (§3.6)
+## E4 — numerical coherence (§3.7)
 
 - Accuracy and coherence, as two runs that differ only in estimators and
   device; every row records the commit it ran from.
@@ -1083,11 +1082,12 @@ rerun's (above), and the competitors' rows are reused from before E8.
   - the finish: `summarize.py` on `results/e4_coherence`,
     `results/e4_projection_grid` and `results/e4_projection_grid_converge`.
 - **Cited**, and frozen:
-  - `e4_coherence/{directional,hfunc,projection,mass_tail}.csv`: §3.6 and
+  - `e4_coherence/{directional,hfunc,projection,mass_tail}.csv`: §3.7 and
     the supplement's `tab:coherence-directions` and
     `tab:coherence-projection`, the projection rows at 20 iterations;
-  - `e4_projection_grid_converge/projection_grid_change.csv`: §3.6's finer
-    projection grid, at 100 iterations.
+  - `e4_projection_grid_converge/projection_grid_change.csv`: the finer
+    projection grid in the supplement's "Coherence diagnostics", at 100
+    iterations.
 
   `results/e4_projection_grid` is not cited:
   `results/e4_projection_grid_converge` scores 20 iterations too.
@@ -1152,9 +1152,9 @@ section, method, setting, n, d, k, grid and stage.
   `r_gamcopula` and `r_boostcopula_cv` jobs ran from 06:47 to 07:27, one
   thread each. Between 725ac8c and b7702e1, neither R script, neither
   config, nor `npcc.experiments._external` changed.
-- **Cited**, and frozen: `timings_summary.csv`, sections bivariate (§3.2),
-  e3a and e3d (§3.4, from `e3_timing.csv`), vine (§3.5, d <= 5) and
-  projection (§3.6).
+- **Cited**, and frozen: `timings_summary.csv`, sections bivariate, e3a
+  and e3d (from `e3_timing.csv`) and vine (d <= 5) in §3.6's `tab:cost`,
+  and projection in §3.7.
 - **Superseded:** the logit rerun's E6 (TAG 2026-11-09, 50d2ca5, with the
   same R timings; its E3 step rerun at 8dc5761), moved by the probit rerun
   into `results/superseded_2026-11-10/e6_timing_2026-11-09`; and that E3

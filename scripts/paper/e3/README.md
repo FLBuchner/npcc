@@ -108,7 +108,7 @@ root, `truth`, `vdc_side` and `competitors*` belong to reused rows, and
 | `e3_collect.py` | npcc | Long tables, summaries, cross-checks, the common-set scoring, and the code check |
 | `e3_nan_diagnostics.py` | npcc | Which arms, trees and pair copulas give non-finite vine densities |
 | `e3_run_gpu_arms.py` | npcc | The pending GPU arms, once the GPU is free |
-| `e6_timing.sh` | both | E6's §3.4 part: clean timings of E3a's pairs and E3d's vines, one job at a time |
+| `e6_timing.sh` | both | E6's part for §3.6's `tab:cost`: clean timings of E3a's pairs and E3d's vines, one job at a time |
 | `e6_timing.py` | npcc | Its vine timings (competitors with and without selection, the TabPFN v3 vine) and `e3_timing.csv` |
 | `e6_timing_vdc.py` | VDC | Its VDC vine timings, with and without VDC's order selection |
 
@@ -623,7 +623,7 @@ resuming from its per-fit files, then the collector. It removes
 `PYTORCH_CUDA_ALLOC_CONF` from the children's environment, since
 `expandable_segments` fails on this machine's vGPU.
 
-### E6's timings (§3.4)
+### E6's timings (§3.6)
 
 E6's driver, `scripts/paper/e6/run_all.sh`, runs this part last, on an idle
 machine, one job at a time:
