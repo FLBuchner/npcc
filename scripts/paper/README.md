@@ -3,7 +3,7 @@
 Every result in the paper and its supplement comes from committed code and
 configs in this repository. This file lists, per experiment, what to run and
 where the output goes, and the run the paper cites. It covers E1 to E4 and E6
-to E10, with E1b, E1c, E2b, E2d, E3a to E3e, E7a, E7a′ and E9c; E5, the
+to E11, with E1b, E1c, E2b, E2d, E3a to E3e, E7a, E7a′ and E9c; E5, the
 application, is not here. The experiment plan itself lives with the paper
 (`paper/jcgs/experiments.md` in the paper repository).
 
@@ -52,6 +52,8 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | A.2, the interior and the read-out's bias (supp.) | E7a | `qt_ab_2026-11` (`exact_*.csv`) | `qt_ab/exact_*.py` | cb04041 | main CPU |
 | A.2, Nori (supp.) | E7a′ | `nori_probe_probit_2026-11-11` | `qt_ab/nori_probe.py` | ca4e52c | main GPU |
 | "Reusing quantile tables" (supp.) | E10 | `e10_table_reuse{,_e3d,_gpu053}_2026-11-11` | `e10/check_table_reuse.py` | a49337f; d9dc80e | main; gpu053 |
+| §2.3 and the vine tables: the chain rule (not yet cited at 80ebb89) | E11 | `vine_study_chain_2026-11-12`; at d = 10, `vine_study_chain_d10_2026-11-12` (running) | `e11/analyze_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
+| the same, on E3d's truths (not yet cited at 80ebb89) | E11 | `e11_e3d_2026-11-12`; at d = 10, `e11_e3d_d10_2026-11-12` (running, gpu053) | `e11/compare_e3d_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
 
 `results/qt_ab_2026-11` is a copy, made on 2026-11-12, of the E7a worktree's
 `~/npcc-e7a/results/qt_ab_2026-11` (`COPIED_FROM.txt`); the two `exact_*.csv`
@@ -1044,14 +1046,118 @@ Monte-Carlo KL point by point.
   its log, and `provenance.txt`, and `env_gpu053.txt` records the machine.
   The folder is copied unchanged into `results/`.
 
+## E11 — the chain-rule baseline
+
+Why a vine at all? The backend behind one Rosenblatt direction can condition
+on several scores and `x` at once, so the copula density can be written down
+directly by the chain rule along a variable order `pi`:
+`c(u | x) = prod_{k=2..d} f(u_pi(k) | u_pi(<k), x)`. There is no factor for
+`pi(1)`, since `U_pi(1) | x` is uniform on the copula scale. An order costs
+`d - 1` regressions and needs no structure. E11 runs this once, on cells
+that already exist, so it pairs with E2 and E10 (conditional) and with E3d
+and E10 on E3d (unconditional).
+
+- **The estimator.** `npcc.experiments.chain.ChainCopula`. Factor `k` is
+  the `ConditionalMargin` a `RosenblattBicop` builds for one direction:
+  `create_backend` on the controls' backend, transform, read-out, `eps`,
+  batch size and backend settings, with E1's
+  `tabpfn-quantiles-v3-probit` (probit, softmax temperature 1.0, the
+  default read-out). Its response is `u_pi(k)` and its features
+  `(u_pi(<k), x)`. The scores are prepared as a pair copula prepares its
+  own: clamped at `eps`, then through `feature_transform` (the identity
+  here). Each factor's density is read on the copula scale, the probit
+  Jacobian included. At d = 2 an order is one direction of the pair
+  copula, to rounding (`tests/experiments/test_chain.py`).
+- **The arm.** `chain` in the vine study (`vine_runner.py`), with
+  `chain_k = 5` orders:
+  - The orders are drawn uniformly, order k from a NumPy generator seeded
+    `derive_seed(base_seed, "chain", d, rep, k)`, so they depend on
+    (d, rep) alone.
+  - Factor f of order k has the torch seed
+    `derive_seed(cell_seed, "chain", estimator_id, k, f)`.
+  - The margins are fitted once, as every NPCC arm fits them, and shared by
+    the orders.
+  - Orders are fitted, evaluated and released one at a time.
+  - The mixture is scored as E10's is: `logsumexp` of the orders' copula
+    log-densities less `log K`, plus the margins'. Each order is also
+    scored on its own as `chain-m<k>`, and the mixture's rows carry the
+    orders' mean KL.
+  - Each runtime row records the orders and the factor seeds.
+- **Configs.** `configs/vine_study_chain.toml` (d = 5, here) and
+  `configs/vine_study_chain_d10.toml` (d = 10, on gpu053 as a whole
+  experiment) hold the `chain` arm alone at n = 1000. Every other key is
+  E2's, so each cell has E2's truth, training data and test points.
+- **Cost.** An order fits `d - 1` factors, against `d (d - 1)` directions
+  for a non-simplified vine. With five orders, the hermetic backend's count
+  of fits and predicted feature cells puts a chain cell at about one
+  `selected` vine at d = 5 and a little over half of one at d = 10: about a
+  fifth and an eighth of E10's mixture.
+- **Run.** Each run goes into its own folder, and the d = 10 one from a
+  checkout on gpu053, beside E2's and E10's d = 10 runs there:
+
+  ```bash
+  # Here, GPU: d = 5.
+  uv run --no-sync npcc-vinestudy --config configs/vine_study_chain.toml \
+      --out results/vine_study_chain_<TAG> --workers 1 --resume --gpu-mem-fraction 0.15
+  # gpu053: d = 10.
+  uv run --no-sync npcc-vinestudy --config configs/vine_study_chain_d10.toml \
+      --out results/vine_study_chain_d10_<TAG> --workers 1 --resume --gpu-mem-fraction 0.9
+  ```
+- **Analysis.** `scripts/paper/e11/analyze_chain.py <chain run> --with
+  <E2 runs> <E10 run>`:
+
+  ```bash
+  uv run --no-sync python scripts/paper/e11/analyze_chain.py results/vine_study_chain_<TAG> \
+      --with results/vine_2026-11-10 results/vine_2026-11-11_selected results/vine_study_mixture_<TAG>
+  uv run --no-sync python scripts/paper/e11/analyze_chain.py results/vine_study_chain_d10_<TAG> \
+      --with results/vine_d10_2026-11-11 results/vine_study_mixture_d10_<TAG>
+  ```
+
+  It refuses a run that does not pair, through E10's `others`: another
+  cell seed or mean true log-density at any shared (d, n, rep, x). Per
+  (d, n), it pairs by repetition on the cells every run holds, and writes
+  into `<run>/analysis/`:
+  - `chain.csv`: for the joint and the copula KL, the chain mixture
+    against E10's `mixture`, against `selected`, `oracle` and `random`, and
+    against its orders' mean and its best order (lowest per repetition).
+    Each comparison has the reference's mean, the paired difference with
+    its SE, and the repetitions the chain wins.
+  - `chain_cells.csv`: the same per cell, with the number of distinct
+    orders.
+  - `chain_checks.json`: the references found, the repetitions left out,
+    and Jensen's bound (`jensen_max` must be at most 0).
+- **Unconditional.** `scripts/paper/e3/e3d_chain.py` runs the same mixture
+  on E3d's samples, and `scripts/paper/e11/compare_e3d_chain.py` reads it
+  against E3d, E10 on E3d and E3e: see `scripts/paper/e3/README.md`, "E11
+  on E3d".
+- **Ran.**
+  - d = 5: here, from the clean detached worktree at fa7aee3 (#54's tip),
+    one GPU process, 15:33 to 15:45 on 2026-11-12, with
+    `--gpu-mem-fraction 0.9`, into `results/vine_study_chain_2026-11-12`
+    (`local_queue7.sh` in its `logs/`, with `COMMIT` and `env.txt`). Its
+    analysis, against E2's `vine_2026-11-10` and `vine_2026-11-11_selected`
+    and E10's `vine_study_mixture_2026-11-11`, all made here, is in its
+    `analysis/`. All 20 repetitions pair with every reference at n = 1000,
+    and Jensen's bound holds (`joint_jensen_max` -0.016). `chain.csv` also
+    carries empty rows for the references' other (d, n), where the chain
+    run has no cell.
+  - d = 10: on gpu053, from a checkout there at fa7aee3 (shipped as a git
+    bundle), into `vine_study_chain_d10_2026-11-12` there, then copied back.
+- **Cost, per cell, on one machine.** From each run's
+  `runtime_summary.parquet` (fit plus density evaluation), at d = 5,
+  n = 1000, here: the chain 35.4 s (2.4 + 33.1), E10's mixture 179.9 s
+  (20.1 + 159.9), a ratio of 0.20. Both commits reuse a direction's last
+  quantile table (6e1d6a7).
+
 ## E3 — comparison with VDC (§3.4)
 
 See `scripts/paper/e3/README.md` for VDC's environment, the weight check and
 the command behind every file in `results/e3_vdc/`. It also covers E3d,
-E3e (`results/e3e_simplification_2x2/`) and E10 on E3d's truths
-(`results/e10_e3d_2026-11-11/`). Its "The runs the paper cites" gives the
-commit and run behind every row: the NPCC arms of E3a to E3d are the probit
-rerun's (above), and the competitors' rows are reused from before E8.
+E3e (`results/e3e_simplification_2x2/`), E10 on E3d's truths
+(`results/e10_e3d_2026-11-11/`) and E11 on them. Its "The runs the paper
+cites" gives the commit and run behind every row: the NPCC arms of E3a to
+E3d are the probit rerun's (above), and the competitors' rows are reused
+from before E8.
 
 ## E4 — numerical coherence (§3.7)
 

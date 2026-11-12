@@ -1,0 +1,30 @@
+# E11, the chain-rule baseline in the conditional vine study, d = 10, on gpu053 as a whole experiment
+# (scripts/paper/README.md, E11):
+# `npcc-vinestudy --config configs/vine_study_chain_d10.toml --out results/vine_study_chain_d10_<TAG>`.
+#
+# The `chain` arm alone: an equal-weight mixture of chain_k = 5 chain-rule
+# copula densities, each along a uniformly random variable order and
+# sharing one set of fitted margins. Factor k of an order is one TabPFN v3
+# Rosenblatt direction conditioning on (u_pi(<k), x); there is no vine.
+# Every order is also scored on its own. Every other key is E2's, so each
+# cell has the truth, training data and test points it has in E2's and E10's
+# runs at that (d, n, rep).
+# configs/vine_study_chain.toml is the same at d = 5.
+
+[grid]
+dims = [10]
+n = [1000]
+n_rep = 20
+arms = ["chain"]
+chain_k = 5
+
+eval_x_n = 5
+eval_m = 1000
+
+projection_grid_size = 30
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }

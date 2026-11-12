@@ -44,6 +44,73 @@ def excess(logtrue: np.ndarray, lp: np.ndarray, mask: np.ndarray) -> float:
   return float(np.mean((logtrue - np.maximum(lp, FLOOR))[mask]))
 
 
+def compare(
+  base: dict[str, object],
+  mixture: np.ndarray,
+  members: np.ndarray,
+  refs: dict[str, np.ndarray],
+  logtrue: np.ndarray,
+  *,
+  members_name: str = "members_mean",
+) -> list[dict[str, object]]:
+  """One row per reference: a mixture and the reference on shared points.
+
+  The members' mean is scored where the mixture and every member are
+  finite; each reference where the mixture and that reference are.
+  E11's comparison (``scripts/paper/e11/compare_e3d_chain.py``) reads its
+  chain mixture against its references through this too.
+  """
+  finite = np.isfinite(mixture) & np.isfinite(members).all(axis=0)
+  rows: list[dict[str, object]] = [
+    {
+      **base,
+      "reference": members_name,
+      "mixture": excess(logtrue, mixture, finite),
+      "ref": float(np.mean([excess(logtrue, m, finite) for m in members])),
+      "n_common": int(finite.sum()),
+    }
+  ]
+  for name, lp in refs.items():
+    lp = np.asarray(lp, dtype=np.float64)
+    both = np.isfinite(mixture) & np.isfinite(lp)
+    rows.append(
+      {
+        **base,
+        "reference": name,
+        "mixture": excess(logtrue, mixture, both),
+        "ref": excess(logtrue, lp, both),
+        "n_common": int(both.sum()),
+      }
+    )
+  return rows
+
+
+def summarize(
+  rows: list[dict[str, object]],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+  """The per-cell rows with their differences, and the summary over seeds.
+
+  Per design, d and reference: the mean difference mixture - reference over
+  seeds, its SE, and in how many seeds the mixture is lower.
+  """
+  cells = pd.DataFrame(rows)
+  cells["diff"] = cells["mixture"] - cells["ref"]
+  summary = (
+    cells.groupby(["design", "d", "reference"])
+    .agg(
+      seeds=("diff", "size"),
+      mixture=("mixture", "mean"),
+      ref=("ref", "mean"),
+      diff_mean=("diff", "mean"),
+      diff_sd=("diff", "std"),
+      mixture_lower=("diff", lambda s: int((s < 0).sum())),
+    )
+    .reset_index()
+  )
+  summary["diff_se"] = summary["diff_sd"] / np.sqrt(summary["seeds"])
+  return cells, summary.drop(columns="diff_sd")
+
+
 def main() -> None:
   p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
   p.add_argument("--e10", type=Path, required=True)
@@ -78,44 +145,8 @@ def main() -> None:
       if file.is_file():
         refs[f"e3d:{arm}"] = np.load(file)
     base = {"design": design, "d": d, "seed": int(seed.removeprefix("s"))}
-    finite = np.isfinite(mixture) & np.isfinite(members).all(axis=0)
-    rows.append(
-      {
-        **base,
-        "reference": "members_mean",
-        "mixture": excess(logtrue, mixture, finite),
-        "ref": float(np.mean([excess(logtrue, m, finite) for m in members])),
-        "n_common": int(finite.sum()),
-      }
-    )
-    for name, lp in refs.items():
-      lp = np.asarray(lp, dtype=np.float64)
-      both = np.isfinite(mixture) & np.isfinite(lp)
-      rows.append(
-        {
-          **base,
-          "reference": name,
-          "mixture": excess(logtrue, mixture, both),
-          "ref": excess(logtrue, lp, both),
-          "n_common": int(both.sum()),
-        }
-      )
-  cells = pd.DataFrame(rows)
-  cells["diff"] = cells["mixture"] - cells["ref"]
-  summary = (
-    cells.groupby(["design", "d", "reference"])
-    .agg(
-      seeds=("diff", "size"),
-      mixture=("mixture", "mean"),
-      ref=("ref", "mean"),
-      diff_mean=("diff", "mean"),
-      diff_sd=("diff", "std"),
-      mixture_lower=("diff", lambda s: int((s < 0).sum())),
-    )
-    .reset_index()
-  )
-  summary["diff_se"] = summary["diff_sd"] / np.sqrt(summary["seeds"])
-  summary = summary.drop(columns="diff_sd")
+    rows += compare(base, mixture, members, refs, logtrue)
+  cells, summary = summarize(rows)
   a.out.mkdir(parents=True, exist_ok=True)
   cells.to_csv(a.out / "compare_cells.csv", index=False)
   summary.to_csv(a.out / "compare.csv", index=False)

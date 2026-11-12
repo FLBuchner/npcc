@@ -114,6 +114,36 @@ def test_e10_mixtures_run_on_e2s_cells(
 
 
 @pytest.mark.parametrize(
+  ("name", "dims", "e2_name"),
+  [
+    ("vine_study_chain.toml", [5], "vine_study.toml"),
+    ("vine_study_chain_d10.toml", [10], "vine_study_d10.toml"),
+  ],
+)
+def test_e11_chains_run_on_e2s_cells(
+  name: str, dims: list[int], e2_name: str
+) -> None:
+  """E11's chains must fit E2's cells with E2's estimator.
+
+  The chain is read against E2's arms and E10's mixture at the same
+  (d, n, rep), so a drift in the repetitions, evaluation points, projection
+  grid or estimator would score it on other test points or pair copulas,
+  and the analysis would refuse to pair it.
+  """
+  e2 = load_vine_grid(_CONFIGS / e2_name)
+  e11 = load_vine_grid(_CONFIGS / name)
+  assert e11.dims == dims
+  assert set(dims) <= set(e2.dims)
+  assert e11.n == [1000]
+  assert set(e11.n) <= set(e2.n)
+  assert e11.arms == ["chain"]
+  assert e11.chain_k == 5
+  for f in fields(VineGridConfig):
+    if f.name not in {"dims", "n", "arms", "chain_k"}:
+      assert getattr(e11, f.name) == getattr(e2, f.name), f.name
+
+
+@pytest.mark.parametrize(
   ("overrides", "match"),
   [
     ({"arms": ["oracle", "bogus"]}, "arms must be drawn"),
@@ -121,6 +151,7 @@ def test_e10_mixtures_run_on_e2s_cells(
     ({"dims": [1]}, "dims must be"),
     ({"eval_m": 5}, "eval_m must be"),
     ({"mixture_k": 0}, "mixture_k must be"),
+    ({"chain_k": 0}, "chain_k must be"),
     (
       {"arms": ["gamvine-ns"], "gamvine_script": "missing.R"},
       "gamvine_script must name an existing file",
