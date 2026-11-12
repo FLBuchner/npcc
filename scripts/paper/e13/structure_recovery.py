@@ -71,6 +71,8 @@ per cell, source and structure), ``gap_cells.csv``,
 ``table1_baseline.csv``, ``table2_criteria.csv``,
 ``table3_tree1_covariate.csv``, ``table4_recovery_gap.csv`` and
 ``checks.json``.
+A selection pyvinecopulib refuses leaves its row ``nan``, with the message in
+``error``; the tables count those cells in ``n_failed`` and average the rest.
 """
 
 from __future__ import annotations
@@ -200,6 +202,13 @@ def max_spanning_tree(weights: np.ndarray) -> set[Edge]:
     edges.add((frozenset((best[0] + 1, best[1] + 1)), frozenset()))
     inside.add(best[1])
   return edges
+
+
+def failed_row(error: str) -> dict[str, object]:
+  """A selection that raised: every recovery ``nan``, and the message."""
+  row: dict[str, object] = {f"tree{t + 1}": math.nan for t in range(MAX_TREES)}
+  row.update(overall=math.nan, equal=math.nan, matrix="", error=error)
+  return row
 
 
 def tree1_row(edges: set[Edge], truth: list[set[Edge]]) -> dict[str, object]:
@@ -358,7 +367,13 @@ def run_cell(job: dict[str, Any], results: str, bins: int) -> list[dict]:
 
   for criterion in CRITERIA:
     t0 = time.perf_counter()
-    matrix = select(u, criterion)
+    try:
+      matrix = select(u, criterion)
+    except ValueError as error:
+      # pyvinecopulib refuses a tree whose weights include a negative one
+      # (seen with "joe" on E3d's strong d = 10); the cell's row says so.
+      add("recomputed", criterion, failed_row(str(error)))
+      continue
     seconds = time.perf_counter() - t0
     add("recomputed", criterion, recovery_row(matrix, truth), seconds)
 
@@ -493,7 +508,10 @@ def recovery_table(frame: pd.DataFrame, by: list[str]) -> pd.DataFrame:
     for t in range(MAX_TREES):
       row[f"tree{t + 1}"] = mean_se(g[f"tree{t + 1}"])[0]
     row["overall"], row["overall_se"] = mean_se(g["overall"])
-    row["share_equal"] = float(g["equal"].mean())
+    row["share_equal"] = float(g["equal"].dropna().astype(bool).mean())
+    row["n_failed"] = (
+      int(g["error"].notna().sum()) if "error" in g.columns else 0
+    )
     rows.append(row)
   return pd.DataFrame(rows)
 
@@ -612,7 +630,7 @@ def checks(cells: pd.DataFrame) -> dict[str, object]:
     eq = []
     for _, r in w.iterrows():
       a, b = r.get("mixture-member-1"), r.get("tau")
-      if isinstance(a, str) and isinstance(b, str):
+      if isinstance(a, str) and isinstance(b, str) and a and b:
         eq.append(
           e3d_structure.edges_from_matrix(np.asarray(json.loads(a)))
           == e3d_structure.edges_from_matrix(np.asarray(json.loads(b)))

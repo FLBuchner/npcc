@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType
 
 import numpy as np
+import pandas as pd
 import pyvinecopulib as pv
 
 _SCRIPT = (
@@ -95,3 +96,26 @@ def test_recovery_reads_every_tree_and_pads_the_rest() -> None:
   assert row["tree1"] == 0.75
   assert row["overall"] < 1.0
   assert not row["equal"]
+
+
+def test_a_failed_selection_is_counted_not_averaged() -> None:
+  """A criterion that raises in one cell must not move the others' means.
+
+  The failed cell's recovery is ``nan``; counted as 0 it would drag the
+  criterion's mean down, and its ``equal`` read as ``True`` (a ``nan`` is
+  truthy) would lift the share of exact recoveries.
+  """
+  truth_matrix = np.asarray(pv.DVineStructure(order=[1, 2, 3, 4]).matrix)
+  truth = e13.tree_edges(truth_matrix)
+  key = {"study": "E3d", "design": "strong", "d": 4, "n": 10, "rep": 1}
+  frame = pd.DataFrame(
+    [
+      {**key, "criterion": "joe", **e13.recovery_row(truth_matrix, truth)},
+      {**key, "criterion": "joe", **e13.failed_row("negative weight")},
+    ]
+  )
+  table = e13.recovery_table(frame, [*e13.GROUP, "criterion"])
+  assert table["overall"].iloc[0] == 1.0
+  assert table["share_equal"].iloc[0] == 1.0
+  assert table["n_failed"].iloc[0] == 1
+  assert table["n_cells"].iloc[0] == 2
