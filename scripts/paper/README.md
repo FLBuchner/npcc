@@ -270,12 +270,13 @@ launchers are in `results/rerun_2026-11-09/scripts/` and its logs in
 - Config: `configs/study.toml` (8 estimators, all probit: the six backends
   and TabPFN's v2.5 and v3.5 releases, every TabPFN at softmax temperature
   1.0; 160 cells).
-- Run: the sharded commands above with `OUT=results/study_2026-11-05`.
+- Run: the sharded commands above with `OUT=results/study_<TAG>`.
 - Analysis: `uv run --no-sync python scripts/paper/e1/analyze.py
-  results/study_2026-11-05 --tabpfn <version> --transform probit` writes
-  the tables (`overall.csv`, `by_n.csv`, `ranking*.csv`, `margins.csv`) and the
+  results/study_<TAG> --tabpfn <version> --transform probit` writes the
+  tables (`overall.csv`, `by_n.csv`, `ranking*.csv`, `margins.csv`) and the
   figures (`accuracy_by_n`, `conditional_tau`, each as PDF and PNG) into
-  `results/study_2026-11-05/analysis/`.
+  `results/study_<TAG>/analysis/`. With E1b's runs after `--with`, it adds
+  the `*_with_competitors` figures.
 - Refitting some estimators after a code change: `npcc-simstudy --config
   configs/study.toml --labels <label> ... --out <fresh folder>` fits only
   those estimators, each exactly as in the full run (same data, same torch
@@ -285,15 +286,11 @@ launchers are in `results/rerun_2026-11-09/scripts/` and its logs in
   so the original analysis stays as it was.
 - Density slices (supplement): `scripts/paper/e1/density_slices.py fit
   --tabpfn <version> --transform probit --out
-  results/study_2026-11-05/analysis/slices` (add `--part I/K` to split), then
+  results/study_<TAG>/analysis/slices` (add `--part I/K` to split), then
   `... density_slices.py plot --out ...`. The refits use E1's cell and
-  estimator seeds, so the models equal E1's up to GPU nondeterminism. Every
-  row records its commit: 7000ae3 for parts 0–2, d18480b for part 3, rerun
-  after a CUDA launch failure (nothing E1 runs changed in between).
-- Code: the four shards ran once each from 2f8fa94, and the aggregation pass
-  from 7000ae3 only read their checkpoints. The density metrics are
-  unprojected. `projection_summary` predates the midpoint Sinkhorn projection
-  (a26262c), so the projection results reported come from E4.
+  estimator seeds, so the models equal E1's up to GPU nondeterminism.
+- E1's density metrics are unprojected; the projection results reported
+  come from E4.
 - TabPFN temperature ablation (supplement):
   `configs/study_tabpfn_temperature.toml` (v3 and v3.5 at 0.9, against E1's
   1.0, probit; E1's cells for n in {500, 2000}, reps 0-4) with the sharded
@@ -303,9 +300,57 @@ launchers are in `results/rerun_2026-11-09/scripts/` and its logs in
   tabpfn-quantiles-v3-probit --common-cells --out $T/analysis/v3`, and
   likewise `tabpfn-quantiles-v3.5-temp0.9-probit` against
   `tabpfn-quantiles-v3.5-probit` (into `analysis/v3.5`) and against
-  `tabpfn-quantiles-v3-temp0.9-probit` (into `analysis/vs_v3`). The run from
-  before E8, `results/study_2026-11-06_tabpfn_temperature` from 7567717,
-  swapped the checkpoints' temperatures instead: v3 at 1.0 and v3.5 at 0.9.
+  `tabpfn-quantiles-v3-temp0.9-probit` (into `analysis/vs_v3`).
+- **Ran** in the probit rerun (above), from b7702e1, with TAG 2026-11-10:
+  - `results/study_2026-11-10`: 3 GPU shards (`--workers 1 --resume
+    --shard i/3 --gpu-mem-fraction 0.2`, 4 threads each) from 15:43 on
+    2026-11-10, then the aggregation pass at 18:08;
+  - the analysis, in the rerun's finish, into
+    `results/study_2026-11-10/analysis/`:
+
+    ```bash
+    E1=scripts/paper/e1
+    R=results
+    uv run --no-sync python $E1/analyze.py $R/study_2026-11-10 \
+        --with $R/study_2026-11-10_r $R/study_2026-11-10_r_smooth_cv \
+        --tabpfn v3 --transform probit
+    uv run --no-sync python $E1/paired.py $R/study_2026-11-10 \
+        --with $R/study_2026-11-10_r $R/study_2026-11-10_r_smooth_cv \
+        --labels tabpfn-quantiles-v3-probit tabicl-probit best-gb \
+        --against gamcopula boostcopula-smooth-cv
+    ```
+
+  - the density slices, `--tabpfn v3`, as 4 parts and the plot, into
+    `results/study_2026-11-10/analysis/slices`; all 288,000 rows record
+    b7702e1;
+  - the temperature ablation, 2 GPU shards (`--gpu-mem-fraction 0.2`) into
+    `results/study_2026-11-10_tabpfn_temperature`, and in the finish its
+    three `paired.py` comparisons above into that folder's `analysis/`.
+- **Cited**, and frozen:
+  - `study_2026-11-10/analysis`: `overall.csv`, `by_n.csv`, `ranking.csv`
+    and `paired.csv` (`tab:inner-model-accuracy`, `tab:accuracy-by-n`, the
+    supplement's `tab:releases-transforms`, and §3.2's numbers),
+    `accuracy_by_n_with_competitors.pdf` (`fig:accuracy-by-n`, copied to
+    the paper's `figures/accuracy_by_n.pdf`) and `conditional_tau.pdf`
+    (`fig:conditional-tau`);
+  - `study_2026-11-10/analysis/slices`: the supplement's density figures,
+    `density_recovery_grid_icl.pdf` and `density_recovery_grid_gb.pdf`;
+  - `study_2026-11-10_tabpfn_temperature/analysis/{v3,v3.5,vs_v3}/paired.csv`:
+    the supplement's temperature ablation.
+
+### Superseded
+
+- `results/study_2026-11-05`, from before E8, on both transforms and the
+  checkpoints' temperatures: the four shards ran once each from 2f8fa94, and
+  the aggregation pass from 7000ae3 only read their checkpoints. Its
+  `projection_summary` predates the midpoint Sinkhorn projection (a26262c).
+  Its density slices record 7000ae3 for parts 0–2 and d18480b for part 3,
+  rerun after a CUDA launch failure (nothing E1 runs changed in between).
+- `results/study_2026-11-06_tabpfn_temperature`, from 7567717, before E8:
+  the temperature ablation with the checkpoints' temperatures swapped
+  instead, v3 at 1.0 and v3.5 at 0.9.
+- `results/study_2026-11-09` and `results/study_2026-11-09_tabpfn_temperature`,
+  the logit rerun (TAG 2026-11-09, above).
 
 ## E1b — established competitors on E1's cells (§3.2)
 
@@ -315,50 +360,97 @@ of tvatter/gamCopula (PR #20, which passes a fitted t copula's second
 parameter to its density and distribution). Each config's `[grid]` table is
 E1's, so cells, seeds and truths are E1's, and each script's SHA-256 enters
 its estimator id, so a run's signature pins the script it ran. All runs use
-the sharded commands above with `--device cpu`.
+the sharded commands above with `--device cpu`; the runs the paper cites ran
+as 8 single-threaded shards (`--shard I/8`, with `OMP_NUM_THREADS`,
+`OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` at 1).
 
-- `configs/study_r.toml` into `results/study_2026-11-05_r`, from 349ec08:
-  gamCopula, and boostCopula linear in x.
-- `configs/study_r_smooth_cv.toml` into `results/study_2026-11-05_r_smooth_cv`,
-  from d10182b: boostCopula on a cubic B-spline basis of x, stopped by
-  10-fold cross-validation. This is the boostCopula arm reported. It ran as
-  8 single-threaded shards (`--shard I/8`, with `OMP_NUM_THREADS`,
-  `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` at 1).
-- `configs/study_r_smooth.toml` into `results/study_2026-11-05_r_smooth`,
-  from b8f26dd: the same basis stopped by AIC, kept for the record. It stops
-  at maxit = 500 in 63 of 160 fits.
-- Analysis: `analyze.py results/study_2026-11-05 --with
-  results/study_2026-11-05_r results/study_2026-11-05_r_smooth_cv` adds the
+- `configs/study_r.toml`: gamCopula, and boostCopula linear in x. The paper
+  reports its gamCopula arm (`--labels gamcopula`).
+- `configs/study_r_smooth_cv.toml`: boostCopula on a cubic B-spline basis of
+  x, stopped by 10-fold cross-validation. This is the boostCopula arm
+  reported.
+- Analysis: E1's `analyze.py` with these runs after `--with` adds the
   `*_with_competitors` figures, and `scripts/paper/e1/r_selection.py <run>`
-  joins each R fit's family, formula and EDF with its accuracy into
-  `<run>/analysis/r_selection.csv`.
-- CV stops: `scripts/paper/e1/cv_stops.py results/study_2026-11-05_r_smooth_cv`
-  writes each cross-validated fit's stop out of the cap (`cv_stops.csv`) and,
-  per n, how many stopped within 5% of it (`cv_stops_by_n.csv`), into the
-  run's `analysis/`.
+  joins each gamCopula fit's family, formula and EDF with its accuracy into
+  `<run>/analysis/r_selection.csv`. It reads gamCopula's selection lines in
+  the shard logs, so it fails on a run of boostCopula alone.
+- CV stops: `scripts/paper/e1/cv_stops.py <run>` writes each
+  cross-validated fit's stop out of the cap (`cv_stops.csv`) and, per n, how
+  many stopped within 5% of it (`cv_stops_by_n.csv`), into the run's
+  `analysis/`.
 - Paired comparison: `scripts/paper/e1/paired.py <run> --with <R run>
   --labels tabpfn-quantiles-v3-probit tabicl-probit best-gb --against gamcopula
   boostcopula-smooth-cv` writes each estimator's pdf KL and IAE minus each
   competitor's, cell by cell, as mean, SE and wins over repetitions (overall,
   by family and by n) into `<run>/analysis/paired.csv`.
+- **Ran** in the probit rerun's lane R (above), from b7702e1, with the shard
+  logs of each run in its `logs/`. The fits log the package versions above.
+  - `configs/study_r.toml --labels gamcopula` into
+    `results/study_2026-11-10_r`, from 16:16 on 2026-11-10;
+  - `configs/study_r_smooth_cv.toml` into
+    `results/study_2026-11-10_r_smooth_cv`, from 16:18 to 20:10;
+  - in the finish, `r_selection.py results/study_2026-11-10_r` (the same on
+    the boostCopula run failed, as it must), then, as a corrective step,
+    `cv_stops.py results/study_2026-11-10_r_smooth_cv`; E1's `analyze.py` and
+    `paired.py` with both runs (E1).
+- **Cited**, and frozen: `study_2026-11-10_r/analysis/r_selection.csv` and
+  `study_2026-11-10_r_smooth_cv/analysis/cv_stops_by_n.csv` (the
+  supplement's "Parametric competitors" and §3.2's gamCopula numbers at
+  n = 200); the competitors' rows of E1's tables and figures and of
+  `study_2026-11-10/analysis/paired.csv`.
+
+### Superseded
+
+From before E8, on the grid KL; their fits are not stored, so they cannot
+give the Monte Carlo KL:
+- `results/study_2026-11-05_r`, from 349ec08: `configs/study_r.toml`, both
+  arms.
+- `results/study_2026-11-05_r_smooth_cv`, from d10182b, as 8
+  single-threaded shards. The one line of its `provenance.jsonl` is a later
+  aggregation pass, from 9b809b2.
+- `results/study_2026-11-05_r_smooth`, from b8f26dd:
+  `configs/study_r_smooth.toml`, the same basis stopped by AIC, kept for the
+  record and not rerun under E8. It stops at maxit = 500 in 63 of 160 fits.
 
 ## E1c — misspecified scenarios (§3.2)
 
 Two shape families with a closed-form tau(x) of their own, under the
 `implied` regime: a Clayton-to-Gumbel mixture with Gumbel weight x (M1) and a
-Student t whose degrees of freedom run from 2 to 50 (M2); 80 cells. Both runs
-are from a clean worktree at 7567717.
+Student t whose degrees of freedom run from 2 to 50 (M2); 80 cells.
 
 - npcc arms (TabPFN v3, TabICL, Nori, LightGBM, XGBoost, CatBoost):
-  `configs/study_misspec.toml` into `results/study_misspec_2026-11-06`, as 2
-  GPU shards and the aggregation pass.
+  `configs/study_misspec.toml`, as GPU shards and the aggregation pass.
 - R competitors (gamCopula, boostCopula with CV stopping):
-  `configs/study_misspec_r.toml` into `results/study_misspec_2026-11-06_r`, as
-  8 single-threaded CPU shards (`--shard I/8 --device cpu`, with
-  `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` at 1).
-- Analysis: `analyze.py results/study_misspec_2026-11-06 --with
-  results/study_misspec_2026-11-06_r`, and `paired.py` with the same runs as
-  in E1b.
+  `configs/study_misspec_r.toml`, as 8 single-threaded CPU shards (`--shard
+  I/8 --device cpu`, with `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and
+  `MKL_NUM_THREADS` at 1).
+- Analysis: `analyze.py <npcc run> --with <R run>`, `paired.py` with the
+  same runs and labels as in E1b, and `cv_stops.py <R run>` for its
+  boostCopula stops.
+- **Ran** in the probit rerun (above), from b7702e1:
+  - `results/study_misspec_2026-11-10`, lane B: 2 GPU shards
+    (`--gpu-mem-fraction 0.12`) from 18:08 on 2026-11-10, beside the
+    temperature ablation, then the aggregation pass at 19:19;
+  - `results/study_misspec_2026-11-10_r`, lane R: 8 single-threaded shards
+    from 20:10 to 22:08;
+  - in the finish, `analyze.py results/study_misspec_2026-11-10 --with
+    results/study_misspec_2026-11-10_r --tabpfn v3 --transform probit`,
+    `paired.py` and `r_selection.py`; then, at 04:23 on 2026-11-11, as a
+    corrective step, `cv_stops.py results/study_misspec_2026-11-10_r`.
+- **Cited**, and frozen: `study_misspec_2026-11-10/analysis` (`overall.csv`,
+  `by_n.csv`, `paired.csv`, `ranking.csv` and
+  `accuracy_by_n_with_competitors.pdf`, which is `fig:misspecified`, copied
+  to the paper's `figures/misspecified_by_n.pdf`; the supplement's
+  `tab:misspecified-by-n`), and
+  `study_misspec_2026-11-10_r/analysis/cv_stops_by_n.csv`.
+
+### Superseded
+
+- `results/study_misspec_2026-11-06` and `..._r`, from a clean worktree at
+  7567717, before E8: the npcc arms on logit as 2 GPU shards, the R
+  competitors as 8 single-threaded shards.
+- `results/study_misspec_2026-11-09`, the logit rerun (TAG 2026-11-09,
+  above).
 
 ## E9 — several covariates (§3.3)
 
@@ -494,6 +586,27 @@ with Clayton and Gaussian copulas:
     It replaced the first analysis there, which had the R run alone. Its
     command closes the npcc run's `logs/provenance.txt`. That folder is
     frozen: a later analysis of these runs takes `--out`.
+- E9's pilots, `results/e9_pilot_2026-11-11`: not cited, and to be
+  archived. They ran on 2026-11-11, before E9's pull request was merged,
+  from the E9 branch's worktree at three commits, so their provenance is
+  mixed:
+  - `r/`, from b9c2c7c: the R arms on every family and scenario at n =
+    2000, rep 0 (six cells; the scenario `constant` still named `null`),
+    plus boostCopula at `df = 5` from a copy of its script beside the
+    config, for timings; 6 single-threaded shards from 01:38;
+  - `r_iters100/`, from b9c2c7c: the two gamCopula scripts at `n.iters =
+    100`, from copies beside the config, on the same cells;
+  - `r_oracle_basis/`, from 9e1d433: the oracle with gamBiCopVarSel's basis
+    rule, from a copy of the script beside the config, made before the rule
+    was committed. Its three `provenance.jsonl` lines record the oracle
+    script as uncommitted, as `_methods/fit_gamcopula_oracle.R`: the
+    recorder drops the first character of the first path. The copy equals
+    `r_methods/fit_gamcopula_oracle.R` at 15c18c4 and at b74aee4;
+  - `gpu/`, from 15c18c4, clean: the npcc arms on one repetition of every
+    family, scenario and n (12 cells), one GPU process, from 04:11 to 04:23
+    after the probit rerun's E6, for the GPU-hour estimate
+    (`results/rerun_2026-11-10/scripts/e9gpu_after_nori_w.sh`). Its
+    `configs`, `r_methods` and `src` equal b74aee4's.
 - E9c, E9 at n = 10000:
   - **Why.** It asks whether E9's two gaps at n = 2000 close with more
     data: what the inert covariates cost TabPFN v3 under `interaction`, and
@@ -545,28 +658,34 @@ with Clayton and Gaussian copulas:
 - Config: `configs/vine_study.toml`: TabPFN v3 with the probit transform;
   oracle, random and TLL arms; d in {3, 5}, n in {500, 1000}, 20 reps; 80
   cells.
-- Run from a clean worktree at d10182b into `results/vine_2026-11-06`, as 4
-  shards of `npcc-vinestudy` with the flags above on two GPU slots, then the
-  aggregation pass; `logs/provenance.txt` has the exact commands. A shard
-  that ran out of GPU memory was resumed, which reuses its finished cells: a
-  cell's seeds depend on the cell alone. A d = 5 shard peaks at about 7 GB,
-  since every fitted margin held its own TabPFN model on the GPU before
-  f4f17b5.
-- The rerun after E8, the one §3.5 cites: `results/vine_2026-11-10`, from
-  b7702e1 on the same config. It ran as 4 shards (`--shard i/4 --resume
-  --workers 1 --gpu-mem-fraction 0.15`) started at 19:20 on 2026-11-10,
-  then the aggregation pass at 20:50.
+- Analysis: `uv run --no-sync python scripts/paper/e2/analyze.py
+  results/vine_<TAG>` writes the table (`vine_table.csv`, in the columns
+  of `tab:vine-results`), the figure (`vine_kl_by_x`, PDF and PNG, with the
+  plotted values in `vine_kl_by_x.csv`) and the numbers the text quotes
+  (`vine_text_numbers.json`) into `results/vine_<TAG>/analysis/`, and
+  prints the table's LaTeX rows. Timings come from E6.
+- **Ran** in the probit rerun (above), lane B: `results/vine_2026-11-10`,
+  from b7702e1, as 4 shards (`--shard i/4 --resume --workers 1
+  --gpu-mem-fraction 0.15`) started at 19:20 on 2026-11-10, then the
+  aggregation pass at 20:50.
   - **No `logs/` or `COMMIT`.** This run has neither. Its commit and flags
     come from the `provenance.jsonl` the runner wrote, one line per
     process, each recording b7702e1 and no uncommitted file.
-  - **Analysis.** The command below, on that folder, wrote
-    `results/vine_2026-11-10/analysis/`.
-- Analysis: `uv run --no-sync python scripts/paper/e2/analyze.py
-  results/vine_2026-11-06` writes the table (`vine_table.csv`, in the columns
-  of `tab:vine-results`), the figure (`vine_kl_by_x`, PDF and PNG, with the
-  plotted values in `vine_kl_by_x.csv`) and the numbers the text quotes
-  (`vine_text_numbers.json`) into `results/vine_2026-11-06/analysis/`, and
-  prints the table's LaTeX rows. Timings come from E6.
+  - **Analysis.** The rerun's finish ran the command above on that folder,
+    which wrote `results/vine_2026-11-10/analysis/`.
+  - **Cited**, and frozen: its `vine_table.csv` and `vine_text_numbers.json`
+    give the oracle, random and kde-tll entries of `tab:vine-results` and
+    `tab:vine-paired` at d = 3 and 5, n = 500 and 1000, and §3.5's numbers
+    there; its `vine_kl_by_x.pdf` is `fig:vine-kl-by-x`.
+- **Superseded:**
+  - `results/vine_2026-11-06`, before E8, on logit, from a clean worktree
+    at d10182b: 4 shards of `npcc-vinestudy` with the flags above on two GPU
+    slots, then the aggregation pass; `logs/provenance.txt` has the exact
+    commands. A shard that ran out of GPU memory was resumed, which reuses
+    its finished cells: a cell's seeds depend on the cell alone. A d = 5
+    shard peaks at about 7 GB, since every fitted margin held its own TabPFN
+    model on the GPU before f4f17b5.
+  - `results/vine_2026-11-09`, the logit rerun (TAG 2026-11-09, above).
 - The selected structure:
   - **What it is.** The `selected` arm is what a user without the true
     structure would fit. The arm's margins are fitted first. Dissmann's
@@ -589,7 +708,9 @@ with Clayton and Gaussian copulas:
   - **Cell data.** Neither `src/npcc/core` nor the truth, data and scoring
     code changed between b7702e1 and this arm. Its pilot on cell d = 5,
     n = 1000, rep 0 reproduced `results/vine_2026-11-10`'s oracle there bit
-    for bit.
+    for bit. The pilot is `results/e2_selected_pilot_2026-11-11`, from a
+    clean worktree at 0059940, the arm's commit on its branch, as one GPU
+    process; its `logs/provenance.txt` has the command. It is not cited.
   - **Ran** from a clean worktree at f8878a7 as one GPU process into
     `results/vine_2026-11-11_selected`. The analysis, with
     `results/vine_2026-11-10` first and `--with` this folder, wrote into
@@ -713,9 +834,9 @@ with Clayton and Gaussian copulas:
     versions for E2d's n = 2000 runs. Run each on the CPU from the
     repository root, as single-threaded shards
     (`OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
-    npcc-vinestudy --config <config> --device cpu --out <run> --shard i/8
-    --resume`, then once without `--shard`), with R, gamCopula, mgcv and
-    VineCopula installed.
+    npcc-vinestudy --config <config> --device cpu --out <run> --shard i/k
+    --resume` for i below k, then once without `--shard`; the runs below
+    used k = 6), with R, gamCopula, mgcv and VineCopula installed.
   - **Analysis.** Pass the run after `--with` to the analysis of the E2 run
     it pairs with. It then writes `vine_gamvine.csv`, one row per (d, n,
     arm): the arm's joint and copula KL, its joint KL paired with the
@@ -922,34 +1043,68 @@ Monte-Carlo KL point by point.
 See `scripts/paper/e3/README.md` for VDC's environment, the weight check and
 the command behind every file in `results/e3_vdc/`. It also covers E3d,
 E3e (`results/e3e_simplification_2x2/`) and E10 on E3d's truths
-(`results/e10_e3d_2026-11-11/`).
+(`results/e10_e3d_2026-11-11/`). Its "The runs the paper cites" gives the
+commit and run behind every row: the NPCC arms of E3a to E3d are the probit
+rerun's (above), and the competitors' rows are reused from before E8.
 
 ## E4 — numerical coherence (§3.6)
 
 - Accuracy and coherence, as two runs that differ only in estimators and
   device; every row records the commit it ran from.
-  - The gradient boosters on CPU, from 7909ed7: `uv run --no-sync python
+  - The gradient boosters on CPU: `uv run --no-sync python
     scripts/paper/e4/coherence.py --labels lightgbm-probit xgboost-probit
     catboost-probit --n 500 2000 --reps 5 --sinkhorn 5 20 50 --device cpu
     --part I/3 --out results/e4_coherence` for I in 0, 1, 2.
-  - TabPFN on the GPU, from 7000ae3: the same with `--labels
-    tabpfn-quantiles-v3-probit`, no `--device`, `--part I/2` for I in 0, 1,
-    and `--out results/e4_coherence/tabpfn`. E1c's scenario code (2b319b7)
-    was in the working tree but uncommitted; it reproduces 7000ae3's seeds,
-    draws and truths for these cells bit for bit.
+  - TabPFN on the GPU: the same with `--labels tabpfn-quantiles-v3-probit`,
+    no `--device`, `--part I/2` for I in 0, 1, and `--out
+    results/e4_coherence/tabpfn`.
 - Projection-grid ablation: the same script with `--projection-grid 30 60`
   scores the projection on both grid sizes from one fit per cell, at n = 2000
-  on E4's 20 cells. `--sinkhorn 20` into `results/e4_projection_grid/` was
-  run for LightGBM on CPU (from 4b83733) and TabPFN v3 on the GPU (from
-  7567717); `--sinkhorn 20 50 100` into `results/e4_projection_grid_converge/`
-  for TabPFN (from 7a3150a) and LightGBM (from 2cc08f7). Each folder's
-  summary adds `projection_grid.csv`, `projection_grid_change.csv` (the
-  paired change from unprojected) and `projection_grid_cost.csv`; the
-  `proj_*` columns are the margin errors on the projection grid itself.
+  on E4's 20 cells (`--n 2000 --reps 5`), for LightGBM on CPU and TabPFN v3
+  on the GPU: `--sinkhorn 20` into `results/e4_projection_grid/<backend>`,
+  and `--sinkhorn 20 50 100` into
+  `results/e4_projection_grid_converge/<backend>`, with `<backend>` one of
+  `lightgbm` and `tabpfn`. Each folder's summary adds `projection_grid.csv`,
+  `projection_grid_change.csv` (the paired change from unprojected) and
+  `projection_grid_cost.csv`; the `proj_*` columns are the margin errors on
+  the projection grid itself.
 - Projection cost per distinct conditioning value, on an otherwise idle
-  device: the same script with `--cost-only`.
+  device: the same script with `--cost-only`, which E6 runs.
 - Summary: `uv run --no-sync python scripts/paper/e4/summarize.py
-  results/e4_coherence`, which reads the parts in both folders.
+  results/e4_coherence`, which reads the parts in both folders, and the
+  same on each projection-grid folder.
+- **Ran** in the probit rerun (above), from b7702e1, which every row of
+  every part records:
+  - lane C, each process on one core with one thread: the boosters' three
+    coherence parts and LightGBM's two projection-grid runs, from 16:03 to
+    16:16 on 2026-11-10;
+  - lane B, on the vGPU: TabPFN's two coherence parts from 22:54, then its
+    two projection-grid runs from 23:19;
+  - the finish: `summarize.py` on `results/e4_coherence`,
+    `results/e4_projection_grid` and `results/e4_projection_grid_converge`.
+- **Cited**, and frozen:
+  - `e4_coherence/{directional,hfunc,projection,mass_tail}.csv`: §3.6 and
+    the supplement's `tab:coherence-directions` and
+    `tab:coherence-projection`, the projection rows at 20 iterations;
+  - `e4_projection_grid_converge/projection_grid_change.csv`: §3.6's finer
+    projection grid, at 100 iterations.
+
+  `results/e4_projection_grid` is not cited:
+  `results/e4_projection_grid_converge` scores 20 iterations too.
+
+### Superseded
+
+- From before E8, on logit, moved by the logit rerun into
+  `results/superseded_2026-11-06/`, each part recording its commit:
+  - `e4_coherence`: the boosters from 7909ed7, TabPFN from 7000ae3. E1c's
+    scenario code (2b319b7) was in the working tree but uncommitted; it
+    reproduces 7000ae3's seeds, draws and truths for these cells bit for
+    bit.
+  - `e4_projection_grid`: LightGBM from 4b83733, TabPFN from 7567717.
+  - `e4_projection_grid_converge`: TabPFN from 7a3150a, LightGBM from
+    2cc08f7.
+- The logit rerun's three folders (TAG 2026-11-09, 50d2ca5), moved by the
+  probit rerun into `results/superseded_2026-11-10/`.
 
 ## E6 — clean timings
 
@@ -984,6 +1139,28 @@ call with the device, CPU, thread settings and commit, and
 `timings_summary.csv`, the median seconds and the number of repetitions per
 section, method, setting, n, d, k, grid and stage.
 
+- **Ran** at the end of the probit rerun (above), from the main checkout at
+  b7702e1, into `results/e6_timing`, on 2026-11-11 from 03:11 to 04:09.
+  `e6_by_hand.sh` started it once the machine was idle (no GPU process,
+  load below 1.5), with `E6_REUSE_R=results/e6_timing_stopped_2026-11-06`.
+  The run's `logs/provenance.txt` records b7702e1, no uncommitted file and
+  that folder; `logs/steps.log` has each job's start, and `logs/` each
+  job's log. In `timings.csv`, the 64 rows of the R competitors record
+  725ac8c and every other row b7702e1.
+- **The R timings** come from `results/e6_timing_stopped_2026-11-06`, an E6
+  run from 725ac8c on 2026-11-06, stopped during its vine job: its
+  `r_gamcopula` and `r_boostcopula_cv` jobs ran from 06:47 to 07:27, one
+  thread each. Between 725ac8c and b7702e1, neither R script, neither
+  config, nor `npcc.experiments._external` changed.
+- **Cited**, and frozen: `timings_summary.csv`, sections bivariate (§3.2),
+  e3a and e3d (§3.4, from `e3_timing.csv`), vine (§3.5, d <= 5) and
+  projection (§3.6).
+- **Superseded:** the logit rerun's E6 (TAG 2026-11-09, 50d2ca5, with the
+  same R timings; its E3 step rerun at 8dc5761), moved by the probit rerun
+  into `results/superseded_2026-11-10/e6_timing_2026-11-09`; and that E3
+  step's first attempt, which failed at 04:13 on 2026-11-10, in
+  `results/superseded_2026-11-06/e6_timing_e3_failed_2026-11-10`.
+
 ## E7a — choice of the read-out (supplement)
 
 The A/B that chose the quantile read-out, and its checks on exact quantiles,
@@ -991,8 +1168,9 @@ run from cb04041. Their scripts live in that commit's `scripts/qt_ab/`, whose
 README describes each one, and every output row records the commit. The
 exact-quantile checks and the tree and TabPFN runs come first (2026-11-09);
 the TabICLv2 and Nori run and `nori_probe.py` need the whole GPU and follow
-E6. Check the commit out to reproduce the four outputs the supplement cites,
-into `results/qt_ab_2026-11/`:
+E6. Check the commit out to reproduce its four outputs into
+`results/qt_ab_2026-11/`. The supplement now cites two of them, the
+exact-quantile checks; E7a′ (below) supersedes the A/B and the Nori probe.
 
 ```bash
 git checkout cb04041
@@ -1077,6 +1255,25 @@ uv run --no-sync python scripts/qt_ab/readout_choice.py \
   --arms 'm21:ma2|current' 'm21:wh0.65|current' --csv $O/readout_choice.csv
 ```
 
+- **Ran** from ca4e52c into `results/qt_ab_probit_2026-11` (`COMMIT`:
+  ca4e52c, clean; `events.log` has the timeline), on 2026-11-10 from 11:22
+  to 12:04. Three cells of the in-context run, written while the worktree
+  was being edited under the running process, recorded a dirty tree or
+  bed40f8; they were set aside in `icl_misstamped/` and rerun from ca4e52c,
+  so every row of `gb/`, `tabpfn/` and `icl/` records ca4e52c. The
+  supplement cites `readout_choice.csv` (`tab:readout-choice`, reps 5-9)
+  and `report_relative_selection.txt` (the selection, reps 0-4); §2.2 names
+  the read-out it chose.
+- **Nori under probit** (the supplement's A.2): `scripts/qt_ab/nori_probe.py`
+  at ca4e52c, on E1's cell clayton/linear, rep 0, at n = 200 and 2000, both
+  transforms. It ran on 2026-11-11 at 04:10, after the probit rerun's E6, from
+  a clean detached worktree at ca4e52c with `~/npcc/.venv`'s interpreter and
+  `PYTHONPATH` on the worktree's `src`, with `QT_AB_RESULTS` set to
+  `results/nori_probe_probit_2026-11-11`. That folder holds `COMMIT`
+  (ca4e52c, clean), `env.txt`, `nori_probe.log` and `nori_probe.csv`, whose
+  rows record ca4e52c; the supplement cites its probit rows. The launcher is
+  `results/rerun_2026-11-10/scripts/nori_after_e6_w.sh`.
+
 ## The TabPFN temperature A/B (supplement, E8)
 
 TabPFN v3 at softmax temperature 1.0 against v3 at its checkpoint's 0.9,
@@ -1124,6 +1321,12 @@ uv run --no-sync python scripts/qt_ab/report.py --out $O/tabpfn \
   $O/tabpfn_temp1.0 --baseline 'm21:wh0.65|current' --compare-labels \
   tabpfn-quantiles-v3-probit tabpfn-quantiles-v3-temp1.0-probit
 ```
+
+**Ran** from 42d8fda on 2026-11-10, from 14:13 to 14:26, into
+`results/qt_ab_probit_2026-11/tabpfn_temp1.0`, whose rows all record
+42d8fda; `report_temperature.txt` beside it is the supplement's source.
+E1's temperature ablation, `results/study_2026-11-10_tabpfn_temperature`,
+is a separate run (E1).
 
 ## The qnorm screen (TabPFN's conditioning feature)
 
