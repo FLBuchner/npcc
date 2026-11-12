@@ -51,8 +51,14 @@ def config_text(
   n_levels: int = 19,
   base_seed: int = 11,
   extra_data: str = "",
+  copula_margins: Sequence[str] | None = None,
 ) -> str:
   """A config on the hermetic backend, as TOML text."""
+  margins = (
+    ""
+    if copula_margins is None
+    else f"margins = {json.dumps(list(copula_margins))}"
+  )
   return f"""
 base_seed = {base_seed}
 
@@ -70,6 +76,7 @@ n_levels = {n_levels}
 {RESPONSES}
 [copulas]
 arms = {json.dumps(list(arms))}
+{margins}
 n_draws = 8
 sample_batch_size = 50
 
@@ -88,6 +95,8 @@ def write_config(
   arms: Sequence[str] = ARMS,
   stations: str = '"all"',
   extra_data: str = "",
+  base_seed: int = 11,
+  copula_margins: Sequence[str] | None = None,
 ) -> Path:
   """Write :func:`config_text` to ``path``."""
   path.write_text(
@@ -97,6 +106,8 @@ def write_config(
       arms=arms,
       stations=stations,
       extra_data=extra_data,
+      base_seed=base_seed,
+      copula_margins=copula_margins,
     )
   )
   return path
@@ -129,6 +140,17 @@ class FakeCopulas:
 
   fail: set[tuple[int, str, str]] = field(default_factory=set)
   calls: list[dict[str, object]] = field(default_factory=list)
+  arms: tuple[str, ...] = ARMS
+  r_error: str | None = None
+  r_checks: int = 0
+
+  def check_boostcopula(self, script: str | None = None) -> str:
+    """R's check: passes, or raises what it was told to."""
+    del script
+    self.r_checks += 1
+    if self.r_error is not None:
+      raise RuntimeError(self.r_error)
+    return "R 4.4.0; boostCopula 0.1.0"
 
   def run_copula_arm(
     self,
@@ -180,8 +202,9 @@ class FakeCopulas:
     for name, value in (
       ("CopulaResult", FakeCopulaResult),
       ("CopulaFailure", FakeCopulaFailure),
-      ("COPULA_ARMS", ARMS),
+      ("COPULA_ARMS", self.arms),
       ("run_copula_arm", self.run_copula_arm),
+      ("check_boostcopula", self.check_boostcopula),
     ):
       setattr(module, name, value)
     return module
