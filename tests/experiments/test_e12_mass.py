@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 
 import numpy as np
+import pandas as pd
 import pytest
 
 _SCRIPT = (
@@ -64,3 +65,23 @@ def test_the_estimate_recovers_a_closed_form_mass_and_ess() -> None:
   assert s["mass_se"] == pytest.approx(c / np.sqrt(3 * n), rel=0.02)
   assert s["ess_share"] == pytest.approx(0.75, abs=0.005)
   assert s["excess_nll"] == pytest.approx(1 - np.log(2 * c), abs=0.01)
+
+
+def test_the_estimability_rule_holds_its_boundaries() -> None:
+  """A cell at the ESS threshold passes; a row needs 8 of every 10 cells.
+
+  A strict inequality, or a row count read as 8 cells rather than 8 of every
+  10, would move cells and rows across the line with no error: E3c's rows
+  have 5 cells, of which the rule asks 4. A failing cell's mass must be
+  blank, so that no mean counts it.
+  """
+  share = mass.MIN_ESS_SHARE
+  cells = pd.DataFrame({c: [1.0, 2.0] for c in mass.CELL_IS_COLUMNS})
+  cells["ess_share"] = [share, np.nextafter(share, 0.0)]
+  marked = mass.mark_cells(cells)
+  assert marked["estimable"].tolist() == [True, False]
+  assert marked["mass"].iloc[0] == 1.0
+  assert marked[mass.CELL_IS_COLUMNS].iloc[1].isna().all()
+  n_pass = pd.Series([8, 7, 4, 3, 0])
+  n = pd.Series([10, 10, 5, 5, 4])
+  assert mass.rows_pass(n_pass, n).tolist() == [True, False, True, False, False]

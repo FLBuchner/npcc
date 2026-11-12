@@ -21,9 +21,9 @@ and counted in ``n_excl``.
 **Outputs.** ``mass_e3ac_cells.csv`` in ``--out``: one row per study, arm,
 design, d, ``n_train`` and seed, with ``mass_common.stats``, ``n_excl`` and
 ``json_kl``, the cell row's KL (E3a) or excess NLL (E3c). It also prints the
-mean mass per E3a arm and ``n_train`` (overall and per case), and per E3c
-design, d and arm, where the estimate's columns read ``not estimable`` at
-``mass_common.NOT_ESTIMABLE``.
+mean mass per E3a arm and ``n_train`` (overall and per case), over every
+cell, and per E3c design, d and arm under ``mass_common``'s estimability
+rule, as ``final_tables.py`` applies it.
 
 **Usage** (from the repository root, on the CPU, in seconds)::
 
@@ -38,7 +38,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from mass_common import RESULTS, printable, stats
+from mass_common import RESULTS, blank_rows, mark_cells, printable, stats
 
 #: E3's floor for a zero density, as a log.
 FLOOR = np.log(1e-300)
@@ -144,10 +144,11 @@ def main() -> None:
   )
   print(by_case.to_string(float_format=lambda x: f"{x:.4f}"))
   e3c = (
-    df[df.study == "E3c"]
+    mark_cells(df[df.study == "E3c"])
     .groupby(["design", "d", "arm"])
     .agg(
       n=("mass", "size"),
+      n_pass=("estimable", "sum"),
       mass=("mass", "mean"),
       mn=("mass", "min"),
       mx=("mass", "max"),
@@ -162,7 +163,7 @@ def main() -> None:
     )
   )
   is_columns = ["mass", "mn", "mx", "se_med", "mom", "trim", "neglogm"]
-  print(printable(e3c, is_columns).to_string())
+  print(printable(blank_rows(e3c, is_columns), is_columns).to_string())
 
 
 if __name__ == "__main__":

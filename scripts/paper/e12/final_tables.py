@@ -1,4 +1,8 @@
-"""E12's tables: the mass of every arm of E3d, E3e and E10, and of E3c.
+"""E12's tables: the mass of every arm of E3d, E3e, E10, E3c and E3a.
+
+Each cell first passes through ``mass_common``'s estimability rule: its
+mass is kept only if its ESS share is at least ``MIN_ESS_SHARE``, and a row
+only if at least ``MIN_PASSING`` of every ``OF_CELLS`` of its cells pass.
 
 **E3d, E3e and E10.** From ``mass_e3_cells.csv`` (``mass_e3.py``), one row
 per design, d and arm, with each arm taken from one study folder:
@@ -10,21 +14,27 @@ per design, d and arm, with each arm taken from one study folder:
 - E10 (arms suffixed `` [mix5]``): the mixtures of this machine's folder,
   except TabPFN at d = 10 on ``decay``, which comes from gpu053's.
 
-Per row: the cells, the mass's mean, min and max, the median cell SE, the
-median of means' mean, ``-log m``'s mean, the excess NLL and the median ESS
-share.
+Per row: the cells and how many pass (``n``, ``n_pass``); over the passing
+cells, the mass's mean, min and max, the median cell SE, the median of
+means' mean and ``-log m``'s mean; over every cell, the excess NLL and the
+median ESS share.
 
 **E3c.** From ``mass_e3ac_cells.csv`` (``mass_e3ac.py``), one row per
 design, d and arm, with the same columns but the ESS share.
 
-At ``mass_common.NOT_ESTIMABLE`` the columns that derive from the mass are
-blank in the CSVs (``estimable`` is False) and read ``not estimable`` in the
-printed tables. A cell held twice, or an arm the table does not order, is
-refused rather than counted twice or dropped.
+**E3a.** From the same file, one row per pair-copula estimator and
+``n_train``, over E3a's 45 cells (nine cases, five seeds), with E3c's
+columns.
+
+A row that fails the rule has the columns that derive from the mass blank
+in the CSVs (``estimable`` is False) and ``not estimable`` in the printed
+tables. A cell held twice, or an arm the table does not order, is refused
+rather than counted twice or dropped.
 
 **Outputs**, in ``--out`` (the run folder by default):
-``final_table_e3d_e3e_e10.csv`` and ``final_table_e3c.csv``; both tables
-are also printed as Markdown, the first per design and d.
+``final_table_e3d_e3e_e10.csv``, ``final_table_e3c.csv`` and
+``final_table_e3a.csv``, each also printed as Markdown, the first per design
+and d.
 
 **Usage** (from the repository root)::
 
@@ -39,8 +49,9 @@ from pathlib import Path
 
 import pandas as pd
 from mass_common import (
-  blank_not_estimable,
-  estimable,
+  NOT_ESTIMABLE,
+  blank_rows,
+  mark_cells,
   refuse_duplicates,
   shorten,
 )
@@ -75,16 +86,28 @@ E3C_CHECKS = ("rosenblatt-vinecop-check", "tll_cpp")
 #: The columns that derive from the mass estimate.
 IS_COLUMNS = ["m", "mn", "mx", "se", "mom", "nl"]
 
-NOT_ESTIMABLE = "not estimable"
+#: Every table's columns, as named aggregations of the cells.
+COLUMNS = {
+  "n": ("mass", "size"),
+  "n_pass": ("estimable", "sum"),
+  "m": ("mass", "mean"),
+  "mn": ("mass", "min"),
+  "mx": ("mass", "max"),
+  "se": ("mass_se", "median"),
+  "mom": ("mass_mom20", "mean"),
+  "nl": ("neglogmass", "mean"),
+  "ex": ("excess_nll", "mean"),
+}
 
 
-def mass_cells(r: pd.Series) -> str:
+def mass_cells(r: pd.Series, digits: int = 3) -> str:
   """A row's mass columns in Markdown, or ``not estimable`` in each."""
-  if not estimable(r.design, r.d):
+  if not r.estimable:
     return " | ".join([NOT_ESTIMABLE] * 4)
+  k = digits
   return (
-    f"{r.m:.3f} [{r.mn:.3f}, {r.mx:.3f}] | {r.se:.4f} | {r.mom:.3f} | "
-    f"{r.nl:+.3f}"
+    f"{r.m:.{k}f} [{r.mn:.{k}f}, {r.mx:.{k}f}] | {r.se:.4f} | {r.mom:.{k}f} "
+    f"| {r.nl:+.{k}f}"
   )
 
 
@@ -97,7 +120,7 @@ def main() -> None:
   out.mkdir(parents=True, exist_ok=True)
   short = partial(shorten, tabpfn="TabPFN", catboost="CatBoost")
 
-  df = pd.read_csv(a.run / "mass_e3_cells.csv")
+  df = mark_cells(pd.read_csv(a.run / "mass_e3_cells.csv"))
   df["arm_s"] = df.arm.map(short)
   e10 = df[df.study == "E10"]
   e10g = df[(df.study == "E10_gpu053") & (df.arm_s == "TabPFN") & (df.d == 10)]
@@ -117,55 +140,44 @@ def main() -> None:
       f"every arm must be in ORDER; got {sorted(set(allr.arm_s) - set(ORDER))}"
     )
   g = allr.groupby(["design", "d", "o", "arm_s"])
-  t = g.agg(
-    n=("mass", "size"),
-    m=("mass", "mean"),
-    mn=("mass", "min"),
-    mx=("mass", "max"),
-    se=("mass_se", "median"),
-    mom=("mass_mom20", "mean"),
-    nl=("neglogmass", "mean"),
-    ex=("excess_nll", "mean"),
-    ess=("ess_share", "median"),
-  ).reset_index()
-  t = blank_not_estimable(t, IS_COLUMNS)
+  t = g.agg(**COLUMNS, ess=("ess_share", "median")).reset_index()
+  t = blank_rows(t, IS_COLUMNS)
   t.to_csv(out / "final_table_e3d_e3e_e10.csv", index=False)
   for (des, d), x in t.groupby(["design", "d"]):
     print(f"\n### {des}, d={d}")
     print(
-      "| arm | n | mass mean [min, max] | cell SE (median) | MoM20 mean | "
-      "-log m (mean) | excess NLL | median ESS share |"
+      "| arm | n | pass | mass mean [min, max] | cell SE (median) | "
+      "MoM20 mean | -log m (mean) | excess NLL | median ESS share |"
     )
     for _, r in x.iterrows():
       print(
-        f"| {r.arm_s} | {r.n} | {mass_cells(r)} | {r.ex:.3f} | {r.ess:.2f} |"
+        f"| {r.arm_s} | {r.n} | {r.n_pass} | {mass_cells(r)} | {r.ex:.3f} | "
+        f"{r.ess:.2f} |"
       )
 
-  c = pd.read_csv(a.run / "mass_e3ac_cells.csv")
+  c = mark_cells(pd.read_csv(a.run / "mass_e3ac_cells.csv"))
   cc = c[c.study == "E3c"]
-  t2 = (
-    cc.groupby(["design", "d", "arm"])
-    .agg(
-      n=("mass", "size"),
-      m=("mass", "mean"),
-      mn=("mass", "min"),
-      mx=("mass", "max"),
-      se=("mass_se", "median"),
-      mom=("mass_mom20", "mean"),
-      nl=("neglogmass", "mean"),
-      ex=("excess_nll", "mean"),
-    )
-    .reset_index()
-  )
-  t2 = blank_not_estimable(t2, IS_COLUMNS)
+  t2 = cc.groupby(["design", "d", "arm"]).agg(**COLUMNS).reset_index()
+  t2 = blank_rows(t2, IS_COLUMNS)
   t2.to_csv(out / "final_table_e3c.csv", index=False)
   print("\n### E3c")
   for _, r in t2.iterrows():
     if r.arm in E3C_CHECKS:
       continue
     print(
-      f"| {r.design} | {r.d} | {short(r.arm)} | {r.n} | {mass_cells(r)} | "
-      f"{r.ex:.3f} |"
+      f"| {r.design} | {r.d} | {short(r.arm)} | {r.n} | {r.n_pass} | "
+      f"{mass_cells(r)} | {r.ex:.3f} |"
+    )
+
+  ca = c[c.study == "E3a"]
+  t3 = ca.groupby(["arm", "n_train"]).agg(**COLUMNS).reset_index()
+  t3 = blank_rows(t3, IS_COLUMNS)
+  t3.to_csv(out / "final_table_e3a.csv", index=False)
+  print("\n### E3a")
+  for _, r in t3.iterrows():
+    print(
+      f"| {r.arm} | {r.n_train} | {r.n} | {r.n_pass} | {mass_cells(r, 4)} | "
+      f"{r.ex:.4f} |"
     )
 
 

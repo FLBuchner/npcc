@@ -31,12 +31,22 @@ KEYS = {
   "mass_e3_summary.csv": ["study", "design", "d", "arm_s"],
   "final_table_e3d_e3e_e10.csv": ["design", "d", "arm_s"],
   "final_table_e3c.csv": ["design", "d", "arm"],
+  "final_table_e3a.csv": ["arm", "n_train"],
+  "mass_e3_cells_reported.csv": ["study", "arm", "design", "d", "seed"],
+  "mass_e3ac_cells_reported.csv": [
+    "study",
+    "arm",
+    "design",
+    "d",
+    "n_train",
+    "seed",
+  ],
   "mass_paired.csv": ["comp", "design", "d"],
   "mass_vdc_pairs.csv": ["comp", "design", "d"],
 }
 
 #: The columns to count rows by when one run lacks them, as present.
-GROUPS = ["study", "arm", "arm_s", "comp", "design", "d"]
+GROUPS = ["study", "arm", "arm_s", "comp", "design", "d", "n_train"]
 
 
 def compare(name: str, a: pd.DataFrame, b: pd.DataFrame) -> list[str]:

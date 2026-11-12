@@ -14,14 +14,18 @@ trusted.
 
 **Where it fails.** The truth decides where the test points fall, so mass
 that ``f_hat`` puts where ``f`` is small is reached only through a few huge
-ratios. On E3's ``strong`` design at d = 10 the true vine is concentrated
-enough that a handful of test points decide the estimate. There, the
-parametric vine (Dissmann with BIC), a proper density, is estimated at
-0.04 on average over E3d's ten cells and at most 0.12, with an effective
-sample size of a few points out of 20,000. On the two such cells that
-``refit_mass.py`` reached, its defensive-mixture proposal puts the same
-parametric fits at 0.95 and 0.93. Every E12 table therefore reports those
-cells as not estimable; :data:`NOT_ESTIMABLE` lists them.
+ratios, and a low ESS share flags it. On E3's ``strong`` design at d = 10
+the parametric vine (Dissmann with BIC), a proper density, is estimated at
+0.04 on average over E3d's ten cells, with a median ESS share of 5e-4;
+``refit_mass.py``'s defensive-mixture proposal puts the same fits at 0.93
+to 0.96. At ``strong`` d = 5 it reads 0.85, with cells from 0.54 to 1.14.
+
+**The rule.** A cell's mass is reported only if its ESS share is at least
+:data:`MIN_ESS_SHARE`; a row (an arm on one design at one d) only if at
+least :data:`MIN_PASSING` of every :data:`OF_CELLS` of its cells pass, and
+its mass is then the mean over the passing cells. Everything else is not
+estimable by importance sampling under the truth: :func:`mark_cells` and
+:func:`blank_rows` blank it.
 """
 
 from __future__ import annotations
@@ -35,9 +39,24 @@ import pandas as pd
 REPO = Path(__file__).resolve().parents[3]
 RESULTS = REPO / "results"
 
-#: (design, d) where the truth-only estimate fails. Every table blanks the
-#: estimate's columns there and marks the row ``estimable = False``.
-NOT_ESTIMABLE = frozenset({("strong", 10)})
+#: A cell's mass is reported only if its ESS share is at least this.
+MIN_ESS_SHARE = 0.1
+
+#: A row is reported only if at least ``MIN_PASSING`` of every ``OF_CELLS``
+#: of its cells pass: 8 of E3d's 10 seeds, 4 of E3c's 5.
+MIN_PASSING, OF_CELLS = 8, 10
+
+#: The per-cell columns that derive from the mass estimate.
+CELL_IS_COLUMNS = [
+  "mass",
+  "mass_se",
+  "neglogmass",
+  "mass_mom20",
+  "mass_trim_top0.1pct",
+]
+
+#: What a table prints in place of an estimate the rule blanks.
+NOT_ESTIMABLE = "not estimable"
 
 #: The NPCC estimators' arm-name prefixes, shortened in the tables.
 TABPFN = "npcc-tabpfn-quantiles-v3-probit"
@@ -99,63 +118,92 @@ def stats(lr: np.ndarray, n_blocks: int = 20) -> dict[str, float | int]:
   }
 
 
-def estimable(design: str, d: int) -> bool:
-  """Whether the truth-only estimate holds on ``design`` at dimension ``d``."""
-  return (design, int(d)) not in NOT_ESTIMABLE
+def mark_cells(cells: pd.DataFrame) -> pd.DataFrame:
+  """``cells`` with ``estimable`` added and the estimate blanked where it fails.
+
+  Parameters
+  ----------
+  cells : pd.DataFrame
+      One row per cell, with :func:`stats`'s columns.
+
+  Returns
+  -------
+  pd.DataFrame
+      A copy, with NaN in :data:`CELL_IS_COLUMNS` on the cells whose ESS
+      share is below :data:`MIN_ESS_SHARE`.
+  """
+  out = cells.copy()
+  out["estimable"] = out["ess_share"] >= MIN_ESS_SHARE
+  out.loc[~out["estimable"], CELL_IS_COLUMNS] = np.nan
+  return out
 
 
-def blank_not_estimable(
-  table: pd.DataFrame, columns: list[str]
-) -> pd.DataFrame:
+def rows_pass(n_pass: pd.Series, n: pd.Series) -> pd.Series:
+  """Whether rows of ``n`` cells, ``n_pass`` of them passing, are reported."""
+  return n_pass * OF_CELLS >= MIN_PASSING * n
+
+
+def arm_rows_pass(cells: pd.DataFrame) -> dict[tuple[str, int], bool]:
+  """Whether each of an arm's rows passes, from its marked cells.
+
+  Parameters
+  ----------
+  cells : pd.DataFrame
+      One arm's cells, as :func:`mark_cells` returns them, indexed by
+      design, d and seed.
+
+  Returns
+  -------
+  dict
+      ``(design, d)`` to whether that row is reported.
+  """
+  rows = cells.groupby(level=[0, 1])["estimable"].agg(["sum", "size"])
+  ok = rows_pass(rows["sum"], rows["size"])
+  return {(des, int(d)): bool(v) for (des, d), v in ok.items()}
+
+
+def blank_rows(table: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
   """``table`` with ``estimable`` added and ``columns`` blanked where not.
 
   Parameters
   ----------
   table : pd.DataFrame
-      Rows with ``design`` and ``d`` columns.
+      Rows with ``n`` (cells) and ``n_pass`` (cells that pass) columns.
   columns : list of str
-      The columns that derive from the truth-only estimate.
+      The columns that derive from the mass estimate.
 
   Returns
   -------
   pd.DataFrame
-      A copy, with NaN in ``columns`` on the rows of :data:`NOT_ESTIMABLE`.
+      A copy, with NaN in ``columns`` on the rows :func:`rows_pass` refuses.
   """
   out = table.copy()
-  out["estimable"] = [
-    estimable(des, d) for des, d in zip(out["design"], out["d"], strict=True)
-  ]
+  out["estimable"] = rows_pass(out["n_pass"], out["n"])
   out.loc[~out["estimable"], columns] = np.nan
   return out
 
 
 def printable(table: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-  """``table`` as text, ``columns`` reading ``not estimable`` where it fails.
+  """``table`` as text, ``columns`` reading ``not estimable`` where blanked.
 
   Parameters
   ----------
   table : pd.DataFrame
-      Rows with ``design`` and ``d`` as columns or index levels.
+      Rows with an ``estimable`` column, as :func:`blank_rows` adds.
   columns : list of str
-      The columns that derive from the truth-only estimate.
+      The columns that derive from the mass estimate.
 
   Returns
   -------
   pd.DataFrame
       The same index and columns, every float written to four decimals.
   """
-  flat = table.reset_index()
-  ok = np.array(
-    [
-      estimable(des, d)
-      for des, d in zip(flat["design"], flat["d"], strict=True)
-    ]
-  )
+  ok = table["estimable"].to_numpy(dtype=bool)
   out = table.astype(object)
   for c in table.columns:
     if pd.api.types.is_float_dtype(table[c]):
       out[c] = [f"{x:.4f}" if np.isfinite(x) else "NaN" for x in table[c]]
-  out.loc[~ok, columns] = "not estimable"
+  out.loc[~ok, columns] = NOT_ESTIMABLE
   return out
 
 

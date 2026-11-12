@@ -1,14 +1,16 @@
 """E12: paired differences of ``-log m`` and excess NLL between E3 arms.
 
 Two arms fitted on the same cells (design, d, seed) are paired cell by
-cell, from ``mass_e3_cells.csv`` (``mass_e3.py``). Per comparison ``a - b``
-and per design and d, over the cells both arms hold:
+cell, from ``mass_e3_cells.csv`` (``mass_e3.py``), after ``mass_common``'s
+estimability rule has marked each cell. Per comparison ``a - b`` and per
+design and d:
 
-- ``d_excess`` and ``se_excess``: the mean difference of excess NLL, and its
-  SE over cells;
-- ``d_neglogm`` and ``se_neglogm``: the same for ``-log m``, with its min
-  and max over cells;
-- ``d_excess_corrected``: the mean of ``d_excess - d_neglogm``, the excess
+- ``n``, ``d_excess`` and ``se_excess``: over every cell both arms hold,
+  the mean difference of excess NLL and its SE over cells;
+- ``n_pass`` and, over the cells where both arms' cells pass,
+  ``d_excess_pass`` (the same difference), ``d_neglogm`` and ``se_neglogm``
+  (the same for ``-log m``, with its min and max over cells) and
+  ``d_excess_corrected``, the mean of ``d_excess - d_neglogm``: the excess
   NLL difference once both arms are renormalized to mass 1.
 
 The comparisons: within E3d (TabPFN's random against its TLL-selected
@@ -20,9 +22,10 @@ gpu053's at d = 10) against the ``tll-ns`` arm its member 1 refits, each
 competitor's mixture and ``vdc_true``, and CatBoost's mixture against its
 ``tll-ns``.
 
-At ``mass_common.NOT_ESTIMABLE`` the ``-log m`` columns and
-``d_excess_corrected`` are blank (``estimable`` is False); the excess NLL
-differences stay, since they do not use the mass.
+A comparison is reported only where both arms' rows pass the rule (each
+arm's cells at that design and d); elsewhere the columns over passing cells
+are blank (``estimable`` is False). ``d_excess`` stays, since it does not
+use the mass.
 
 **Outputs.** ``mass_paired.csv`` in ``--out`` (the run folder by default),
 and the same table printed.
@@ -40,7 +43,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from mass_common import (
-  blank_not_estimable,
+  arm_rows_pass,
+  mark_cells,
   printable,
   refuse_duplicates,
   shorten,
@@ -48,6 +52,7 @@ from mass_common import (
 
 #: The columns that derive from the mass estimate.
 IS_COLUMNS = [
+  "d_excess_pass",
   "d_neglogm",
   "se_neglogm",
   "d_neglogm_min",
@@ -75,26 +80,31 @@ def pair(a: pd.DataFrame, b: pd.DataFrame, label: str) -> list[dict]:
   """
   refuse_duplicates(a, KEYS, f"{label}: the first arm")
   refuse_duplicates(b, KEYS, f"{label}: the second arm")
-  j = a[["neglogmass", "excess_nll"]].join(
-    b[["neglogmass", "excess_nll"]], lsuffix="_a", rsuffix="_b", how="inner"
-  )
+  ok_a, ok_b = arm_rows_pass(a), arm_rows_pass(b)
+  cols = ["neglogmass", "excess_nll", "estimable"]
+  j = a[cols].join(b[cols], lsuffix="_a", rsuffix="_b", how="inner")
   out = []
   for (des, d), g in j.groupby(level=[0, 1]):
-    dn = g.neglogmass_a - g.neglogmass_b
-    de = g.excess_nll_a - g.excess_nll_b
+    de_all = g.excess_nll_a - g.excess_nll_b
+    both = g[g.estimable_a & g.estimable_b]
+    dn = both.neglogmass_a - both.neglogmass_b
+    de = both.excess_nll_a - both.excess_nll_b
     out.append(
       {
         "comp": label,
         "design": des,
         "d": d,
         "n": len(g),
-        "d_excess": de.mean(),
-        "se_excess": de.std(ddof=1) / np.sqrt(len(g)),
+        "d_excess": de_all.mean(),
+        "se_excess": de_all.std(ddof=1) / np.sqrt(len(g)),
+        "n_pass": len(both),
+        "d_excess_pass": de.mean(),
         "d_neglogm": dn.mean(),
-        "se_neglogm": dn.std(ddof=1) / np.sqrt(len(g)),
+        "se_neglogm": dn.std(ddof=1) / np.sqrt(len(both)),
         "d_neglogm_min": dn.min(),
         "d_neglogm_max": dn.max(),
         "d_excess_corrected": (de - dn).mean(),
+        "estimable": ok_a[(des, int(d))] and ok_b[(des, int(d))],
       }
     )
   return out
@@ -108,7 +118,7 @@ def main() -> None:
   out = a.out or a.run
   out.mkdir(parents=True, exist_ok=True)
 
-  df = pd.read_csv(a.run / "mass_e3_cells.csv")
+  df = mark_cells(pd.read_csv(a.run / "mass_e3_cells.csv"))
   df["arm_s"] = df.arm.map(shorten)
 
   def get(study: str, arm: str) -> pd.DataFrame:
@@ -160,7 +170,8 @@ def main() -> None:
   rows += pair(
     e10("catboost"), e3d("catboost-tll-ns"), "catboost mixture - tll-ns"
   )
-  r = blank_not_estimable(pd.DataFrame(rows), IS_COLUMNS)
+  r = pd.DataFrame(rows)
+  r.loc[~r.estimable, IS_COLUMNS] = np.nan
   r.to_csv(out / "mass_paired.csv", index=False)
   pd.set_option("display.width", 250)
   pd.set_option("display.max_rows", 300)
