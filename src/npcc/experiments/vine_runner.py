@@ -10,6 +10,42 @@ RosenblattVinedist` whose margins and pairs all see ``x``, and ``tll`` as a
 :class:`pyvinecopulib.Vinedist` with kernel-density margins and TLL pairs on
 the true structure, neither of which sees ``x``.
 
+**Structures.** ``oracle`` fits the true structure and ``random`` one drawn
+per ``(d, rep)``. ``selected`` fits the structure :func:`select_structure`
+picks from the probability integral transforms of the arm's own fitted
+margins, so it varies with ``n``. Each NPCC arm's runtime row records the
+structure it fitted, and ``selected``'s the seconds its selection took.
+
+**Mixture.** ``mixture`` fits ``mixture_k`` non-simplified vines on one set
+of fitted margins, each on its own structure picked from the margins'
+probability integral transforms: the first is the ``selected`` arm's, and
+each other a draw of pyvinecopulib's weighted random spanning trees
+(:func:`weighted_random_structure`), diverse but favoring strong pairs. It
+scores their equal-weight mixture: its joint log-density is the margins' plus
+``logsumexp`` of the members' copula log-densities less ``log K``, and its
+copula density the members' mean. Each member is also scored on its own, as
+the arm ``mixture-member-<k>``, so the mixture can be read against its
+average member and against its first, the selected structure.
+
+**Chain.** ``chain`` asks what a vine adds at all. On the same fitted margins
+it fits ``chain_k`` chain-rule copula densities
+(:class:`~npcc.experiments.chain.ChainCopula`), each along a variable order
+drawn uniformly per ``(d, rep)`` (:func:`chain_orders`), and scores their
+equal-weight mixture exactly as ``mixture`` scores its vines. Each order is
+also scored on its own, as the arm ``chain-m<k>``. Factor ``k`` of an order
+conditions on the earlier scores and ``x`` together and has a torch seed of
+its own (:func:`chain_factor_seeds`).
+
+**GAM vines.** E2b's arms are fitted in R by the grid's ``gamvine_script``,
+one script run per arm and cell (:mod:`~npcc.experiments._external_vine`),
+on the cell's training sample, and evaluated at its test points.
+``gamvine-oracle`` is handed the true structure and refused unless its fit
+has the truth's edges; the other two select their own. Each runtime row
+records the structure fitted and, in ``pairs``, every pair copula's family
+and calibration function. A script that fails on its sample leaves the
+arm's metrics ``nan`` in that cell and its message in the runtime row's
+``error``, as for E9's R methods.
+
 **Scoring.** At each evaluation ``x``, ``m`` points are drawn from the true
 distribution there, and the estimate is scored by Monte-Carlo integrals under
 the truth: ``KL = E[log f - log f_hat]``, ``L1 = E[|f_hat / f - 1|]`` (the
@@ -29,12 +65,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
+import math
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal, cast
+from typing import Any, Protocol, cast
 
 import numpy as np
 import pandas as pd
@@ -45,24 +79,36 @@ from pyvinecopulib.core import (
   NonSimplifiedContext,
   SimplifiedContext,
 )
+from pyvinecopulib.core.extend import to_numpy
 
 from npcc.core.controls import FitControlsRosenblattVinecop
-from npcc.core.margin_quantile_table import QuantileTableConfig
+from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 from npcc.core.registry import create_backend
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.core.vinedist import RosenblattVinedist
-from npcc.experiments import scenarios, vine_scenarios
-from npcc.experiments.config import EstimatorSpec, RunConfig
-from npcc.experiments.runner import (
-  _data_frame,
-  _estimator_seed,
-  _read_table,
-  _release_gpu,
-  _summary_stats,
-  _system_mem_mb,
-  _write_table,
+from npcc.experiments import (
+  _external,
+  _external_vine,
+  scenarios,
+  vine_scenarios,
 )
-from npcc.experiments.vine_config import VineCell, VineGridConfig
+from npcc.experiments._study import (
+  Rows,
+  derive_seed,
+  memory_usage,
+  release_gpu,
+  reset_gpu_peaks,
+  sorted_frame,
+  summarize,
+  sweep,
+)
+from npcc.experiments.chain import ChainCopula, draw_order
+from npcc.experiments.config import EstimatorSpec, RunConfig
+from npcc.experiments.vine_config import (
+  GAMVINE_ARMS,
+  VineCell,
+  VineGridConfig,
+)
 from npcc.experiments.vine_scenarios import EvalPoints, VineTruth
 
 logger = logging.getLogger(__name__)
@@ -70,8 +116,7 @@ logger = logging.getLogger(__name__)
 _EPS: float = 1e-300
 
 METRIC_NAMES: tuple[str, ...] = ("KL", "L1", "ISE", "KL_copula", "L1_copula")
-_SHARD_TABLES: tuple[str, ...] = ("metrics", "runtime")
-_CellRows = tuple[list[dict[str, Any]], list[dict[str, Any]]]
+TABLES: tuple[str, ...] = ("metrics", "runtime")
 _GROUP_AXES: tuple[str, ...] = (
   "d",
   "n",
@@ -83,22 +128,209 @@ _GROUP_AXES: tuple[str, ...] = (
 )
 
 
-def _seed(base_seed: int, *parts: object) -> int:
-  """Deterministic 31-bit seed from ``base_seed`` and a salt."""
-  payload = ":".join(str(p) for p in (base_seed, *parts)).encode()
-  return (
-    int.from_bytes(hashlib.sha256(payload).digest()[:4], "big") & 0x7FFFFFFF
-  )
-
-
 def truth_for(base_seed: int, d: int, rep: int) -> VineTruth:
   """The true vine of repetition ``rep`` in dimension ``d``."""
-  return vine_scenarios.draw_truth(d, _seed(base_seed, "truth", d, rep))
+  return vine_scenarios.draw_truth(d, derive_seed(base_seed, "truth", d, rep))
+
+
+def training_sample(
+  base_seed: int, cell: VineCell
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+  """The cell's training sample: ``y`` and its true PITs ``u``, and ``x``.
+
+  Drawn from the truth of the cell's ``(d, rep)`` with a seed of its own
+  ``(d, n, rep)``, so a diagnostic that redraws it sees the data every arm
+  was fitted on.
+
+  Parameters
+  ----------
+  base_seed : int
+      The run's base seed.
+  cell : VineCell
+      The cell.
+
+  Returns
+  -------
+  tuple of torch.Tensor
+      ``y`` and ``u`` of shape ``(n, d)``, and ``x`` of shape ``(n, 1)``.
+  """
+  return vine_scenarios.sample(
+    truth_for(base_seed, cell.d, cell.rep),
+    cell.n,
+    derive_seed(base_seed, "train", cell.d, cell.n, cell.rep),
+  )
 
 
 def random_structure_for(base_seed: int, d: int, rep: int) -> pv.RVineStructure:
   """The ``random`` arm's structure, drawn independently of the truth's."""
-  return pv.RVineStructure.sample(d, seeds=[_seed(base_seed, "random", d, rep)])
+  return pv.RVineStructure.sample(
+    d, seeds=[derive_seed(base_seed, "random", d, rep)]
+  )
+
+
+def chain_orders(base_seed: int, d: int, rep: int, k: int) -> list[list[int]]:
+  """The ``chain`` arm's ``k`` variable orders in repetition ``rep``.
+
+  Keyed on ``(d, rep)`` alone, as the truth and the test points are, so every
+  sample size in a repetition mixes the same orders.
+
+  Parameters
+  ----------
+  base_seed : int
+      The run's base seed.
+  d : int
+      The dimension.
+  rep : int
+      The repetition.
+  k : int
+      How many orders.
+
+  Returns
+  -------
+  list of list of int
+      Order ``j`` (1-based) drawn by :func:`~npcc.experiments.chain.
+      draw_order` from ``derive_seed(base_seed, "chain", d, rep, j)``.
+  """
+  return [
+    draw_order(d, derive_seed(base_seed, "chain", d, rep, j))
+    for j in range(1, k + 1)
+  ]
+
+
+def chain_factor_seeds(
+  cell_seed: int, estimator_id: str, j: int, d: int
+) -> list[int]:
+  """The torch seeds of order ``j``'s factors, one per factor ``2, ..., d``.
+
+  Parameters
+  ----------
+  cell_seed : int
+      The cell's seed.
+  estimator_id : str
+      The estimator's id, so two estimators' factors draw differently.
+  j : int
+      The order, 1-based.
+  d : int
+      The dimension.
+
+  Returns
+  -------
+  list of int
+      ``derive_seed(cell_seed, "chain", estimator_id, j, f)`` for factor
+      ``f = 2, ..., d``.
+  """
+  return [
+    derive_seed(cell_seed, "chain", estimator_id, j, f) for f in range(2, d + 1)
+  ]
+
+
+def mixture_log_density(member_logs: torch.Tensor) -> torch.Tensor:
+  """The log-density of the members' equal-weight mixture.
+
+  Parameters
+  ----------
+  member_logs : torch.Tensor, shape (k, n)
+      Each member's log-density at the same ``n`` points.
+
+  Returns
+  -------
+  torch.Tensor, shape (n,)
+      ``log((1 / k) * sum_j exp(member_logs[j]))``, computed without leaving
+      log space, so members that underflow in density still count.
+  """
+  return torch.logsumexp(member_logs, dim=0) - math.log(member_logs.shape[0])
+
+
+def joint_log_densities(
+  copula_logs: torch.Tensor, margin_logs: list[torch.Tensor]
+) -> tuple[torch.Tensor, torch.Tensor]:
+  """The mixture's and each member's joint log-density, on shared margins.
+
+  The members share their margins, so the mixture's joint density is the
+  margins' times the mixture of the copula densities. Each margin term is
+  added after the copula term, in variable order, as
+  ``VinedistBase.logpdf`` adds them, so a member's log-density is the one
+  :class:`~npcc.core.vinedist.RosenblattVinedist` gives for that member.
+
+  Parameters
+  ----------
+  copula_logs : torch.Tensor, shape (k, n)
+      Each member's copula log-density at the points' probability integral
+      transforms.
+  margin_logs : list of torch.Tensor, each of shape (n,)
+      Each margin's log-density at the points, in variable order.
+
+  Returns
+  -------
+  mixture : torch.Tensor, shape (n,)
+      The mixture's joint log-density.
+  members : torch.Tensor, shape (k, n)
+      Each member's joint log-density.
+  """
+  mixture = mixture_log_density(copula_logs)
+  members = copula_logs
+  for term in margin_logs:
+    mixture = mixture + term
+    members = members + term
+  return mixture, members
+
+
+def select_structure(u: torch.Tensor) -> pv.RVineStructure:
+  """The structure Dissmann's algorithm with TLL pairs selects on ``u``.
+
+  E3d's ``tll-ns`` call (``scripts/paper/e3/e3d_npcc_fit.py``): pyvinecopulib's
+  compiled selection with TLL as the only family, otherwise default
+  controls, on one thread. It sees the copula-scale data only, not ``x``.
+
+  Parameters
+  ----------
+  u : torch.Tensor, shape (n, d)
+      Copula-scale observations.
+
+  Returns
+  -------
+  pyvinecopulib.RVineStructure
+      The selected structure.
+  """
+  controls = pv.FitControlsVinecop(
+    family_set=[pv.BicopFamily.tll], num_threads=1
+  )
+  data = to_numpy(u, dtype=np.float64)
+  # pyvinecopulib's compiled `Vinecop` is untyped here.
+  selected = pv.Vinecop.from_data(data, controls=controls).structure
+  return cast("pv.RVineStructure", selected)
+
+
+def weighted_random_structure(u: torch.Tensor, seed: int) -> pv.RVineStructure:
+  """A structure of weighted random spanning trees on ``u``.
+
+  :func:`select_structure`'s call with pyvinecopulib's ``random_weighted``
+  tree algorithm: each tree is a random spanning tree whose chance grows with
+  its edges' ``|Kendall's tau|``, rather than the maximum one. TLL pairs and
+  one thread, as there; ``x`` is not seen.
+
+  Parameters
+  ----------
+  u : torch.Tensor, shape (n, d)
+      Copula-scale observations.
+  seed : int
+      The draw's seed; the same ``u`` and seed give the same structure.
+
+  Returns
+  -------
+  pyvinecopulib.RVineStructure
+      The drawn structure.
+  """
+  controls = pv.FitControlsVinecop(
+    family_set=[pv.BicopFamily.tll],
+    tree_algorithm="random_weighted",
+    seeds=[seed],
+    num_threads=1,
+  )
+  data = to_numpy(u, dtype=np.float64)
+  # pyvinecopulib's compiled `Vinecop` is untyped here.
+  drawn = pv.Vinecop.from_data(data, controls=controls).structure
+  return cast("pv.RVineStructure", drawn)
 
 
 def regime_fingerprint() -> dict[str, list[float]]:
@@ -110,34 +342,6 @@ def regime_fingerprint() -> dict[str, list[float]]:
     assert tau_of_x is not None
     out[name] = [round(float(t), 12) for t in tau_of_x(x)]
   return out
-
-
-def _cell_key(cell: VineCell) -> str:
-  return f"d{cell.d}__n{cell.n}__rep{cell.rep}"
-
-
-def _cell_done(cells_root: Path, cell: VineCell) -> bool:
-  """True once a cell's shard is fully written (the ``DONE`` marker is last)."""
-  return (cells_root / _cell_key(cell) / "DONE").exists()
-
-
-def _write_cell_shard(
-  cells_root: Path, cell: VineCell, rows: _CellRows, fmt: str
-) -> None:
-  """Persist one cell's row-lists, then a ``DONE`` marker written last."""
-  cell_dir = cells_root / _cell_key(cell)
-  cell_dir.mkdir(parents=True, exist_ok=True)
-  for name, cell_rows in zip(_SHARD_TABLES, rows, strict=True):
-    if cell_rows:
-      _write_table(_data_frame(cell_rows), cell_dir / name, fmt)
-  (cell_dir / "DONE").write_text("")
-
-
-def _read_cell_shard(cells_root: Path, cell: VineCell, fmt: str) -> _CellRows:
-  cell_dir = cells_root / _cell_key(cell)
-  metrics = _read_table(cell_dir / "metrics", fmt).to_dict("records")
-  runtime = _read_table(cell_dir / "runtime", fmt).to_dict("records")
-  return metrics, runtime
 
 
 def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
@@ -159,29 +363,21 @@ def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
     "eval_x_n": grid.eval_x_n,
     "eval_m": grid.eval_m,
     "projection_grid_size": grid.projection_grid_size,
+    # Only where it changes what a cell computes, so that a grid without the
+    # mixture keeps the signature it had before the arm existed.
+    **({"mixture_k": grid.mixture_k} if "mixture" in grid.arms else {}),
+    **({"chain_k": grid.chain_k} if "chain" in grid.arms else {}),
     # `batch_size` chunks the query set without changing any prediction's
     # context, so it changes throughput and not results.
     "base_seed": run.base_seed,
     "estimators": sorted(s.estimator_id for s in grid.estimators),
   }
+  # Only where a GAM-vine arm runs, so every other grid keeps its signature.
+  # An edited script is a new method, which a resume must refuse to mix in.
+  if any(a in GAMVINE_ARMS for a in grid.arms):
+    payload["gamvine_script_sha256"] = grid.gamvine_script_sha256
   encoded = json.dumps(payload, sort_keys=True).encode()
   return hashlib.sha256(encoded).hexdigest()
-
-
-def _guard_manifest(
-  out: Path, grid: VineGridConfig, run: RunConfig, resume: bool
-) -> None:
-  """Write (or, on resume, verify) the grid-signature manifest."""
-  path = out / "manifest.json"
-  signature = grid_signature(grid, run)
-  if resume and path.exists():
-    previous = json.loads(path.read_text()).get("signature")
-    if previous != signature:
-      raise ValueError(
-        "the vine grid must match the checkpoint in this output directory to "
-        "resume; use a fresh --out or drop --resume"
-      )
-  path.write_text(json.dumps({"signature": signature}, indent=2))
 
 
 def score(pdf_true: torch.Tensor, pdf_hat: torch.Tensor) -> dict[str, float]:
@@ -208,41 +404,15 @@ def _score_both(
   return {**joint, "KL_copula": copula["KL"], "L1_copula": copula["L1"]}
 
 
-def _gpu_peaks() -> tuple[float, float]:
-  if not torch.cuda.is_available():
-    return 0.0, 0.0
-  return (
-    torch.cuda.max_memory_reserved() / 1024**2,
-    torch.cuda.max_memory_allocated() / 1024**2,
-  )
+def _new_margins(
+  controls: FitControlsRosenblattVinecop, d: int
+) -> list[ConditionalMargin]:
+  """One unfitted margin per variable, on the pairs' backend.
 
-
-def _fit_npcc(
-  arm: str,
-  est: EstimatorSpec,
-  structure: pv.RVineStructure,
-  y: torch.Tensor,
-  x: torch.Tensor,
-  *,
-  device: str | None,
-  projection_grid_size: int,
-  batch_size: int | None,
-) -> tuple[RosenblattVinedist, RosenblattVinecop]:
-  """Fit one NPCC arm; return the distribution and its (fitted) copula."""
-  context: ConditioningContext[torch.Tensor] = (
-    SimplifiedContext() if arm == "oracle" else NonSimplifiedContext()
-  )
-  controls = FitControlsRosenblattVinecop(
-    backend=est.backend,
-    transform=cast("Literal['identity', 'logit', 'probit']", est.transform),
-    device=device,
-    projection_grid_size=projection_grid_size,
-    batch_size=batch_size,
-    backend_kwargs=dict(est.backend_kwargs),
-  )
-  # The margins run the pairs' backend on the data scale, hence "identity";
-  # the estimator's own transform is for copula-scale responses.
-  margins = [
+  The margins run the pairs' backend on the data scale, hence "identity";
+  the estimator's own transform is for copula-scale responses.
+  """
+  return [
     create_backend(
       controls.backend,
       transform="identity",
@@ -253,10 +423,248 @@ def _fit_npcc(
       batch_size=controls.batch_size,
       backend_kwargs=controls.backend_kwargs,
     )
-    for _ in range(structure.dim)
+    for _ in range(d)
   ]
+
+
+def _fit_npcc(
+  arm: str,
+  est: EstimatorSpec,
+  structure: pv.RVineStructure | None,
+  y: torch.Tensor,
+  x: torch.Tensor,
+  *,
+  device: str | None,
+  projection_grid_size: int,
+  batch_size: int | None,
+) -> tuple[RosenblattVinedist, RosenblattVinecop, float]:
+  """Fit one NPCC arm; return the distribution, its copula, the selection time.
+
+  With ``structure=None`` the margins are fitted first, as
+  :meth:`RosenblattVinedist.fit` fits them, and :func:`select_structure`
+  picks the structure from their probability integral transforms. The vine
+  is then fitted on it, and the two parts are composed. The selection time
+  is ``nan`` when a structure is given.
+  """
+  context: ConditioningContext[torch.Tensor] = (
+    SimplifiedContext() if arm == "oracle" else NonSimplifiedContext()
+  )
+  controls = est.controls(
+    FitControlsRosenblattVinecop,
+    device=device,
+    projection_grid_size=projection_grid_size,
+    batch_size=batch_size,
+  )
+  margins = _new_margins(controls, y.shape[1])
+  if structure is not None:
+    vine = RosenblattVinecop(None, structure, device=device, context=context)
+    dist = RosenblattVinedist(vine, margins).fit(y, controls, x=x)
+    return dist, vine, math.nan
+  # `RosenblattVinedist.fit` in two halves, with the selection between them:
+  # each margin is fitted on its column with no margin controls, and the
+  # copula on the transforms `copula_data` assembles from those margins.
+  for j, margin in enumerate(margins):
+    margin.fit(y[:, j], None, x=x)
+  u = RosenblattVinedist.copula_data(margins, y, x=x)
+  t0 = perf_counter()
+  structure = select_structure(u)
+  selection_time = perf_counter() - t0
   vine = RosenblattVinecop(None, structure, device=device, context=context)
-  return RosenblattVinedist(vine, margins).fit(y, controls, x=x), vine
+  vine.fit(u, controls, x=x)
+  return RosenblattVinedist(vine, margins), vine, selection_time
+
+
+def _fit_margins(
+  controls: FitControlsRosenblattVinecop, y: torch.Tensor, x: torch.Tensor
+) -> tuple[list[ConditionalMargin], torch.Tensor]:
+  """Fit the margins as :meth:`RosenblattVinedist.fit` does; return their PITs.
+
+  Each margin is fitted on its column with no margin controls, and the copula
+  data are the transforms ``copula_data`` assembles from them.
+  """
+  margins = _new_margins(controls, y.shape[1])
+  for j, margin in enumerate(margins):
+    margin.fit(y[:, j], None, x=x)
+  return margins, RosenblattVinedist.copula_data(margins, y, x=x)
+
+
+def _margin_terms(
+  margins: list[ConditionalMargin], points: EvalPoints, x_eval: torch.Tensor
+) -> tuple[torch.Tensor, list[torch.Tensor]]:
+  """The test points' fitted transforms and each margin's log-density there.
+
+  Returns
+  -------
+  layout : torch.Tensor, shape (m, d)
+      The fitted margins' probability integral transforms of the test points.
+  margin_logs : list of torch.Tensor
+      Each margin's log-density at the test points, in variable order.
+  """
+  y_eval = torch.cat(points.y)
+  with torch.inference_mode():
+    layout = RosenblattVinedist.copula_data(margins, y_eval, x=x_eval)
+    y_eval = y_eval.to(device=layout.device)
+    margin_logs = [
+      m.logpdf(y_eval[:, j], x=x_eval) for j, m in enumerate(margins)
+    ]
+  return layout, margin_logs
+
+
+def _mixture_densities(
+  est: EstimatorSpec,
+  member_seeds: list[int],
+  y: torch.Tensor,
+  x: torch.Tensor,
+  points: EvalPoints,
+  x_eval: torch.Tensor,
+  *,
+  device: str | None,
+  projection_grid_size: int,
+  batch_size: int | None,
+) -> tuple[
+  torch.Tensor,
+  list[torch.Tensor],
+  torch.Tensor,
+  list[pv.RVineStructure],
+  dict[str, float],
+]:
+  """Fit the mixture's members and evaluate each at the test points.
+
+  The margins are fitted once, as :meth:`RosenblattVinedist.fit` fits them.
+  On the transforms they give, the first member's structure is selected as
+  the ``selected`` arm's is, and each other member's is drawn by
+  :func:`weighted_random_structure` from its seed in ``member_seeds``. Each
+  member is evaluated as soon as it is fitted and then released, so only one
+  member's pair copulas occupy the device at a time.
+
+  Returns
+  -------
+  copula_logs : torch.Tensor, shape (k, m)
+      Each member's copula log-density at the test points' fitted transforms.
+  margin_logs : list of torch.Tensor
+      Each margin's log-density at the test points, in variable order.
+  copula_pdfs : torch.Tensor, shape (k, m)
+      Each member's copula density at the test points' true transforms.
+  structures : list of pyvinecopulib.RVineStructure
+      Each member's structure.
+  seconds : dict of str to float
+      ``fit_time`` (margins and members, structures included),
+      ``selection_time`` (the structures alone) and ``pdf_time``.
+  """
+  controls = est.controls(
+    FitControlsRosenblattVinecop,
+    device=device,
+    projection_grid_size=projection_grid_size,
+    batch_size=batch_size,
+  )
+  t0 = perf_counter()
+  margins, u = _fit_margins(controls, y, x)
+  t1 = perf_counter()
+  structures = [select_structure(u)] + [
+    weighted_random_structure(u, seed) for seed in member_seeds
+  ]
+  selection_time = perf_counter() - t1
+  fit_time = perf_counter() - t0
+
+  t0 = perf_counter()
+  u_eval = torch.cat(points.u)
+  layout, margin_logs = _margin_terms(margins, points, x_eval)
+  pdf_time = perf_counter() - t0
+
+  copula_logs: list[torch.Tensor] = []
+  copula_pdfs: list[torch.Tensor] = []
+  for structure in structures:
+    t0 = perf_counter()
+    vine = RosenblattVinecop(
+      None, structure, device=device, context=NonSimplifiedContext()
+    )
+    vine.fit(u, controls, x=x)
+    fit_time += perf_counter() - t0
+    t0 = perf_counter()
+    with torch.inference_mode():
+      copula_logs.append(vine.logpdf(layout, x=x_eval))
+      copula_pdfs.append(vine.pdf(u_eval, x=x_eval))
+    pdf_time += perf_counter() - t0
+    del vine
+    release_gpu()
+  return (
+    torch.stack(copula_logs),
+    margin_logs,
+    torch.stack(copula_pdfs),
+    structures,
+    {
+      "fit_time": fit_time,
+      "selection_time": selection_time,
+      "pdf_time": pdf_time,
+    },
+  )
+
+
+def _chain_densities(
+  est: EstimatorSpec,
+  orders: list[list[int]],
+  factor_seeds: list[list[int]],
+  y: torch.Tensor,
+  x: torch.Tensor,
+  points: EvalPoints,
+  x_eval: torch.Tensor,
+  *,
+  device: str | None,
+  projection_grid_size: int,
+  batch_size: int | None,
+) -> tuple[torch.Tensor, list[torch.Tensor], torch.Tensor, dict[str, float]]:
+  """Fit one chain-rule density per order and evaluate each at the test points.
+
+  The margins are fitted once, as :func:`_mixture_densities` fits them, and
+  every order's factors on the transforms they give, with ``x``. Each order
+  is evaluated as soon as it is fitted and then released, so only one
+  order's factors occupy the device at a time.
+
+  Returns
+  -------
+  copula_logs : torch.Tensor, shape (k, m)
+      Each order's copula log-density at the test points' fitted transforms.
+  margin_logs : list of torch.Tensor
+      Each margin's log-density at the test points, in variable order.
+  copula_pdfs : torch.Tensor, shape (k, m)
+      Each order's copula density at the test points' true transforms.
+  seconds : dict of str to float
+      ``fit_time`` (margins and every order) and ``pdf_time``.
+  """
+  controls = est.controls(
+    FitControlsRosenblattVinecop,
+    device=device,
+    projection_grid_size=projection_grid_size,
+    batch_size=batch_size,
+  )
+  t0 = perf_counter()
+  margins, u = _fit_margins(controls, y, x)
+  fit_time = perf_counter() - t0
+
+  t0 = perf_counter()
+  u_eval = torch.cat(points.u)
+  layout, margin_logs = _margin_terms(margins, points, x_eval)
+  pdf_time = perf_counter() - t0
+
+  copula_logs: list[torch.Tensor] = []
+  copula_pdfs: list[torch.Tensor] = []
+  for order, seeds in zip(orders, factor_seeds, strict=True):
+    t0 = perf_counter()
+    density = ChainCopula(order, controls).fit(u, x=x, seeds=seeds)
+    fit_time += perf_counter() - t0
+    t0 = perf_counter()
+    with torch.inference_mode():
+      copula_logs.append(density.logpdf(layout, x=x_eval))
+      copula_pdfs.append(density.pdf(u_eval, x=x_eval))
+    pdf_time += perf_counter() - t0
+    del density
+    release_gpu()
+  return (
+    torch.stack(copula_logs),
+    margin_logs,
+    torch.stack(copula_pdfs),
+    {"fit_time": fit_time, "pdf_time": pdf_time},
+  )
 
 
 def _metric_rows(
@@ -275,39 +683,80 @@ def _metric_rows(
   ]
 
 
+def _mixture_metric_rows(
+  base: Mapping[str, object],
+  points: EvalPoints,
+  copula_logs: torch.Tensor,
+  margin_logs: list[torch.Tensor],
+  copula_pdfs: torch.Tensor,
+  member_prefix: str,
+) -> list[dict[str, Any]]:
+  """A mixture's metric rows, then each member's, as arm ``<prefix><j>``.
+
+  The mixture's joint density is the margins' times the members' mixed copula
+  densities, and its copula density their mean. Beside each of its rows go
+  its members' mean ``KL`` and ``KL_copula`` at the same ``x``, which
+  Jensen's inequality bounds the mixture's by.
+  """
+  joint, joint_members = joint_log_densities(copula_logs, margin_logs)
+  split = points.y[0].shape[0]
+  rows = _metric_rows(
+    base,
+    points,
+    list(joint.exp().cpu().split(split)),
+    list(copula_pdfs.mean(dim=0).cpu().split(split)),
+  )
+  member_rows = [
+    _metric_rows(
+      {**base, "arm": f"{member_prefix}{j + 1}"},
+      points,
+      list(joint_members[j].exp().cpu().split(split)),
+      list(copula_pdfs[j].cpu().split(split)),
+    )
+    for j in range(copula_logs.shape[0])
+  ]
+  for i, row in enumerate(rows):
+    for name in ("KL", "KL_copula"):
+      row[f"{name}_members_mean"] = float(
+        np.mean([m[i][name] for m in member_rows])
+      )
+  return rows + [row for member in member_rows for row in member]
+
+
 def summarize_one_cell(
   cell: VineCell,
   grid: VineGridConfig,
   *,
   base_seed: int,
   device: str | None,
-) -> _CellRows:
+) -> tuple[Rows, Rows]:
   """Fit every arm on one cell's data and return its metric and runtime rows."""
   truth = truth_for(base_seed, cell.d, cell.rep)
-  y, _, x = vine_scenarios.sample(
-    truth, cell.n, _seed(base_seed, "train", cell.d, cell.n, cell.rep)
-  )
+  y, _, x = training_sample(base_seed, cell)
   points = vine_scenarios.eval_points(
     truth,
     scenarios.conditional_x_axis(grid.eval_x_n),
     grid.eval_m,
-    _seed(base_seed, "eval", cell.d, cell.rep),
+    derive_seed(base_seed, "eval", cell.d, cell.rep),
   )
-  structures = {
+  structures: dict[str, pv.RVineStructure | None] = {
     "oracle": truth.structure,
     "random": random_structure_for(base_seed, cell.d, cell.rep),
+    "selected": None,
   }
-  cell_seed = _seed(base_seed, "cell", cell.d, cell.n, cell.rep)
+  cell_seed = derive_seed(base_seed, "cell", cell.d, cell.n, cell.rep)
   cell_base = {"d": cell.d, "n": cell.n, "rep": cell.rep, "seed": cell_seed}
 
-  metric_rows: list[dict[str, Any]] = []
-  runtime_rows: list[dict[str, Any]] = []
+  metric_rows: Rows = []
+  runtime_rows: Rows = []
 
   def _record(
-    base: Mapping[str, object], fit_time: float, pdf_time: float
+    base: Mapping[str, object],
+    fit_time: float,
+    pdf_time: float,
+    **extra: object,
   ) -> None:
-    reserved, alloc = _gpu_peaks()
-    rss_mb, mem_available_mb = _system_mem_mb()
+    memory = memory_usage()
     logger.info(
       "arm %s / %s [d=%d n=%d rep=%d]: fit %.1fs | GPU peak %.0f MiB | "
       "RSS %.0f MiB | MemAvailable %.0f MiB",
@@ -317,9 +766,9 @@ def summarize_one_cell(
       cell.n,
       cell.rep,
       fit_time,
-      reserved,
-      rss_mb,
-      mem_available_mb,
+      memory["gpu_peak_reserved_mb"],
+      memory["rss_mb"],
+      memory["mem_available_mb"],
     )
     runtime_rows.append(
       {
@@ -327,14 +776,12 @@ def summarize_one_cell(
         "fit_time": fit_time,
         "pdf_time": pdf_time,
         "total_time": fit_time + pdf_time,
-        "gpu_peak_reserved_mb": reserved,
-        "gpu_peak_alloc_mb": alloc,
-        "rss_mb": rss_mb,
-        "mem_available_mb": mem_available_mb,
+        **extra,
+        **memory,
       }
     )
 
-  for arm in (a for a in grid.arms if a != "tll"):
+  for arm in (a for a in grid.arms if a in structures):
     for est in grid.estimators:
       base = {
         **cell_base,
@@ -344,11 +791,10 @@ def summarize_one_cell(
         "backend": est.backend,
         "transform": est.transform,
       }
-      torch.manual_seed(_estimator_seed(cell_seed, f"{arm}:{est.estimator_id}"))
-      if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
+      torch.manual_seed(derive_seed(cell_seed, arm, est.estimator_id))
+      reset_gpu_peaks()
       t0 = perf_counter()
-      dist, vine = _fit_npcc(
+      dist, vine, selection_time = _fit_npcc(
         arm,
         est,
         structures[arm],
@@ -372,9 +818,109 @@ def summarize_one_cell(
         )
       pdf_time = perf_counter() - t0
       metric_rows += _metric_rows(base, points, preds, copula_preds)
-      _record(base, fit_time, pdf_time)
+      _record(
+        base,
+        fit_time,
+        pdf_time,
+        structure=json.dumps(np.asarray(vine.structure.matrix).tolist()),
+        selection_time=selection_time,
+      )
       del dist, vine
-      _release_gpu()
+      release_gpu()
+
+  if "mixture" in grid.arms:
+    member_seeds = [
+      derive_seed(base_seed, "mixture", cell.d, cell.rep, j)
+      for j in range(2, grid.mixture_k + 1)
+    ]
+    x_all = points.x_axis.repeat_interleave(grid.eval_m).reshape(-1, 1)
+    for est in grid.estimators:
+      base = {
+        **cell_base,
+        "arm": "mixture",
+        "label": est.label,
+        "estimator_id": est.estimator_id,
+        "backend": est.backend,
+        "transform": est.transform,
+      }
+      torch.manual_seed(derive_seed(cell_seed, "mixture", est.estimator_id))
+      reset_gpu_peaks()
+      copula_logs, margin_logs, copula_pdfs, members, seconds = (
+        _mixture_densities(
+          est,
+          member_seeds,
+          y,
+          x,
+          points,
+          x_all,
+          device=device,
+          projection_grid_size=grid.projection_grid_size,
+          batch_size=grid.batch_size,
+        )
+      )
+      metric_rows += _mixture_metric_rows(
+        base,
+        points,
+        copula_logs,
+        margin_logs,
+        copula_pdfs,
+        "mixture-member-",
+      )
+      _record(
+        base,
+        seconds["fit_time"],
+        seconds["pdf_time"],
+        structure=json.dumps(np.asarray(members[0].matrix).tolist()),
+        mixture_structures=json.dumps(
+          [np.asarray(s.matrix).tolist() for s in members]
+        ),
+        selection_time=seconds["selection_time"],
+      )
+      del copula_logs, margin_logs, copula_pdfs
+      release_gpu()
+
+  if "chain" in grid.arms:
+    orders = chain_orders(base_seed, cell.d, cell.rep, grid.chain_k)
+    x_all = points.x_axis.repeat_interleave(grid.eval_m).reshape(-1, 1)
+    for est in grid.estimators:
+      base = {
+        **cell_base,
+        "arm": "chain",
+        "label": est.label,
+        "estimator_id": est.estimator_id,
+        "backend": est.backend,
+        "transform": est.transform,
+      }
+      factor_seeds = [
+        chain_factor_seeds(cell_seed, est.estimator_id, j, cell.d)
+        for j in range(1, grid.chain_k + 1)
+      ]
+      torch.manual_seed(derive_seed(cell_seed, "chain", est.estimator_id))
+      reset_gpu_peaks()
+      copula_logs, margin_logs, copula_pdfs, seconds = _chain_densities(
+        est,
+        orders,
+        factor_seeds,
+        y,
+        x,
+        points,
+        x_all,
+        device=device,
+        projection_grid_size=grid.projection_grid_size,
+        batch_size=grid.batch_size,
+      )
+      metric_rows += _mixture_metric_rows(
+        base, points, copula_logs, margin_logs, copula_pdfs, "chain-m"
+      )
+      _record(
+        base,
+        seconds["fit_time"],
+        seconds["pdf_time"],
+        chain_orders=json.dumps(orders),
+        chain_factor_seeds=json.dumps(factor_seeds),
+      )
+      del copula_logs, margin_logs, copula_pdfs
+      release_gpu()
 
   if "tll" in grid.arms:
     base = {
@@ -404,7 +950,92 @@ def summarize_one_cell(
     metric_rows += _metric_rows(base, points, preds, copula_preds)
     _record(base, fit_time, pdf_time)
 
+  for arm in (a for a in grid.arms if a in GAMVINE_ARMS):
+    base = {
+      **cell_base,
+      "arm": arm,
+      "label": arm,
+      "estimator_id": "",
+      "backend": "gamCopula",
+      "transform": "none",
+    }
+    metric_rows += _gamvine_rows(
+      arm, base, cell, grid, truth, (y, x), points, _record
+    )
+
   return metric_rows, runtime_rows
+
+
+class _Record(Protocol):
+  def __call__(
+    self,
+    base: Mapping[str, object],
+    fit_time: float,
+    pdf_time: float,
+    **extra: object,
+  ) -> None: ...
+
+
+def _gamvine_rows(
+  arm: str,
+  base: Mapping[str, object],
+  cell: VineCell,
+  grid: VineGridConfig,
+  truth: VineTruth,
+  sample: tuple[torch.Tensor, torch.Tensor],
+  points: EvalPoints,
+  record: _Record,
+) -> Rows:
+  """Fit one GAM-vine arm with one script run; return its metric rows.
+
+  The runtime row goes through ``record``. A script that fails on its sample
+  leaves every metric ``nan`` and its message in the runtime row: the
+  method's outcome, which the analysis counts, and not a reason to stop the
+  other cells.
+  """
+  m = grid.eval_m
+  x_all = points.x_axis.repeat_interleave(m).reshape(-1, 1)
+  name = f"{arm} on {cell.key}"
+  try:
+    fit = _external_vine.fit_and_evaluate(
+      grid.gamvine_script,
+      sample,
+      (torch.cat(points.y), torch.cat(points.u), x_all),
+      arm=arm,
+      seed=derive_seed(base["seed"], arm),
+      name=name,
+      structure=truth.structure if arm == "gamvine-oracle" else None,
+    )
+  except _external.ScriptFailedError as exc:
+    logger.warning("arm %s [%s] failed: %s", arm, cell.key, exc)
+    failed = [torch.full((m,), math.nan, dtype=torch.float64)] * len(
+      points.x_axis
+    )
+    record(base, math.nan, math.nan, error=str(exc))
+    return _metric_rows(base, points, failed, failed)
+  if arm == "gamvine-oracle" and _external_vine.edges(
+    fit.structure
+  ) != _external_vine.edges(truth.structure):
+    raise _external.ExchangeError(
+      f"{name} must fit the true structure; got the matrix "
+      f"{np.asarray(fit.structure.matrix).tolist()} for "
+      f"{np.asarray(truth.structure.matrix).tolist()}"
+    )
+  timings = fit.timings
+  record(
+    base,
+    timings["margin_time"] + timings["vine_time"],
+    timings["joint_pdf_time"] + timings["copula_pdf_time"],
+    structure=json.dumps(np.asarray(fit.structure.matrix).tolist()),
+    selection_time=math.nan,
+    pairs=json.dumps(fit.pairs),
+    wall_time=fit.wall_time,
+    error="",
+    **timings,
+  )
+  return _metric_rows(
+    base, points, list(fit.pdf.split(m)), list(fit.copula_pdf.split(m))
+  )
 
 
 def run_vine_study(
@@ -416,68 +1047,30 @@ def run_vine_study(
   finish. With ``resume=True``, cells already marked done are read back and
   skipped, after the grid signature is checked against the manifest.
   """
-  cells = grid.cells()
-  cells_root = run.out / "cells"
-  cells_root.mkdir(parents=True, exist_ok=True)
-  _guard_manifest(run.out, grid, run, resume)
-
-  if run.gpu_mem_fraction is not None and torch.cuda.is_available():
-    torch.cuda.set_per_process_memory_fraction(run.gpu_mem_fraction)
-
-  done = {c for c in cells if resume and _cell_done(cells_root, c)}
-  pending = [c for c in cells if c not in done]
   logger.info(
-    "Vine study: %d cells (%d pending, %d resumed) x %d arms x %d estimators",
-    len(cells),
-    len(pending),
-    len(done),
+    "Vine study: %d arms x %d estimators per cell",
     len(grid.arms),
     len(grid.estimators),
   )
-
-  metric_rows: list[dict[str, Any]] = []
-  runtime_rows: list[dict[str, Any]] = []
-
-  def _accumulate(rows: _CellRows) -> None:
-    metric_rows.extend(rows[0])
-    runtime_rows.extend(rows[1])
-
-  for cell in cells:
-    if cell in done:
-      _accumulate(_read_cell_shard(cells_root, cell, run.fmt))
-
-  t0_wall = perf_counter()
-
-  def _do(cell: VineCell) -> _CellRows:
-    out = summarize_one_cell(
+  # A package missing from this machine would fail every GAM-vine fit, each
+  # recorded as the method's failure; it must stop the run first.
+  if any(a in GAMVINE_ARMS for a in grid.arms):
+    _external.check_packages(grid.gamvine_script)
+  (metrics, runtimes), wall = sweep(
+    grid.cells(),
+    lambda cell: summarize_one_cell(
       cell, grid, base_seed=run.base_seed, device=run.device
-    )
-    _write_cell_shard(cells_root, cell, out, run.fmt)
-    logger.info("cell done: %s", cell)
-    return out
-
-  if run.workers <= 1:
-    for cell in pending:
-      _accumulate(_do(cell))
-  elif pending:
-    max_workers = min(run.workers, len(pending), os.cpu_count() or 1)
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-      futures = [pool.submit(_do, cell) for cell in pending]
-      for fut in as_completed(futures):
-        _accumulate(fut.result())
-
-  wall = perf_counter() - t0_wall
-  logger.info("Vine study finished in %.1fs", wall)
+    ),
+    tables=TABLES,
+    run=run,
+    signature=grid_signature(grid, run),
+    study="vine",
+    resume=resume,
+  )
 
   sort_axes = ["d", "n", "arm", "label", "rep"]
-  metric_df = (
-    _data_frame(metric_rows)
-    .sort_values([*sort_axes, "x"])
-    .reset_index(drop=True)
-  )
-  runtime_df = (
-    _data_frame(runtime_rows).sort_values(sort_axes).reset_index(drop=True)
-  )
+  metric_df = sorted_frame(metrics, [*sort_axes, "x"])
+  runtime_df = sorted_frame(runtimes, sort_axes)
   return metric_df, runtime_df, wall
 
 
@@ -499,19 +1092,9 @@ def aggregate_vine_outputs(
   metric_df: pd.DataFrame, runtime_df: pd.DataFrame
 ) -> dict[str, pd.DataFrame]:
   """Summaries over repetitions, per ``x`` and averaged over ``x``."""
-  by_x_group = [*_GROUP_AXES, "x"]
-  by_x: list[pd.DataFrame] = []
-  over_x: list[pd.DataFrame] = []
-  for metric in METRIC_NAMES:
-    g = _summary_stats(metric_df, by_x_group, metric)
-    g["metric"] = metric
-    by_x.append(g)
-    averaged = metric_df.groupby(
-      [*_GROUP_AXES, "rep"], as_index=False, dropna=False
-    ).agg(value=(metric, "mean"))
-    g = _summary_stats(averaged, list(_GROUP_AXES), "value")
-    g["metric"] = metric
-    over_x.append(g)
+  summary_by_x, summary_over_x = summarize(
+    metric_df, METRIC_NAMES, _GROUP_AXES, x_axes=("x",)
+  )
   runtime_summary = runtime_df.groupby(
     list(_GROUP_AXES), as_index=False, dropna=False
   ).agg(
@@ -522,8 +1105,8 @@ def aggregate_vine_outputs(
   )
   return {
     "metrics_by_x": metric_df,
-    "summary_by_x": pd.concat(by_x, ignore_index=True),
-    "summary_over_x": pd.concat(over_x, ignore_index=True),
+    "summary_by_x": summary_by_x,
+    "summary_over_x": summary_over_x,
     "runtime": runtime_df,
     "runtime_summary": cast("pd.DataFrame", runtime_summary),
   }

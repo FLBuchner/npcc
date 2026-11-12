@@ -1,0 +1,66 @@
+# E9: fifteen covariates of mixed type (scripts/paper/README.md, E9).
+#
+# The covariates are Vatter and Nagler's (2018, JCGS, §4.1): b1..b5 iid
+# Bernoulli(1/2), z1..z5 iid standard normal and t1..t5 iid uniform. Three
+# scenarios (npcc.experiments.covariate_scenarios): their partially linear
+# predictor through gamCopula's link (gampcc), E1's linear and sin regimes in
+# t1 switched by b1 (interaction), and tau = 0.5 (constant). Every estimator is
+# scored at 20 covariate points per scenario, on E1's 20 x 20 uv grid and at
+# 2000 draws from the true copula at each point.
+#
+# Run with npcc-covstudy, sharded as E1 (scripts/paper/README.md). The R
+# competitors are configs/e9_covariates_r.toml, on this same [grid], so they
+# fit exactly these cells' data.
+
+[grid]
+families = ["clayton", "gaussian"]
+scenarios = ["gampcc", "interaction", "constant"]
+n = [500, 2000]
+n_rep = 10
+
+# The scoring: covariate points per scenario, the uv grid's points per axis,
+# and the Monte Carlo KL's draws per point.
+n_points = 20
+uv_grid_n = 20
+holdout_n = 2000
+
+# TabPFN v3 fitted on the scenario's active covariates only (nine under
+# gampcc, b1 and t1 under interaction; not fitted under constant), and on (U, V)
+# alone. Both share TabPFN v3's backend settings; each one's seed also names
+# what it is fitted on.
+active_covariates = ["tabpfn-quantiles-v3-probit-active"]
+without_covariates = ["tabpfn-quantiles-v3-probit-none"]
+
+# E1's estimators, under E1's labels and backend_kwargs, so each estimator_id
+# is E1's: TabPFN v3 at softmax temperature 1.0, TabICLv2, and LightGBM, the
+# gradient booster with the smallest mean KL_mc at n = 2000 on E1's probit
+# rerun (results/study_2026-11-10, b7702e1: LightGBM 0.0300, CatBoost 0.0373,
+# XGBoost 0.0458).
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[grid.estimators]]
+label = "tabicl-probit"
+backend = "tabicl"
+transform = "probit"
+
+[[grid.estimators]]
+label = "lightgbm-probit"
+backend = "lightgbm"
+transform = "probit"
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit-active"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit-none"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }

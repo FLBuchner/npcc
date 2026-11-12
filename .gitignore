@@ -211,9 +211,6 @@ __marimo__/
 
 .coverage
 
-# CatBoost training logs
-catboost_info/
-
 # Simulation-study outputs
 results/
 *.aux

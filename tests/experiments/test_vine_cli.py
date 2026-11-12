@@ -18,13 +18,13 @@ eval_m = 20
 
 [[grid.estimators]]
 label = "uni"
-backend = "uniform-native"
+backend = "normal-quantile"
 transform = "logit"
 """
 
 
 def test_vine_cli_writes_every_table(
-  register_uniform_backends: None, tmp_path: Path
+  register_hermetic_backends: None, tmp_path: Path
 ) -> None:
   """A missing table or truth record would leave a run unanalyzable."""
   config = tmp_path / "vine.toml"

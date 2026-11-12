@@ -1,0 +1,30 @@
+# E10, structure mixtures in the conditional vine study, d = 10, on gpu053 as a whole experiment
+# (scripts/paper/README.md, E10):
+# `npcc-vinestudy --config configs/vine_study_mixture_d10.toml --out results/vine_study_mixture_d10_<TAG>`.
+#
+# The `mixture` arm alone: an equal-weight mixture of mixture_k = 5
+# non-simplified TabPFN v3 vines sharing one set of fitted margins, the first
+# on the `selected` arm's structure and the others on weighted random
+# spanning trees of the same transforms. Every member is also scored on its
+# own. Every other key is E2's, so each cell has the truth, training data and
+# test points it has in E2's runs at that (d, n, rep), and the first member
+# is the selected arm's fit there.
+# configs/vine_study_mixture.toml is the same at d = 3 and 5.
+
+[grid]
+dims = [10]
+n = [500, 1000, 2000]
+n_rep = 20
+arms = ["mixture"]
+mixture_k = 5
+
+eval_x_n = 5
+eval_m = 1000
+
+projection_grid_size = 30
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
