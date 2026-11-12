@@ -13,8 +13,11 @@ import pyvinecopulib as pv
 import torch
 from pyvinecopulib.core import NonSimplifiedContext, SimplifiedContext
 
+from npcc.core import FitControlsRosenblattBicop, FitControlsRosenblattVinecop
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.experiments import scenarios, vine_runner, vine_scenarios
+from npcc.experiments._study import derive_seed
+from npcc.experiments.chain import ChainCopula, draw_order
 from npcc.experiments.config import EstimatorSpec, RunConfig
 from npcc.experiments.vine_config import VineCell, VineGridConfig
 
@@ -490,3 +493,177 @@ def test_the_signature_reads_k_only_for_a_mixture(
   assert len({vine_runner.grid_signature(g, run) for g in plain}) == 1
   mixed = [_mixture_grid(arms=["mixture"], mixture_k=k) for k in (3, 5)]
   assert len({vine_runner.grid_signature(g, run) for g in mixed}) == 2
+
+
+def _chain_grid(
+  *, arms: list[str], chain_k: int, dims: list[int] | None = None
+) -> VineGridConfig:
+  return VineGridConfig(
+    dims=[3] if dims is None else dims,
+    n=[60],
+    n_rep=1,
+    estimators=[
+      EstimatorSpec(label="lin", backend="linear-gaussian", transform="probit")
+    ],
+    arms=arms,
+    eval_x_n=2,
+    eval_m=30,
+    chain_k=chain_k,
+  )
+
+
+def test_the_chain_scores_itself_and_each_order(
+  register_linear_gaussian_backend: None,
+) -> None:
+  """Every order must be scored, and the chain by at most their mean KL.
+
+  E11 reads the chain mixture against its average order and its best one;
+  without the orders' own rows, or with a mean over some other set, it
+  could not, and a chain whose KL exceeded its orders' mean would be wired
+  wrong (Jensen's inequality bounds it at every x).
+  """
+  k = 3
+  grid = _chain_grid(arms=["chain"], chain_k=k)
+  metrics, runtime = vine_runner.summarize_one_cell(
+    grid.cells()[0], grid, base_seed=317, device="cpu"
+  )
+  rows = _by_arm(metrics)
+  orders = [f"chain-m{j}" for j in range(1, k + 1)]
+  assert set(rows) == {"chain", *orders}
+  for arm in rows:
+    assert len(rows[arm]) == grid.eval_x_n
+    for row in rows[arm]:
+      for name in vine_runner.METRIC_NAMES:
+        assert math.isfinite(row[name]), (arm, name)
+  for i, row in enumerate(rows["chain"]):
+    for name in ("KL", "KL_copula"):
+      mean = float(np.mean([rows[m][i][name] for m in orders]))
+      assert row[f"{name}_members_mean"] == pytest.approx(mean)
+      assert row[name] <= row[f"{name}_members_mean"] + 1e-12
+  assert len({tuple(r["KL"] for r in rows[m]) for m in orders}) == k
+  [record] = runtime
+  assert record["arm"] == "chain"
+  assert json.loads(str(record["chain_orders"])) == vine_runner.chain_orders(
+    317, 3, 0, k
+  )
+  assert float(record["fit_time"]) > 0.0
+
+
+def test_a_chain_of_one_order_is_that_order(
+  register_linear_gaussian_backend: None,
+) -> None:
+  """With k = 1 the chain mixture is its single order, scored the same.
+
+  The mixture's joint density is assembled from parts -- the margins, the
+  log-sum-exp less log k -- so any drift there would show as a mixture that
+  is not its own single member.
+  """
+  grid = _chain_grid(arms=["chain"], chain_k=1)
+  metrics, _ = vine_runner.summarize_one_cell(
+    grid.cells()[0], grid, base_seed=317, device="cpu"
+  )
+  rows = _by_arm(metrics)
+  assert set(rows) == {"chain", "chain-m1"}
+  for name in (*vine_runner.METRIC_NAMES, "loglik_hat"):
+    assert [r[name] for r in rows["chain"]] == pytest.approx(
+      [r[name] for r in rows["chain-m1"]], rel=1e-12, abs=1e-12
+    ), name
+
+
+def test_orders_and_factor_seeds_follow_derive_seed(
+  register_linear_gaussian_backend: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  """Each order and each factor's torch seed must be a function of its key.
+
+  Orders come from (d, rep) alone, so every n in a repetition mixes the same
+  ones, and seeds from the cell, the estimator, the order and the factor, so
+  a rerun reproduces the cell and no two factors share a draw. The orders
+  are fitted on the margins' transforms, as the vines are.
+  """
+  seen: list[tuple[list[int], list[int], torch.Tensor]] = []
+  original = vine_runner.ChainCopula.fit
+
+  def spy(
+    self: Any, u: torch.Tensor, *args: Any, seeds: Any = None, **kwargs: Any
+  ) -> Any:
+    seen.append((list(self.order), list(seeds), u.clone()))
+    return original(self, u, *args, seeds=seeds, **kwargs)
+
+  monkeypatch.setattr(vine_runner.ChainCopula, "fit", spy)
+  k, d = 4, 5
+  grid = _chain_grid(arms=["chain"], chain_k=k, dims=[d])
+  cell = grid.cells()[0]
+  vine_runner.summarize_one_cell(cell, grid, base_seed=317, device="cpu")
+
+  orders = vine_runner.chain_orders(317, d, 0, k)
+  assert orders == vine_runner.chain_orders(317, d, 0, k)
+  assert orders == [
+    draw_order(d, derive_seed(317, "chain", d, 0, j)) for j in range(1, k + 1)
+  ]
+  assert len({tuple(o) for o in orders}) > 1
+  assert [order for order, _, _ in seen] == orders
+
+  cell_seed = derive_seed(317, "cell", d, cell.n, 0)
+  est = grid.estimators[0]
+  seeds = [s for _, s, _ in seen]
+  assert seeds == [
+    [
+      derive_seed(cell_seed, "chain", est.estimator_id, j, f)
+      for f in range(2, d + 1)
+    ]
+    for j in range(1, k + 1)
+  ]
+  flat = [s for row in seeds for s in row]
+  assert len(set(flat)) == len(flat)
+
+  y, _, x = vine_runner.training_sample(317, cell)
+  controls = est.controls(
+    FitControlsRosenblattVinecop,
+    device="cpu",
+    projection_grid_size=grid.projection_grid_size,
+    batch_size=None,
+  )
+  _, u = vine_runner._fit_margins(controls, y, x)
+  for _, _, fitted_on in seen:
+    torch.testing.assert_close(fitted_on, u, rtol=1e-10, atol=1e-12)
+
+
+def test_a_mixture_of_chain_densities_is_pointwise_above_its_orders_mean(
+  register_linear_gaussian_backend: None,
+) -> None:
+  """The log of a mean density is at least the mean of the log-densities.
+
+  At every point, so a chain mixture below its orders' mean anywhere -- a
+  dropped ``- log k``, or orders mixed on different points -- is wired
+  wrong.
+  """
+  truth = vine_runner.truth_for(317, 4, 0)
+  _, u, x = vine_scenarios.sample(truth, 80, 11)
+  _, u_eval, x_eval = vine_scenarios.sample(truth, 50, 12)
+  controls = FitControlsRosenblattBicop(
+    backend="linear-gaussian", transform="probit", device="cpu"
+  )
+  logs = torch.stack(
+    [
+      ChainCopula(order, controls).fit(u, x=x).logpdf(u_eval, x=x_eval)
+      for order in vine_runner.chain_orders(317, 4, 0, 3)
+    ]
+  )
+  mixture = vine_runner.mixture_log_density(logs)
+  assert bool((mixture >= logs.mean(dim=0) - 1e-12).all())
+  assert float((mixture - logs.mean(dim=0)).max()) > 1e-6
+
+
+def test_the_signature_reads_chain_k_only_for_a_chain(
+  register_linear_gaussian_backend: None,
+) -> None:
+  """chain_k changes a chain's cells, and nothing else's.
+
+  Hashing it for every grid would refuse to resume every run made before the
+  arm existed; not hashing it would resume a chain of 5 orders as one of 3.
+  """
+  run = RunConfig(out=Path("unused"), device="cpu")
+  plain = [_chain_grid(arms=["random"], chain_k=k) for k in (3, 5)]
+  assert len({vine_runner.grid_signature(g, run) for g in plain}) == 1
+  chained = [_chain_grid(arms=["chain"], chain_k=k) for k in (3, 5)]
+  assert len({vine_runner.grid_signature(g, run) for g in chained}) == 2
