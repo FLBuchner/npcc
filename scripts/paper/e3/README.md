@@ -25,6 +25,9 @@ its weights, and which command produces each output file.
 - **E10 on E3d**: on the same truths and samples, equal-weight mixtures of
   K = 5 vines, one per structure, for NPCC and for each competitor. Outputs
   go to `results/e10_e3d_2026-11-11/`.
+- **E11 on E3d**: on the same truths and samples, no vine at all: an
+  equal-weight mixture of K = 5 chain-rule copula densities, one per
+  random variable order, for NPCC. Outputs go to their own folder.
 
 Two environments are involved. VDC's code runs only in its own (`~/vdc/env`,
 Python 3.10, pyvinecopulib 0.7.5). Everything else runs in npcc's (`uv run
@@ -50,6 +53,7 @@ pair copula of E3a's cross-check and of E3c — it gets it from
 | `e3d_vdc_side.py` | VDC | E3d `vdc`: VDC's own pipeline, choosing its own greedy D-vine |
 | `e3d_npcc_fit.py` | npcc | E3d `parametric` and `tll` with Dissmann selection, true-structure references, and NPCC on random, TLL-selected and true structures; E3e's `tll-s` and `true-ns` |
 | `e3d_mixture.py` | npcc | E10 on E3d: mixtures of vines on TLL's selected structure and four weighted random ones, for NPCC, TLL, parametric and VDC's pairs |
+| `e3d_chain.py` | npcc | E11 on E3d: mixtures of chain-rule copula densities along five random variable orders, for NPCC |
 | `e3_vdc_server.py` | VDC | VDC's density estimate as a service (started by `e3_vdc_pair.VdcServer`) |
 | `e3_vdc_pair.py` | npcc | The server client and `VdcBicop`: VDC's 64 x 64 grid replicate-padded and held by pyvinecopulib 1.0's `TorchTllBicop` with `norm_maxiter=0`, adapted from pyvinecopulib PR #217 |
 | `e3_vine.py` | npcc | `SharedVinecop`: a simplified pyvinecopulib 1.0 `VinecopBase` hosting any torch pair copula |
@@ -426,6 +430,84 @@ records it; `script_repo_commit` is the worktree's.
 - With `--k 1`, the mixture is E3d's `tll`. Member 1, mixed with K - 1 copies
   of itself, scores as itself to within 4e-15.
 - On every cell, the mixture's excess NLL is at most the members' mean.
+
+### E11 on E3d (chain-rule densities, no vine)
+
+E11 asks why a vine is needed at all (`scripts/paper/README.md`, E11).
+`e3d_chain.py` writes the copula density down by the chain rule along a
+variable order, `c(u) = prod_{k=2..d} f(u_pi(k) | u_pi(<k))`. Each factor
+is one Rosenblatt direction of the estimator
+(`npcc.experiments.chain.ChainCopula`), here conditioning on the earlier
+scores alone, since E3d has no `x`. An order costs `d - 1` regressions:
+- per cell, K = 5 orders drawn uniformly, order k seeded by
+  `derive_seed("E3d", "chain", design, d, seed, k)`;
+- factor f of order k has the torch seed
+  `derive_seed("E3d", "chain", design, d, seed, k, f, estimator_id)`;
+- `--estimator` is an E1 label, read from E1's config as the other E3
+  scripts read it (`tabpfn-quantiles-v3-probit` by default);
+- the mixture and every order are scored as E10 on E3d scores its members
+  (`e3d_mixture.score_members`), on the 20,000 test points.
+
+Orders are fitted one at a time, each evaluated and released before the
+next, and saved as they finish, so a cell resumes at its next order. The
+CLI is `e3d_mixture.py`'s, with `--estimator` for `--arms` and no
+`--vdc-core`.
+
+```bash
+C=scripts/paper/e3/e3d_chain.py
+O=results/e11_e3d_<TAG>
+mkdir -p $O/logs
+# GPU, TabPFN v3, here: d = 5 on both designs.
+uv run --no-sync python $C --designs decay strong --dims 5 --out $O \
+    --device cuda --gpu-is-free >> $O/logs/tabpfn_d5.log 2>&1
+# GPU, TabPFN v3, on gpu053: d = 10 on decay, in two batches of five seeds,
+# into its own folder there.
+for seeds in "101 202 303 404 505" "606 707 808 909 1010"; do
+  uv run --no-sync python $C --designs decay --dims 10 --seeds $seeds --out $O \
+      --device cuda --gpu-is-free >> $O/logs/tabpfn_d10_decay.log 2>&1
+done
+```
+
+As for E10 on E3d, on gpu053 `E3_NPCC_REPO` names the checkout there, whose
+`results/e3d_unknown_structure/` holds E3d's `samples.npz` and
+`truths.json` (or pass `--folder`).
+
+`$O` holds:
+- `cells/chain-<estimator>/<design>_d<d>_s<seed>.json`, the row: the
+  orders, their seeds and every factor's, the mixture's excess NLL and each
+  order's (the `member` columns), the orders' mean and the best order on the
+  mixture's finite points, and the seconds of every order;
+- `.npy` beside it, the mixture's test-point log-densities, and
+  `_members.npy`, the orders' (K x 20,000), both float32 with NaN kept;
+- `cells/chain-<estimator>/members/`, each finished order's row and float64
+  log-densities;
+- `chain_<estimator>.csv`, the rows, and `chain_<estimator>_summary.csv`,
+  per design and d over seeds.
+
+`scripts/paper/e11/compare_e3d_chain.py` reads the chain against the vines,
+paired by cell on the test points both have finite, with
+`compare_e3d.py`'s pairing and columns. The references are:
+- the chain's orders' mean and its best order;
+- E3d's `npcc-<estimator>-tll-ns` and `vdc_true` (`--e3d`, E3d's folder by
+  default);
+- the same estimator's mixture over five structures in an E10-on-E3d
+  folder, and its member 1, which refits `tll-ns` there (`--e10`);
+- E3e's `tll-s`, `true-ns` and `true-s`, and `tll-ns` where that folder
+  holds it (`--e3e`).
+
+Each is named by the folder it came from. At d = 10, two machines' TabPFN
+vines differ by up to 4e-3 in excess NLL per seed, so pass the E10 and E3e
+folders fitted on the chain's machine and read their references:
+
+```bash
+uv run --no-sync python scripts/paper/e11/compare_e3d_chain.py --chain $O \
+    --e10 results/e10_e3d_2026-11-11 --e3e results/e3e_simplification_2x2 \
+    --dims 5 --out $O/analysis
+```
+
+It writes `compare_cells.csv` and `compare.csv`: per design, d and
+reference, the mean difference chain - reference over seeds, its SE, and in
+how many seeds the chain is lower.
 
 ### The summaries
 
