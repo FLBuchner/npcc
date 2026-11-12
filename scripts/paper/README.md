@@ -659,23 +659,25 @@ renormalizes the comparisons with VDC.
   E3d (mixtures). E2, like the other conditional studies, stores metrics per
   cell and no per-point log-densities, so E12 covers only the unconditional
   studies.
-- **Not estimable: the `strong` design at d = 10.** There the truth is
-  concentrated enough that a handful of test points decide the estimate:
-  E3d's parametric vine, a proper density, reads 0.04 on average and at
-  most 0.12, with a median ESS share of 5e-4, ten points out of 20,000.
-  Every E12 table blanks the estimate's columns on those rows (`estimable`
-  is False in the CSVs) and prints `not estimable`; the excess NLL, which
-  does not use the mass, stays.
-- **Read the ESS share elsewhere too.** The estimate errs where the fitted
-  density puts mass that the truth rarely samples, and the ESS share is low
-  there. E3d's parametric vine, of mass exactly 1, reads 0.986 at `decay`
-  d = 5 (median ESS share 0.72), 1.082 at `decay` d = 10 (0.05) and 0.848
-  at `strong` d = 5 (0.02), from cells ranging 0.54 to 2.20. At `decay`
-  d = 10 and `strong` d = 5, the simplified arms on a selected or random
-  structure (the competitors, TabPFN's `tll-s`, CatBoost's `random-s`) and
-  the competitors' mixtures have median ESS shares of 0.01 to 0.06; the
-  non-simplified NPCC arms, the true-structure arms and E3c's vines have
-  0.05 to 0.98, most above 0.2.
+- **The estimability rule.** The estimate errs where the fitted density
+  puts mass that the truth rarely samples, and the ESS share
+  `(sum r)^2 / (n sum r^2)` of the ratios is low there: E3d's parametric
+  vine, of mass exactly 1, reads 0.85 on average at `strong` d = 5 (median
+  ESS share 0.02, cells 0.54 to 1.14) and 0.04 at `strong` d = 10 (5e-4).
+  So, as the paper states it (`mass_common.py`):
+  - a cell's mass is reported only if its ESS share is at least 0.1
+    (`MIN_ESS_SHARE`);
+  - a row, an arm on one design at one d, only if at least 8 of its 10
+    cells pass (`MIN_PASSING` of every `OF_CELLS`: 4 of E3c's 5), and its
+    mass is then the mean over the passing cells;
+  - everything else is not estimable by importance sampling under the
+    truth: blank in the CSVs (`estimable` is False, per cell and per row)
+    and `not estimable` in the printed tables. The excess NLL, which does
+    not use the mass, stays.
+
+  Every row at `strong` d = 10 fails, with no passing cell. A paired
+  comparison is reported only where both arms' rows pass, its renormalized
+  differences taken over the cells where both arms' cells pass.
 - **Renormalized comparisons.** `excess_nll + log m` is the excess NLL of
   the density divided by its mass. `paired.py` gives the paired difference
   of excess NLL and of `-log m` between arms, and the difference once both
@@ -695,11 +697,14 @@ renormalizes the comparisons with VDC.
   ```
 
 - **Outputs**, in `$O`: `mass_e3_cells.csv` and `mass_e10_members.csv`
-  (E3d, E3e, E10, per cell and per E10 member), `mass_e3ac_cells.csv` (E3a
-  and E3c, per cell), `mass_e3_summary.csv` (per study folder, design, d and
-  arm), `final_table_e3d_e3e_e10.csv` and `final_table_e3c.csv` (the
-  tables, also printed as Markdown), `mass_paired.csv` and
-  `mass_vdc_pairs.csv`. Each script's docstring lists its columns.
+  (E3d, E3e, E10, per cell and per E10 member) and `mass_e3ac_cells.csv`
+  (E3a and E3c, per cell), every estimate as computed; the same cells with
+  the rule applied, `mass_e3_cells_reported.csv` and
+  `mass_e3ac_cells_reported.csv`; `mass_e3_summary.csv` (per study folder,
+  design, d and arm); `final_table_e3d_e3e_e10.csv`, `final_table_e3c.csv`
+  and `final_table_e3a.csv` (the tables, also printed as Markdown);
+  `mass_paired.csv` and `mass_vdc_pairs.csv`. Each script's docstring lists
+  its columns.
 - **Studies still being written.** `mass_e3.py` reads every `.npy` present,
   so a study that is still running is covered as far as it has gone. Rerun
   the commands into a new `--out` once it has finished, and
@@ -722,6 +727,14 @@ renormalizes the comparisons with VDC.
     0.97 and `true-s` 1.00, and the truth-only estimate is within 0.04;
   - at `strong` d = 10, the arms read 0.83 to 1.17 (SE up to 0.18), where
     the truth-only estimate gives 0.08 to 0.58.
+
+  On the refit's own draws, the weights `f_hat / q` have ESS shares of
+  0.24 to 0.62 at d = 5 (but 0.09 and 5e-4 on two `strong` cells), 0.03
+  to 0.22 at `decay` d = 10 and at most 0.007 at `strong` d = 10
+  (`logs/refit_ess.py`). A proposal this wide spreads its weights by
+  design, so the 0.1 of the truth-only rule does not carry over, and the
+  SEs measure the spread; but at `strong` d = 10 the parametric control's
+  0.93 to 0.96 and SEs up to 0.18 leave those masses unsettled.
 
   ```bash
   git worktree add --detach ../npcc-b7702e1 b7702e1
@@ -748,6 +761,12 @@ renormalizes the comparisons with VDC.
     there), and E3e had no `strong` d = 10 cell; that setting is not
     estimable, so the rest adds excess NLL only.
   - The refits ran as two processes, in 33 min.
+  - The estimability rule: the summary and table stages ran again from a
+    clean worktree at 156f3bb (`logs/run_tables_156f3bb.sh`, their logs
+    suffixed `_156f3bb`), on the per-cell CSVs above, which they leave
+    unchanged (`logs/cells_sha256_before_156f3bb.txt`). The tables of the
+    first pass, at f4cec42, which blanked `strong` d = 10 only and averaged
+    every cell of a row, are kept in `logs/tables_f4cec42/`.
 - **Check against the scratch run.** These scripts are a peer session's
   scratch scripts, adopted with the computation unchanged, and the paper's
   first mass numbers came from that run. Its outputs are in
@@ -757,27 +776,34 @@ renormalizes the comparisons with VDC.
     both runs hold agrees to every written digit: 871 E3d, E3e and E10
     cells, 1,530 E10 members and 820 E3a and E3c cells. This run has 8 more
     cells (40 member rows), all E10's at `strong` d = 10, written since.
-    The aggregates agree on every row but those at `strong` d = 10, which
-    this run blanks and where it counts the new cells.
+    The first pass's aggregates (`logs/tables_f4cec42/`) agree on every
+    row but those at `strong` d = 10, which it blanks and where it counts
+    the new cells.
   - `logs/compare_refit_with_scratch.txt`: the 44 refit lines both runs
     hold agree in every value but the seconds, and the 33 `.npz` files in
     every array; `strong_d10_s303` is new.
-- **What it gives.**
-  - Pair copulas (E3a): every estimator's mean mass is 0.9988 to 1.0000,
-    at both sample sizes.
-  - TabPFN vines at d = 5: within 0.01 of 1 (0.990 to 1.004) on every
-    arm of E3c, E3d, E3e and E10 on both designs, but E3e's `tll-s` on
-    `strong`: 0.876, where its median ESS share is 0.03.
-  - TabPFN vines at `decay` d = 10: 1.015 to 1.033.
-  - VDC on the true structure at d = 10 (`decay`): 0.983 (E3d's
-    `vdc_true`) and 0.978 (E3c's `vdc` and `vdc_own`). VDC's own pipeline on
-    its selected D-vine (E3d's `vdc`) reads 1.134, with a median ESS share
-    of 0.02.
-  - Paired NPCC - VDC excess NLL at `decay` d = 10, as reported and then
-    with both sides renormalized (`mass_vdc_pairs.csv`): E3c, TabPFN
-    against VDC's pairs in the shared vine, -0.058, then -0.021; E3e's
-    `true-ns` against `vdc_true`, -0.070, then -0.021; E10's TabPFN mixture
-    against `vdc_true`, +0.022, then +0.059.
+- **What it gives**, under the rule (in brackets, the mean over every cell
+  of the row, as in the first pass):
+  - Pair copulas (E3a): every cell passes; every estimator's mean mass is
+    0.9988 to 1.0000, at both sample sizes.
+  - TabPFN vines at d = 5: 0.988 to 1.004 on every reported arm of E3c,
+    E3d, E3e and E10 (0.990 to 1.004). The two beyond 0.01 of 1 are
+    `tll-ns` on `strong`, 0.988 with 9 of 10 cells (0.990), and `tll-s` on
+    `decay`, 0.990 with 8 (0.991); `tll-s` on `strong` is not estimable.
+  - TabPFN vines at `decay` d = 10: 1.008 to 1.031 on E3d, E3e and E10's
+    reported arms (1.015 to 1.033), and 1.002 on E3c with 4 of 5 cells
+    (1.015); `tll-s` is not estimable.
+  - VDC on the true structure at d = 10 (`decay`), every cell passing:
+    0.983 (E3d's `vdc_true`) and 0.978 (E3c's `vdc` and `vdc_own`).
+  - Paired NPCC - VDC excess NLL at `decay` d = 10, as reported on every
+    cell, then on the cells where both pass, as reported and with both
+    sides renormalized (`mass_vdc_pairs.csv`):
+    - E3c, TabPFN against VDC's pairs in the shared vine: -0.058; on 4 of
+      5 cells -0.062, then -0.032 (on all 5, -0.021);
+    - E3e's `true-ns` against `vdc_true`: -0.070; on 9 of 10 cells -0.072,
+      then -0.021 (on all 10, -0.021);
+    - E10's TabPFN mixture against `vdc_true`: +0.022; on 9 of 10 cells
+      +0.018, then +0.043 (on all 10, +0.059).
 
 ## E3 — comparison with VDC (§3.4)
 
