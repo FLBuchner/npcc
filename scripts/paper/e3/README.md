@@ -605,11 +605,13 @@ mkdir -p $O/logs
 # GPU, TabPFN v3, here: d = 5 on both designs.
 uv run --no-sync python $C --designs decay strong --dims 5 --out $O \
     --device cuda --gpu-is-free >> $O/logs/tabpfn_d5.log 2>&1
-# GPU, TabPFN v3, on gpu053: d = 10 on decay, in two batches of five seeds,
-# into its own folder there.
-for seeds in "101 202 303 404 505" "606 707 808 909 1010"; do
-  uv run --no-sync python $C --designs decay --dims 10 --seeds $seeds --out $O \
-      --device cuda --gpu-is-free >> $O/logs/tabpfn_d10_decay.log 2>&1
+# GPU, TabPFN v3, on gpu053: d = 10, decay then strong, in batches of five
+# seeds, into its own folder there.
+for design in decay strong; do
+  for seeds in "101 202 303 404 505" "606 707 808 909 1010"; do
+    uv run --no-sync python $C --designs $design --dims 10 --seeds $seeds --out $O \
+        --device cuda --gpu-is-free >> $O/logs/tabpfn_d10_$design.log 2>&1
+  done
 done
 ```
 
@@ -653,6 +655,22 @@ uv run --no-sync python scripts/paper/e11/compare_e3d_chain.py --chain $O \
 It writes `compare_cells.csv` and `compare.csv`: per design, d and
 reference, the mean difference chain - reference over seeds, its SE, and in
 how many seeds the chain is lower.
+
+**Ran.**
+- d = 5, both designs, here, from the clean detached worktree at fa7aee3
+  (#54's tip), one GPU process per seed, 15:45 to 16:12 on 2026-11-12,
+  into `results/e11_e3d_2026-11-12` (`local_queue7.sh` in its `logs/`, with
+  `COMMIT` and `env.txt`). `compare_e3d_chain.py` against E3d, E10 on E3d
+  (`results/e10_e3d_2026-11-11`) and E3e (`results/e3e_simplification_2x2`),
+  all made here, wrote `analysis_d5/`.
+- d = 10, both designs, on gpu053 from a checkout at fa7aee3, into
+  `e11_e3d_d10_2026-11-12` there: `decay` by its queue's version 4, `strong`
+  by version 5.
+
+**Cost, per cell, on one machine.** Fit plus scoring of the 20,000 test
+points, from the rows' `fit_s` and `inference_s`, at d = 5, here: the chain
+72.5 s on `decay` and 66.2 s on `strong`, E10's TabPFN mixture 330.3 s and
+327.6 s, ratios of 0.22 and 0.20.
 
 ### The summaries
 

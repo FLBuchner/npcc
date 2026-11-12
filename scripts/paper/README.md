@@ -52,6 +52,8 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | A.2, the interior and the read-out's bias (supp.) | E7a | `qt_ab_2026-11` (`exact_*.csv`) | `qt_ab/exact_*.py` | cb04041 | main CPU |
 | A.2, Nori (supp.) | E7a′ | `nori_probe_probit_2026-11-11` | `qt_ab/nori_probe.py` | ca4e52c | main GPU |
 | "Reusing quantile tables" (supp.) | E10 | `e10_table_reuse{,_e3d,_gpu053}_2026-11-11` | `e10/check_table_reuse.py` | a49337f; d9dc80e | main; gpu053 |
+| §2.3 and the vine tables: the chain rule (not yet cited at 80ebb89) | E11 | `vine_study_chain_2026-11-12`; at d = 10, `vine_study_chain_d10_2026-11-12` (running) | `e11/analyze_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
+| the same, on E3d's truths (not yet cited at 80ebb89) | E11 | `e11_e3d_2026-11-12`; at d = 10, `e11_e3d_d10_2026-11-12` (running, gpu053) | `e11/compare_e3d_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
 
 `results/qt_ab_2026-11` is a copy, made on 2026-11-12, of the E7a worktree's
 `~/npcc-e7a/results/qt_ab_2026-11` (`COPIED_FROM.txt`); the two `exact_*.csv`
@@ -1128,6 +1130,24 @@ and E10 on E3d (unconditional).
   on E3d's samples, and `scripts/paper/e11/compare_e3d_chain.py` reads it
   against E3d, E10 on E3d and E3e: see `scripts/paper/e3/README.md`, "E11
   on E3d".
+- **Ran.**
+  - d = 5: here, from the clean detached worktree at fa7aee3 (#54's tip),
+    one GPU process, 15:33 to 15:45 on 2026-11-12, with
+    `--gpu-mem-fraction 0.9`, into `results/vine_study_chain_2026-11-12`
+    (`local_queue7.sh` in its `logs/`, with `COMMIT` and `env.txt`). Its
+    analysis, against E2's `vine_2026-11-10` and `vine_2026-11-11_selected`
+    and E10's `vine_study_mixture_2026-11-11`, all made here, is in its
+    `analysis/`. All 20 repetitions pair with every reference at n = 1000,
+    and Jensen's bound holds (`joint_jensen_max` -0.016). `chain.csv` also
+    carries empty rows for the references' other (d, n), where the chain
+    run has no cell.
+  - d = 10: on gpu053, from a checkout there at fa7aee3 (shipped as a git
+    bundle), into `vine_study_chain_d10_2026-11-12` there, then copied back.
+- **Cost, per cell, on one machine.** From each run's
+  `runtime_summary.parquet` (fit plus density evaluation), at d = 5,
+  n = 1000, here: the chain 35.4 s (2.4 + 33.1), E10's mixture 179.9 s
+  (20.1 + 159.9), a ratio of 0.20. Both commits reuse a direction's last
+  quantile table (6e1d6a7).
 
 ## E3 — comparison with VDC (§3.4)
 
