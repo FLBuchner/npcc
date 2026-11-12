@@ -126,8 +126,9 @@ def others(
 ) -> pd.DataFrame:
   """The ``--with`` runs' rows for ``arms``, checked to pair with ours.
 
-  E11's analysis reads its references through this too, so a run it pairs
-  with is held to the same check.
+  E2's arms by default; ``analyze_mixture_gamvine.py`` passes E2b's, and
+  E11's analysis reads its references through this too, so every run
+  paired with a mixture or a chain is held to the same check.
   """
   frames = []
   mine = ours.groupby(KEY)[["seed", "loglik_true"]].first()
