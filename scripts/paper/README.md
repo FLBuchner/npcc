@@ -335,6 +335,13 @@ launchers are in `results/rerun_2026-11-09/scripts/` and its logs in
     `density_recovery_grid_icl.pdf` and `density_recovery_grid_gb.pdf`;
   - `study_2026-11-10_tabpfn_temperature/analysis/{v3,v3.5,vs_v3}/paired.csv`:
     the supplement's temperature ablation.
+- **Reproduced at a later commit.** `analyze.py` changed after b7702e1
+  (85bd4f6 names the qnorm screen's arm), so the two commands above were
+  rerun on 2026-11-12 from 6133dca, on the CPU with `--out` a scratch
+  folder. `overall.csv`, `by_n.csv`, `ranking.csv`, `ranking_agreement.csv`,
+  `paired.csv` and `margins.csv` came out byte-identical to the cited files,
+  and so did the PNG figures. The PDFs embed their creation time and were
+  not compared.
 
 ### Superseded
 
