@@ -8,6 +8,8 @@ stage installed.
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -302,6 +304,64 @@ def test_a_margin_runs_and_is_scored_on_its_own_arms_only(
     "emos-seasonal": {"independence"},
     "linear-gaussian-all": {"independence", "gaussian"},
   }
+
+
+def test_a_chain_order_scored_by_its_log_score_alone_is_evaluated(
+  data_dir: Path,
+  tmp_path: Path,
+  fake_copulas: FakeCopulas,
+  register_linear_gaussian_backend: None,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """An order with nan sample scores must reach the tables as such.
+
+  A chain mixture's orders have a log score and nothing else. Evaluate must
+  keep them, with their log score and nan sample scores, rather than drop
+  them as failed or stop on the nan; the primary summaries then compare
+  them by the log score alone.
+  """
+  del register_linear_gaussian_backend
+  chain = "npcc-chain-linear-gaussian-all"
+  fake_copulas.arms = ("independence", "gaussian", chain)
+  monkeypatch.setitem(sys.modules, _COPULAS, fake_copulas.module())
+  config = tmp_path / "app.toml"
+  config.write_text(
+    config_text(data_dir, stations="[0, 1]").replace(
+      'arms = ["independence", "gaussian"]',
+      f"arms = {json.dumps(list(fake_copulas.arms))}",
+      1,
+    )
+  )
+  out = tmp_path / "run"
+  assert _margins(config, out) == 0
+  assert main(["copulas", "--config", str(config), "--out", str(out)]) == 0
+  assert main(["evaluate", "--config", str(config), "--out", str(out)]) == 0
+  pooled = pd.read_csv(out / "tables" / "copulas_pooled.csv").set_index(
+    ["model", "arm"]
+  )
+  order = pooled.loc[("linear-gaussian-all", f"{chain}-m1")]
+  assert np.isnan(order["energy"]) and np.isnan(order["variogram"])
+  assert np.isfinite(order["joint_nll"])
+  assert np.isfinite(pooled.loc[("linear-gaussian-all", chain), "energy"])
+  failures = pd.read_csv(out / "tables" / "copula_failures.csv")
+  assert failures.empty
+
+  spec = importlib.util.spec_from_file_location(
+    "paired_summary",
+    Path(__file__).resolve().parents[2]
+    / "scripts"
+    / "paper"
+    / "application"
+    / "paired_summary.py",
+  )
+  assert spec is not None and spec.loader is not None
+  summary = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(summary)
+  summary.build(out, out / "analysis", without=[1])
+  paired = pd.read_csv(out / "analysis" / "paired.csv")
+  rows = paired[paired["arm"] == f"{chain}-m1"]
+  assert set(rows["score"]) == {"joint_nll"}
+  assert (rows.loc[rows["stations"] == "all", "n_stations"] == 2).all()
 
 
 def test_an_unknown_arm_or_a_missing_r_stops_before_any_fit(

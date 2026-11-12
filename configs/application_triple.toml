@@ -54,7 +54,12 @@ magnus = "meteoswiss"
 # run, results/application_triple_smoke_2026-11-12). The EMOS margins carry
 # the classical arms, so EMOS with a Gaussian copula is the reference
 # pipeline. At d = 3 every structure is a member of the mixture, so the random
-# arm, one of them, is left out.
+# arm, one of them, is left out. The chain mixtures (E11's chain rule, five
+# variable orders drawn uniformly per station, the vine study's rule) were
+# added to this run after its other arms, from a later commit, into the same
+# folder, on the margins it had stored: the arms are not in the run's
+# signature. Their density and their draws agree exactly; the draws are split
+# equally across the orders. `mixture_k` is also the chain's number of orders.
 [copulas]
 margins = ["emos-seasonal", "tabpfn-quantiles-all"]
 arms = [
@@ -64,6 +69,8 @@ arms = [
   "boostcopula-time",
   "npcc-mixture-tabpfn-quantiles-all",
   "npcc-mixture-tabpfn-quantiles-time",
+  "npcc-chain-tabpfn-quantiles-all",
+  "npcc-chain-tabpfn-quantiles-time",
 ]
 arms_by_margin = { "emos-seasonal" = [
   "independence",

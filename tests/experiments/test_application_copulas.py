@@ -30,7 +30,11 @@ from npcc.experiments.application.copulas import (
 )
 from npcc.experiments.application.marginal_set import MarginalSet
 from npcc.experiments.config import EstimatorSpec
-from npcc.experiments.vine_runner import select_structure
+from npcc.experiments.vine_runner import (
+  chain_factor_seeds,
+  chain_orders,
+  select_structure,
+)
 
 #: The application's quantile levels, the 199 midpoints.
 LEVELS = (np.arange(199) + 0.5) / 199
@@ -287,8 +291,8 @@ def test_an_unknown_arm_or_backend_is_refused(run: Run) -> None:
 
 def test_the_arm_list_holds_every_scope_and_backend() -> None:
   """The runner selects arms from this list; a missing one never runs."""
-  assert len(COPULA_ARMS) == len(set(COPULA_ARMS)) == 16
-  for kind in ("random", "mixture"):
+  assert len(COPULA_ARMS) == len(set(COPULA_ARMS)) == 22
+  for kind in ("random", "mixture", "chain"):
     for backend in ("lightgbm", "tabpfn-quantiles", "tabicl"):
       for scope in ("all", "time"):
         assert f"npcc-{kind}-{backend}-{scope}" in COPULA_ARMS
@@ -395,6 +399,82 @@ def test_a_mixture_of_one_is_its_member(run: Run) -> None:
   results = run("npcc-mixture-lightgbm-time", gaussian_set(d=4), mixture_k=1)
   assert len(results) == 2
   assert_same(results[0], results[1])
+
+
+def test_the_chain_mixture_returns_itself_and_each_order(run: Run) -> None:
+  """The chain mixture must come with every order, each by its log score.
+
+  The orders are the vine study's (``chain_orders`` with the station for the
+  repetition) and their factor seeds too, so the application's chain is the
+  simulations' rule. An order draws only its share of the draws, so its
+  sample scores are nan and it says so, while its log score is finite; the
+  mixture's density is the orders' mean, so Jensen's inequality holds.
+  """
+  ms = gaussian_set(d=3, n_train=150, station=4)
+  arm = "npcc-chain-tabpfn-quantiles-all"
+  results = run(arm, ms, mixture_k=5)
+  assert [r.arm for r in results] == [
+    arm,
+    *(f"{arm}-m{k}" for k in range(1, 6)),
+  ]
+  mixture, members = results[0], results[1:]
+  assert mixture.sampled
+  for scores in (mixture.logcop_test, mixture.joint_nll, mixture.energy):
+    assert np.isfinite(scores).all()
+  orders = chain_orders(1, 3, 4, 5)
+  assert mixture.info["orders"] == orders
+  assert mixture.info["draws_per_case"] == [2, 2, 2, 1, 1]
+  cell_seed = derive_seed(1, 4, ms.model, arm)
+  estimator_id = mixture.info["estimator_id"]
+  assert isinstance(estimator_id, str)
+  info = cast("list[dict[str, object]]", mixture.info["members"])
+  for j, (member, member_info) in enumerate(zip(members, info, strict=True), 1):
+    assert not member.sampled
+    assert np.isfinite(member.joint_nll).all()
+    assert np.isnan(member.energy).all() and np.isnan(member.variogram).all()
+    assert member_info["order"] == orders[j - 1]
+    assert member_info["factor_seeds"] == chain_factor_seeds(
+      cell_seed, estimator_id, j, 3
+    )
+  member_logs = np.stack([m.logcop_test for m in members])
+  assert (mixture.logcop_test >= member_logs.mean(axis=0) - 1e-12).all()
+  assert mixture.timings["fit"] == pytest.approx(
+    sum(m.timings["fit"] for m in members)
+  )
+
+
+def test_the_chain_orders_are_the_stations_own(run: Run) -> None:
+  """One set of orders per station, shared by every marginal model.
+
+  Drawn per marginal model or backend, a difference between two of them
+  would mix the orders' luck into the comparison, as with the random
+  structure.
+  """
+  ms = gaussian_set(d=3, station=9)
+  other = gaussian_set(d=3, station=9, model="tabpfn-quantiles-all", seed=4)
+  first = run("npcc-chain-lightgbm-all", ms, mixture_k=4)[0]
+  second = run("npcc-chain-tabicl-time", other, mixture_k=4)[0]
+  assert (
+    first.info["orders"] == second.info["orders"] == chain_orders(1, 3, 9, 4)
+  )
+
+
+def test_a_chain_splits_the_draws_and_refuses_more_orders_than_draws(
+  run: Run,
+) -> None:
+  """Every case's draws are the orders' shares, none of them empty.
+
+  An order that drew nothing would weigh zero in the sample scores while
+  weighing 1/k in the log score, so the two would describe different
+  mixtures.
+  """
+  assert copulas.split_draws(200, 5) == [40] * 5
+  assert copulas.split_draws(8, 3) == [3, 3, 2]
+  assert sum(copulas.split_draws(7, 7)) == 7
+  with pytest.raises(ValueError, match="every order"):
+    copulas.split_draws(8, 9)
+  with pytest.raises(ValueError, match="every order"):
+    run("npcc-chain-lightgbm-all", gaussian_set(d=3), mixture_k=9)
 
 
 def test_member_draws_are_reproducible_from_the_seed(

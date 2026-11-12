@@ -97,7 +97,8 @@ def paired_by_station(
       ``station``, ``model``, ``arm``, ``reference``, ``score``,
       ``arm_mean``, ``reference_mean`` and ``diff``, for every arm other
       than the reference itself; a reference absent at a station leaves
-      that station out.
+      that station out, and a score either side lacks (nan) leaves that
+      comparison out.
   """
   long = by_station.melt(
     id_vars=list(KEYS), value_vars=list(scores), var_name="score"
@@ -128,6 +129,10 @@ def paired_by_station(
     columns={"value": "arm_mean"}
   )
   out["diff"] = out["arm_mean"] - out["reference_mean"]
+  # A chain mixture's order is scored by its log score alone; its sample
+  # scores are nan, and a comparison it cannot enter is left out rather than
+  # counted.
+  out = out[out["diff"].notna()]
   columns = [*KEYS, "reference", "score", "arm_mean", "reference_mean", "diff"]
   return pd.DataFrame(
     out[columns].sort_values(["reference", "model", "arm", "score", "station"])

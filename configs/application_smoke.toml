@@ -65,6 +65,12 @@ arms = [
   "npcc-mixture-tabpfn-quantiles-time",
   "npcc-mixture-tabicl-all",
   "npcc-mixture-tabicl-time",
+  "npcc-chain-lightgbm-all",
+  "npcc-chain-lightgbm-time",
+  "npcc-chain-tabpfn-quantiles-all",
+  "npcc-chain-tabpfn-quantiles-time",
+  "npcc-chain-tabicl-all",
+  "npcc-chain-tabicl-time",
 ]
 n_draws = 200
 sample_batch_size = 5000

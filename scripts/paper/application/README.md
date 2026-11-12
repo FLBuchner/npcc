@@ -134,6 +134,24 @@ densities at every test case give a CRPS of T of 0.981 and 1.304, depending
 on whether T is drawn first. The random arm is dropped from the full run,
 since at d = 3 it is one of the mixture's members.
 
+**The chain mixture.** `npcc-chain-<backend>-<scope>` is E11's chain rule
+(`npcc.experiments.chain.ChainCopula`, `scripts/paper/README.md`, E11) on a
+marginal set: `mixture_k` copula densities, each written down along a
+variable order, `c(u | x) = prod_k f(u_pi(k) | u_pi(<k), x)`, with one
+TabPFN regression per factor. The orders are drawn uniformly per station by
+the vine study's own functions (`chain_orders`, the station in the
+repetition's place), so at d = 3 five draws from the six orders may repeat
+one, as in the simulations. The density is the orders' mean. The draws are
+split equally across the orders (40 of a case's 200 each), and each order
+draws its share by its own inverse Rosenblatt transform, from the quantile
+tables its density reads, so the mixture's density and its draws describe
+one distribution, even where the margins are not uniform given `x`. Each
+order is also returned as `<arm>-m<k>` and scored by its log score alone:
+its energy, variogram and sample CRPS are `nan` in the tables, and
+`paired_summary.py` leaves those comparisons out. At d = 2 the mixture over
+both orders is the pair copula's density, the mean of its two Rosenblatt
+directions (`tests/experiments/test_chain.py`).
+
 **boostCopula at d = 3.** `r_methods/fit_boostcopula_vine.R` fits any
 d >= 2, starting from an initial matrix of the same pattern as FLBuchner's
 5 x 5, which it reproduces at d = 5. The matrix only supplies the formulas;

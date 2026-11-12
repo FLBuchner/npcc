@@ -125,6 +125,7 @@ class FakeCopulaResult:
   timings: dict[str, float] = field(default_factory=dict)
   info: dict[str, object] = field(default_factory=dict)
   sample_crps: dict[str, np.ndarray] = field(default_factory=dict)
+  sampled: bool = True
 
 
 class FakeCopulaFailure(ValueError):
@@ -165,7 +166,11 @@ class FakeCopulas:
     seed: int,
     device: str | None,
   ) -> list[FakeCopulaResult]:
-    """Independence scores, or a little better for any other arm."""
+    """Independence scores, or a little better for any other arm.
+
+    An ``npcc-chain`` arm also returns one order, ``<arm>-m1``, scored by its
+    log score alone, as the real stage returns a chain mixture's orders.
+    """
     self.calls.append(
       {
         "arm": arm,
@@ -185,7 +190,7 @@ class FakeCopulas:
     n = len(ms.y_test)
     logcop = np.zeros(n) if arm == "independence" else rng.normal(0.2, 0.1, n)
     marginal = -ms.logpdf_test.sum(axis=1)
-    return [
+    results = [
       FakeCopulaResult(
         arm=arm,
         logcop_test=logcop,
@@ -196,6 +201,21 @@ class FakeCopulas:
         info={"seed": seed},
       )
     ]
+    if arm.startswith("npcc-chain-"):
+      order = logcop - 0.05
+      results.append(
+        FakeCopulaResult(
+          arm=f"{arm}-m1",
+          logcop_test=order,
+          joint_nll=marginal - order,
+          energy=np.full(n, np.nan),
+          variogram=np.full(n, np.nan),
+          timings={"fit": 0.01},
+          info={"seed": seed},
+          sampled=False,
+        )
+      )
+    return results
 
   def module(self) -> types.ModuleType:
     """This stage as an importable module."""

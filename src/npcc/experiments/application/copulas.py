@@ -26,7 +26,16 @@ covariates are passed as they are.
   training transforms, each other on weighted random spanning trees
   (:func:`~npcc.experiments.vine_runner.weighted_random_structure`). Its
   copula density is the members' mean. Each member is also returned and
-  scored as ``<arm>-m<k>``, so the selected structure's vine is ``-m1``.
+  scored as ``<arm>-m<k>``, so the selected structure's vine is ``-m1``;
+- ``npcc-chain-<backend>-<scope>``, E11's chain-rule mixture
+  (:class:`~npcc.experiments.chain.ChainCopula`): ``mixture_k`` copula
+  densities written down by the chain rule along variable orders drawn
+  uniformly per station, as the vine study's ``chain`` arm draws them per
+  repetition, by the same functions, on the same margins. Its copula density
+  is the orders' mean, and its draws are exact for it: each order draws its
+  share of every case's ``n_draws``. Each order is also returned as
+  ``<arm>-m<k>``, scored by its log score alone (its energy, variogram and
+  sample CRPS are ``nan``), since it draws only its share.
 
 An npcc arm is fitted with its backend's E1 estimator whole -- backend,
 transform and backend keyword arguments -- taken from the ``estimators``
@@ -45,7 +54,11 @@ mapped to the response scale through the case's quantile table.
 **Mixture draws.** Every member draws ``n_draws`` per case, which its own
 scores need. The mixture's draw ``s`` of case ``i`` is draw ``s`` of case
 ``i`` of a member picked uniformly at random, independently for every
-``(i, s)`` (:func:`mixture_draws`).
+``(i, s)`` (:func:`mixture_draws`). A chain mixture's draws are split
+instead (:func:`split_draws`): each of its ``k`` orders draws
+``n_draws // k`` per case, the first ``n_draws % k`` orders one more, and
+the mixture's draws of a case are theirs side by side, so every case has
+each order's share exactly.
 
 **Seeds.** Every seed derives from the run's ``seed`` with
 :func:`~npcc.experiments._study.derive_seed`: the random structure from
@@ -55,8 +68,15 @@ from ``(seed, "mixture-structure", station, k)``, and the rest from
 name: the torch seed set before a vine is fitted (salted ``"fit"``),
 each sampling chunk's (``"sample"`` and the chunk's index), the NumPy
 generator of independence's and the Gaussian's draws (``"draws"``), the
-mixture's member choice (``"choice"``), and R's seed (unsalted). An npcc
-vine samples ``n_draws`` rows per case in chunks of at most
+mixture's member choice (``"choice"``), and R's seed (unsalted). A chain
+mixture's orders are the vine study's
+(:func:`~npcc.experiments.vine_runner.chain_orders`) with the station in
+the repetition's place, ``derive_seed(seed, "chain", d, station, j)`` for
+order ``j``, so they are shared across marginal models and backends; its
+factors' torch seeds are the vine study's too
+(:func:`~npcc.experiments.vine_runner.chain_factor_seeds`), from the cell
+seed ``derive_seed(seed, station, model, arm)``. An npcc
+vine or chain order samples its rows per case in chunks of at most
 ``sample_batch_size`` rows over the flattened cases and draws, so its
 draws are reproducible for a fixed chunk size and case order.
 
@@ -111,8 +131,11 @@ from npcc.experiments.application.joint_scores import (
   variogram_score,
 )
 from npcc.experiments.application.marginal_set import MarginalSet
+from npcc.experiments.chain import ChainCopula
 from npcc.experiments.config import EstimatorSpec
 from npcc.experiments.vine_runner import (
+  chain_factor_seeds,
+  chain_orders,
   mixture_log_density,
   select_structure,
   weighted_random_structure,
@@ -140,7 +163,7 @@ COPULA_ARMS: tuple[str, ...] = (
   *(f"boostcopula-{scope}" for scope in SCOPES),
   *(
     f"npcc-{kind}-{backend}-{scope}"
-    for kind in ("random", "mixture")
+    for kind in ("random", "mixture", "chain")
     for backend in BACKENDS
     for scope in SCOPES
   ),
@@ -188,6 +211,10 @@ class CopulaResult:
   sample_crps : dict of str to numpy.ndarray
       With derived responses only: every response's CRPS of each test case,
       modeled and derived, estimated from the draws in its own units.
+  sampled : bool
+      Whether the sample scores come from draws of this copula; ``False``
+      for a chain mixture's order, scored by its log score alone, whose
+      ``energy`` and ``variogram`` are ``nan``.
   """
 
   arm: str
@@ -198,6 +225,7 @@ class CopulaResult:
   timings: dict[str, float]
   info: dict[str, object]
   sample_crps: dict[str, np.ndarray] = field(default_factory=dict)
+  sampled: bool = True
 
 
 class CopulaFailure(ValueError):
@@ -353,6 +381,36 @@ def all_structures(d: int) -> list[pv.RVineStructure]:
   )
 
 
+def split_draws(n_draws: int, k: int) -> list[int]:
+  """Each of ``k`` orders' share of a case's ``n_draws``.
+
+  Parameters
+  ----------
+  n_draws : int
+      Draws per case.
+  k : int
+      Orders, at most ``n_draws``.
+
+  Returns
+  -------
+  list of int
+      ``n_draws // k`` for each order, the first ``n_draws % k`` one more;
+      they sum to ``n_draws``.
+
+  Raises
+  ------
+  ValueError
+      If ``k`` is not in ``1, ..., n_draws``, so an order would draw nothing.
+  """
+  if not 1 <= k <= n_draws:
+    raise ValueError(
+      f"k must be between 1 and n_draws = {n_draws}, so that every order "
+      f"draws; got {k}"
+    )
+  share, extra = divmod(n_draws, k)
+  return [share + (1 if j < extra else 0) for j in range(k)]
+
+
 def mixture_draws(
   member_draws: np.ndarray, generator: np.random.Generator
 ) -> np.ndarray:
@@ -450,7 +508,7 @@ def run_copula_arm(
   sample_batch_size : int
       The most rows an npcc vine samples in one call.
   mixture_k : int
-      A mixture's number of members.
+      A mixture's number of members, and a chain mixture's number of orders.
   seed : int
       The run's seed, from which every seed of the arm derives.
   device : str or None
@@ -460,8 +518,8 @@ def run_copula_arm(
   Returns
   -------
   list of CopulaResult
-      The arm's result; for a mixture, the mixture's followed by each
-      member's, ``<arm>-m1`` to ``<arm>-m<mixture_k>``.
+      The arm's result; for a mixture or a chain mixture, the mixture's
+      followed by each member's, ``<arm>-m1`` to ``<arm>-m<mixture_k>``.
 
   Raises
   ------
@@ -515,6 +573,8 @@ def run_copula_arm(
       )
       if parsed.kind == "npcc-random":
         results = [vines.random(arm)]
+      elif parsed.kind == "npcc-chain":
+        results = vines.chain(arm, mixture_k)
       else:
         results = vines.mixture(arm, mixture_k)
   for result in results:
@@ -650,6 +710,45 @@ def _score(
     timings=timings,
     info=info,
     sample_crps=sample_crps,
+  )
+
+
+def _log_score_only(
+  name: str,
+  inputs: _Inputs,
+  logcop: np.ndarray,
+  timings: dict[str, float],
+  info: dict[str, object],
+) -> CopulaResult:
+  """A copula scored by its log score alone; its sample scores are ``nan``."""
+  ms = inputs.ms
+  t0 = perf_counter()
+  nll = joint_nll(logcop, ms.logpdf_test)
+  bad = np.flatnonzero(~np.isfinite(nll))
+  if bad.size:
+    raise CopulaFailure(
+      f"{name}'s joint log-likelihood must be finite; got non-finite values "
+      f"at {bad.size} test cases",
+      bad,
+    )
+  timings["scoring"] = perf_counter() - t0
+  if ms.derived:
+    info = {
+      **info,
+      "modeled": list(ms.variables),
+      "derived": list(ms.derived),
+      "magnus": ms.derivation.magnus,
+    }
+  missing = np.full(len(ms.y_test), np.nan)
+  return CopulaResult(
+    arm=name,
+    logcop_test=logcop,
+    joint_nll=nll,
+    energy=missing,
+    variogram=missing.copy(),
+    timings=timings,
+    info=info,
+    sampled=False,
   )
 
 
@@ -799,17 +898,24 @@ class _Vines:
     return logcop, uniforms, timings
 
   def _sample(
-    self, vine: RosenblattVinecop, salt: tuple[object, ...]
+    self,
+    model: RosenblattVinecop | ChainCopula,
+    salt: tuple[object, ...],
+    n_draws: int | None = None,
   ) -> np.ndarray:
-    """``n_draws`` draws per test case, sampled in bounded chunks."""
+    """``n_draws`` draws per test case, sampled in bounded chunks.
+
+    ``n_draws`` defaults to the run's; a chain mixture's order passes its
+    share.
+    """
     n, d = self.u_test.shape
-    n_draws = self.inputs.n_draws
+    n_draws = self.inputs.n_draws if n_draws is None else n_draws
     total = n * n_draws
     out = np.empty((total, d), dtype=np.float64)
     for chunk, start in enumerate(range(0, total, self.sample_batch_size)):
       stop = min(start + self.sample_batch_size, total)
       rows = torch.arange(start, stop) // n_draws
-      draws = vine.sample(
+      draws = model.sample(
         stop - start,
         seeds=[derive_seed(*salt, "sample", chunk)],
         x=self.x_test[rows],
@@ -924,6 +1030,84 @@ class _Vines:
       "members": members_info,
       "n_distinct_structures": len(distinct),
       "choice_seed": choice_seed,
+    }
+    mixture = _score(arm, self.inputs, logcop, uniforms, timings, info)
+    return [mixture, *members]
+
+  def chain(self, arm: str, k: int) -> list[CopulaResult]:
+    """The chain-rule mixture over ``k`` variable orders, then each order.
+
+    Each order is fitted, evaluated at the test cases, sampled for its share
+    of the draws (:func:`split_draws`) and released before the next, so only
+    one order's factors occupy the device at a time. An order is scored by
+    its log score alone.
+    """
+    ms = self.inputs.ms
+    d = len(ms.variables)
+    counts = split_draws(self.inputs.n_draws, k)
+    orders = chain_orders(self.inputs.seed, d, ms.station, k)
+    cell_seed = derive_seed(*self.inputs.salt(arm))
+    estimator_id = str(self.info["estimator_id"])
+    members: list[CopulaResult] = []
+    members_info: list[dict[str, object]] = []
+    logs: list[np.ndarray] = []
+    draws: list[np.ndarray] = []
+    for j, (order, count) in enumerate(zip(orders, counts, strict=True), 1):
+      name = f"{arm}-m{j}"
+      seeds = chain_factor_seeds(cell_seed, estimator_id, j, d)
+      _synchronize()
+      t0 = perf_counter()
+      chain = ChainCopula(order, self.controls).fit(
+        self.u_train, x=self.x_train, seeds=seeds
+      )
+      _synchronize()
+      timings = {"fit": perf_counter() - t0}
+      t0 = perf_counter()
+      with torch.inference_mode():
+        logcop = to_numpy(
+          chain.logpdf(self.u_test, x=self.x_test), dtype=np.float64
+        )
+        uniforms = self._sample(chain, self.inputs.salt(name), count)
+      _synchronize()
+      timings["copula_prediction"] = perf_counter() - t0
+      del chain
+      release_gpu()
+      member_info: dict[str, object] = {
+        "member": j,
+        "arm": name,
+        "order": order,
+        "factor_seeds": seeds,
+        "draws_per_case": count,
+      }
+      members_info.append(member_info)
+      members.append(
+        _log_score_only(
+          name, self.inputs, logcop, timings, {**self.info, **member_info}
+        )
+      )
+      logs.append(logcop)
+      draws.append(uniforms)
+
+    t0 = perf_counter()
+    logcop = to_numpy(
+      mixture_log_density(torch.from_numpy(np.stack(logs))), dtype=np.float64
+    )
+    uniforms = np.concatenate(draws, axis=1)
+    mixing = perf_counter() - t0
+    timings = {
+      stage: sum(m.timings[stage] for m in members)
+      for stage in ("fit", "copula_prediction")
+    }
+    timings["copula_prediction"] += mixing
+    info = {
+      **self.info,
+      "context": "chain-rule",
+      "mixture_k": k,
+      "orders": orders,
+      "n_distinct_orders": len({tuple(o) for o in orders}),
+      "cell_seed": cell_seed,
+      "draws_per_case": counts,
+      "members": members_info,
     }
     mixture = _score(arm, self.inputs, logcop, uniforms, timings, info)
     return [mixture, *members]

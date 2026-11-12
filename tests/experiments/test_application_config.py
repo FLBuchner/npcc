@@ -92,7 +92,7 @@ def test_the_full_config_holds_the_decided_models_and_arms() -> None:
   assert smoke.stations == (0,)
   assert smoke.signature() == config.signature()
   assert smoke.copula_models == smoke.models == config.models
-  assert len(smoke.copula_arms) == 16
+  assert len(smoke.copula_arms) == 22
   assert set(config.copula_arms) <= set(smoke.copula_arms)
 
 

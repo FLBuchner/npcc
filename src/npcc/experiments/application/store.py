@@ -712,8 +712,20 @@ def write_copula(
         for v, values in result.sample_crps.items()
       },
     }
+    # A result scored by its log score alone, a chain mixture's order, has
+    # no draws of its own: its sample scores are nan throughout.
+    unsampled = (
+      () if getattr(result, "sampled", True) else ("energy", "variogram")
+    )
     for name, values in columns.items():
       values = np.asarray(values)
+      if name in unsampled:
+        if values.shape != (n_test,) or not np.isnan(values).all():
+          raise ValueError(
+            f"{result.arm}'s {name} must be nan with shape ({n_test},), as it "
+            f"draws nothing of its own; got shape {values.shape}"
+          )
+        continue
       if values.shape != (n_test,) or not np.isfinite(values).all():
         raise ValueError(
           f"{result.arm}'s {name} must be finite with shape ({n_test},); got "

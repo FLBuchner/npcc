@@ -294,6 +294,54 @@ def test_a_copula_result_of_the_wrong_shape_is_refused(
   assert copula_status(tmp_path, 1, "linear-gaussian-all", "gaussian") is None
 
 
+def test_an_order_scored_by_its_log_score_alone_is_stored_with_nan(
+  tmp_path: Path, station: StationData, margins: StationMargins
+) -> None:
+  """Only a result that says it drew nothing may carry nan sample scores.
+
+  A chain mixture's order draws only its share of the draws, so its energy
+  and variogram are nan; any other result with a nan score is a defect, and
+  an order that claims no draws but has finite sample scores is one too.
+  """
+  _store(tmp_path, station, margins, "linear-gaussian-all")
+  ms = read_marginal_set(tmp_path, station.station, "linear-gaussian-all")
+  arm = "npcc-chain-linear-gaussian-all"
+  mixture, order = FakeCopulas().run_copula_arm(
+    arm,
+    ms,
+    estimators={},
+    n_draws=4,
+    sample_batch_size=10,
+    mixture_k=1,
+    seed=3,
+    device=None,
+  )
+  write = {"rows": station.row_test, "seed": 3, "wall_seconds": 0.1}
+  with pytest.raises(ValueError, match="energy must be finite"):
+    write_copula(
+      tmp_path,
+      ms,
+      arm,
+      [mixture, dataclasses.replace(order, sampled=True)],
+      **write,
+    )
+  with pytest.raises(ValueError, match="energy must be nan"):
+    write_copula(
+      tmp_path,
+      ms,
+      arm,
+      [mixture, dataclasses.replace(order, energy=mixture.energy)],
+      **write,
+    )
+  write_copula(tmp_path, ms, arm, [mixture, order], **write)
+  scores = read_copula_tables(tmp_path, [1], ["linear-gaussian-all"], [arm])[
+    "scores"
+  ].set_index("arm")
+  assert scores.loc[f"{arm}-m1", "energy"].isna().all()
+  assert scores.loc[arm, "energy"].notna().all()
+  assert scores["joint_nll"].notna().all()
+
+
 def test_tables_of_a_missing_unit_are_refused(
   tmp_path: Path, station: StationData, margins: StationMargins
 ) -> None:

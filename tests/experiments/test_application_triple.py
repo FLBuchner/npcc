@@ -219,9 +219,9 @@ def test_the_triple_config_reads_its_design(tmp_path: Path) -> None:
 def test_the_shipped_triple_configs(name: str) -> None:
   """The measured triple, with each run's margins and arms.
 
-  The full run must not fit an npcc copula to the EMOS margins, whose PITs
-  are not uniform given the covariates; the smoke run fitted every arm to
-  both, and its config must still say so.
+  The full run must not fit an npcc copula, vine or chain, to the EMOS
+  margins, whose PITs are not uniform given the covariates; the smoke run
+  fitted every vine arm to both, and its config must still say so.
   """
   config = load_config(_ROOT / "configs" / f"{name}.toml")
 
@@ -248,7 +248,11 @@ def test_the_shipped_triple_configs(name: str) -> None:
     assert config.copula_arms == (*classical, *randoms, *mixtures)
     assert config.copula_arms_for("emos-seasonal") == config.copula_arms
   else:
-    assert config.copula_arms == (*classical, *mixtures)
+    chains = (
+      "npcc-chain-tabpfn-quantiles-all",
+      "npcc-chain-tabpfn-quantiles-time",
+    )
+    assert config.copula_arms == (*classical, *mixtures, *chains)
     assert config.copula_arms_for("emos-seasonal") == classical
   assert config.copula_arms_for("tabpfn-quantiles-all") == config.copula_arms
   assert config.responses[RELATIVE_HUMIDITY].transform == "logit"
