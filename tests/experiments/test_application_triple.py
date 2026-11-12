@@ -1,9 +1,8 @@
-"""The triple design: (T, Td, p) modeled, relative humidity and w derived."""
+"""The triple design: (T, RH, p) modeled, the dew point and w derived."""
 
 from __future__ import annotations
 
 import json
-import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +16,7 @@ from npcc.experiments._study import derive_seed
 from npcc.experiments.application import copulas
 from npcc.experiments.application.cli import main
 from npcc.experiments.application.config import load_config
+from npcc.experiments.application.data import write_synthetic
 from npcc.experiments.application.derived import (
   DEW_POINT,
   MAGNUS,
@@ -28,11 +28,11 @@ from npcc.experiments.application.derived import (
   TEMPERATURE,
   Derivation,
   derive,
+  dew_point,
   mixing_ratio,
-  nudge_saturated,
-  relative_humidity,
-  saturation_dew_point,
+  residuals,
   saturation_vapor_pressure,
+  vapor_pressure,
 )
 from npcc.experiments.application.emos import gaussian_crps
 from npcc.experiments.application.joint_scores import (
@@ -42,16 +42,18 @@ from npcc.experiments.application.joint_scores import (
 )
 from npcc.experiments.application.marginal_set import MarginalSet
 from npcc.experiments.application.store import read_marginal_set
+from npcc.experiments.config import EstimatorSpec
 from tests.experiments._application import config_text
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "r_methods" / "fit_boostcopula_vine.R"
-_MODELED = (TEMPERATURE, DEW_POINT, PRESSURE)
-_DERIVED = (RELATIVE_HUMIDITY, MIXING_RATIO)
-_TRIPLE = """
-modeled = ["obs:air_temperature", "obs:dew_point_temperature", "obs:surface_air_pressure"]
-derived = ["obs:relative_humidity", "obs:water_vapor_mixing_ratio"]
-"""
+_MODELED = (TEMPERATURE, RELATIVE_HUMIDITY, PRESSURE)
+_DERIVED = (DEW_POINT, MIXING_RATIO)
+_TRIPLE = (
+  'modeled = ["obs:air_temperature", "obs:relative_humidity", '
+  '"obs:surface_air_pressure"]\n'
+  'derived = ["obs:dew_point_temperature", "obs:water_vapor_mixing_ratio"]\n'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -59,133 +61,126 @@ derived = ["obs:relative_humidity", "obs:water_vapor_mixing_ratio"]
 # ---------------------------------------------------------------------------
 
 
-def test_the_formulas_give_the_hand_values() -> None:
-  """A wrong constant would derive another humidity from every draw.
+def test_meteoswiss_magnus_gives_the_hand_values_on_both_sides_of_zero() -> (
+  None
+):
+  """A wrong constant or branch would derive another Td from every draw.
 
-  By hand: ``e_s(0) = 6.112``; ``e_s(10) = 6.112 exp(176.2 / 253.12) =
-  12.2603``; ``e_s(20) = 6.112 exp(352.4 / 263.12) = 23.3263`` hPa; so
-  ``RH(20, 10) = 52.560`` and ``w(10, 1000) = 622 x 12.2603 / 987.7397 =
-  7.7205`` g/kg.
+  By hand: ``6.107 exp(173.68 / 248.83) = 12.2733`` hPa at 10 C,
+  ``6.108 exp(-178.56 / 235.52) = 2.86179`` hPa at -10 C, and 6.107 at 0.
   """
   np.testing.assert_allclose(
-    saturation_vapor_pressure(np.array([0.0, 10.0, 20.0])),
-    [6.112, 12.2603, 23.3263],
-    rtol=2e-5,
-  )
-  assert float(relative_humidity(np.array(20.0), np.array(10.0))) == (
-    pytest.approx(52.560, rel=1e-4)
-  )
-  assert float(
-    mixing_ratio(np.array(20.0), np.array(10.0), np.array(1000.0))
-  ) == pytest.approx(7.7205, rel=1e-4)
-  t = np.array([-12.0, 3.5, 31.0])
-  np.testing.assert_array_equal(relative_humidity(t, t), [100.0] * 3)
-
-
-def test_the_meteoswiss_formula_is_piecewise_at_zero() -> None:
-  """Zanetta et al.'s constants: one set at and above 0 C, another below.
-
-  By hand: ``6.107 exp(173.68 / 248.83) = 12.2733`` hPa at 10 C and
-  ``6.108 exp(-178.56 / 235.52) = 2.86179`` hPa at -10 C.
-  """
-  np.testing.assert_allclose(
-    METEOSWISS.saturation_vapor_pressure(np.array([10.0, -10.0, 0.0])),
+    saturation_vapor_pressure(np.array([10.0, -10.0, 0.0])),
     [12.2733, 2.86179, 6.107],
     rtol=2e-5,
   )
-  for magnus in (SONNTAG_1990, METEOSWISS):
-    t = np.array([-25.0, -0.5, 0.0, 0.5, 30.0])
-    np.testing.assert_allclose(
-      magnus.dew_point(magnus.saturation_vapor_pressure(t)), t, atol=1e-10
-    )
-  assert MAGNUS == {"sonntag1990": SONNTAG_1990, "meteoswiss": METEOSWISS}
-  rh = relative_humidity(np.array(20.0), np.array(10.0), magnus=METEOSWISS)
-  assert float(rh) != pytest.approx(52.560, rel=1e-4)
-
-
-def test_a_dew_point_above_the_temperature_is_clipped_only_if_asked() -> None:
-  """The data never has Td > T; whether a draw that does reads as saturated
-  is the clip's choice, off by default."""
-  t, p = np.array([5.0, 5.0]), np.array([950.0, 950.0])
-  above = np.array([7.0, 5.0])
-
-  np.testing.assert_array_equal(
-    relative_humidity(t, above, clip=True), [100.0, 100.0]
+  np.testing.assert_allclose(
+    SONNTAG_1990.saturation_vapor_pressure(np.array([0.0, 20.0])),
+    [6.112, 23.3263],
+    rtol=2e-5,
   )
-  np.testing.assert_array_equal(
-    mixing_ratio(t, above, p, clip=True), mixing_ratio(t, t, p)
+  assert dict(MAGNUS) == {
+    "sonntag1990": SONNTAG_1990,
+    "meteoswiss": METEOSWISS,
+  }
+
+
+@pytest.mark.parametrize("name", ["meteoswiss", "sonntag1990"])
+def test_the_dew_point_inverts_the_formula_across_zero(name: str) -> None:
+  """The inverse takes the branch of Td's own sign, also just around 0 C.
+
+  MeteoSwiss's two branches overlap: ``e_s`` jumps from 6.108 just below 0
+  to 6.107 at 0, so a vapor pressure in between has a dew point on each
+  side, 0.0023 C apart at most; the inverse takes the one at or above 0.
+  """
+  formula = MAGNUS[name]
+  t = np.array([-30.0, -5.0, -0.3, -0.01, 0.0, 1e-6, 0.3, 5.0, 35.0])
+  np.testing.assert_allclose(
+    formula.dew_point(formula.saturation_vapor_pressure(t)), t, atol=1e-9
   )
-  unclipped = relative_humidity(t, above)
-  assert unclipped[0] > 100.0
-  assert unclipped[1] == 100.0
-  assert mixing_ratio(t, above, p)[0] > mixing_ratio(t, t, p)[0]
+  near = np.array([-1e-3, -1e-6])
+  back = formula.dew_point(formula.saturation_vapor_pressure(near))
+  np.testing.assert_allclose(back, near, atol=2.5e-3)
+  td = dew_point(np.array([2.0, 2.0]), np.array([100.0, 60.0]), formula)
+  assert td[0] == pytest.approx(2.0, abs=1e-12)
+  assert td[1] < 0.0
+  np.testing.assert_allclose(
+    formula.saturation_vapor_pressure(td[1:]),
+    0.6 * formula.saturation_vapor_pressure(np.array([2.0])),
+    rtol=1e-12,
+  )
 
 
-def test_derived_draws_and_the_count_of_td_above_t() -> None:
-  """Every draw derives both responses; Td > T is counted, clipped or not."""
+def test_the_mixing_ratio_gives_the_hand_value() -> None:
+  """``e = 0.5 x 12.2733 = 6.13665`` hPa; ``w = 622 x 6.13665 / 893.86335``.
+
+  That is 4.27027 g/kg at T = 10 C, RH = 50 % and p = 900 hPa.
+  """
+  e = vapor_pressure(np.array(10.0), np.array(50.0))
+  assert float(e) == pytest.approx(6.13665, rel=2e-5)
+  w = mixing_ratio(np.array(10.0), np.array(50.0), np.array(900.0))
+  assert float(w) == pytest.approx(4.27027, rel=2e-5)
+
+
+def test_derived_draws_follow_each_triple() -> None:
+  """Every draw of (T, RH, p) gives its own Td and w; RH = 100 gives Td = T."""
   draws = np.array(
     [
-      [[10.0, 4.0, 900.0], [10.0, 12.0, 905.0], [0.0, -1.0, 1000.0]],
-      [[20.0, 20.5, 950.0], [20.0, 19.0, 950.0], [20.0, 20.0, 950.0]],
+      [[10.0, 100.0, 900.0], [10.0, 40.0, 905.0], [-2.0, 85.0, 1000.0]],
+      [[0.2, 99.5, 950.0], [-0.2, 100.0, 950.0], [25.0, 30.0, 950.0]],
     ]
   )
-  values, above = derive(draws, _MODELED, _DERIVED)
-  clipped, above_too = derive(
-    draws, _MODELED, _DERIVED, Derivation(clip_dew_point=True)
-  )
+  values = derive(draws, _MODELED, _DERIVED)
 
   assert values.shape == (2, 3, 2)
   np.testing.assert_array_equal(
-    above, [[False, True, False], [True, False, False]]
-  )
-  np.testing.assert_array_equal(above, above_too)
-  np.testing.assert_array_equal(
-    values[..., 0], relative_humidity(draws[..., 0], draws[..., 1])
+    values[..., 0], dew_point(draws[..., 0], draws[..., 1])
   )
   np.testing.assert_array_equal(
-    values[..., 1],
-    mixing_ratio(draws[..., 0], draws[..., 1], draws[..., 2]),
+    values[..., 1], mixing_ratio(draws[..., 0], draws[..., 1], draws[..., 2])
   )
-  assert values[0, 1, 0] > 100.0
-  assert clipped[0, 1, 0] == 100.0
-  np.testing.assert_array_equal(clipped[~above], values[~above])
-  assert above.mean(axis=1).tolist() == [1 / 3, 1 / 3]
-  meteo, _ = derive(draws, _MODELED, _DERIVED, Derivation(magnus="meteoswiss"))
-  np.testing.assert_array_equal(
-    meteo[..., 0],
-    relative_humidity(draws[..., 0], draws[..., 1], magnus=METEOSWISS),
+  at_saturation = draws[..., 1] == 100.0
+  np.testing.assert_allclose(
+    values[..., 0][at_saturation], draws[..., 0][at_saturation], atol=1e-12
   )
+  assert (values[..., 0] <= draws[..., 0] + 1e-12).all()
+  sonntag = derive(draws, _MODELED, _DERIVED, Derivation("sonntag1990"))
+  assert not np.allclose(sonntag[..., 0], values[..., 0])
 
 
 def test_a_derived_response_needs_its_inputs_modeled() -> None:
-  """RH without a modeled dew point has nothing to be computed from."""
+  """Td without a modeled RH has nothing to be computed from."""
   draws = np.zeros((1, 2, 2))
   with pytest.raises(ValueError, match="not modeled"):
-    derive(draws, (TEMPERATURE, PRESSURE), (RELATIVE_HUMIDITY,))
+    derive(draws, (TEMPERATURE, PRESSURE), (DEW_POINT,))
   with pytest.raises(ValueError, match="derived must be drawn"):
-    derive(draws, (TEMPERATURE, DEW_POINT), (PRESSURE,))
+    derive(draws, (TEMPERATURE, RELATIVE_HUMIDITY), (PRESSURE,))
 
 
-def test_the_saturation_nudge_is_his_rh_nudge_on_the_dew_point() -> None:
-  """A case with Td = T moves to where the Magnus RH is 99.95 when asked.
+def test_the_residual_check_reproduces_observed_values_to_rounding() -> None:
+  """On values rounded as the data stores them, the check reports rounding.
 
-  It is counted whether or not it moves.
+  The observed Td and w here are the derivation's own, rounded to 0.1 and
+  0.01, so its residuals are rounding errors; another formula's are not.
   """
-  t = np.array([-20.0, 0.0, 15.0, 35.0])
-  for magnus in (SONNTAG_1990, METEOSWISS):
-    td = saturation_dew_point(t, 0.05, magnus)
-    np.testing.assert_allclose(
-      relative_humidity(t, td, magnus=magnus), 99.95, rtol=1e-12
-    )
-    assert (td < t).all()
-  td = saturation_dew_point(t, 0.05)
-  observed = np.array([-20.0, -3.0, 15.0, 30.0])
-  moved, count = nudge_saturated(t, observed, 0.05)
-  assert count == 2
-  np.testing.assert_array_equal(moved, [td[0], -3.0, td[2], 30.0])
-  same, counted = nudge_saturated(t, observed, 0.0)
-  assert counted == 2
-  np.testing.assert_array_equal(same, observed)
+  rng = np.random.default_rng(2)
+  t = np.round(rng.uniform(-15, 30, 500), 1)
+  rh = np.round(rng.uniform(20, 100, 500), 1)
+  p = np.round(rng.uniform(850, 1030, 500), 1)
+  values = np.column_stack([t, rh, p])
+  observed = np.column_stack(
+    [np.round(dew_point(t, rh), 1), np.round(mixing_ratio(t, rh, p), 2)]
+  )
+
+  found = residuals(values, _MODELED, _DERIVED, observed)
+  assert found[DEW_POINT]["max_abs"] <= 0.05 + 1e-9
+  assert found[MIXING_RATIO]["max_abs"] <= 0.005 + 1e-9
+  assert 0 < found[DEW_POINT]["sd"] < 0.035
+  assert found[DEW_POINT]["n"] == 500
+  wrong = residuals(
+    values, _MODELED, _DERIVED, observed, Derivation("sonntag1990")
+  )
+  assert wrong[DEW_POINT]["max_abs"] > 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -210,8 +205,7 @@ def test_the_triple_config_reads_its_design(tmp_path: Path) -> None:
 
   assert config.modeled == _MODELED
   assert config.derived == _DERIVED
-  assert config.saturation_nudge == 0.0
-  assert config.derivation == Derivation()
+  assert config.derivation == Derivation("meteoswiss")
   assert not config.is_default_design
   assert default.is_default_design
   assert config.signature() != default.signature()
@@ -223,19 +217,27 @@ def test_the_triple_config_reads_its_design(tmp_path: Path) -> None:
   "name", ["application_triple", "application_smoke_triple"]
 )
 def test_the_shipped_triple_configs(name: str) -> None:
-  """The triple runs the full run's margins and arms, on (T, Td, p)."""
+  """The measured triple, with the full run's margins and arms."""
   config = load_config(_ROOT / "configs" / f"{name}.toml")
 
   assert config.modeled == _MODELED
   assert config.derived == _DERIVED
-  # Both pending the user's decision, so off.
-  assert config.saturation_nudge == 0.0
-  assert not config.clip_dew_point
-  assert config.magnus == "sonntag1990"
+  assert config.magnus == "meteoswiss"
   assert config.models == ("emos-seasonal", "tabpfn-quantiles-all")
   assert config.copula_models == config.models
-  full = load_config(_ROOT / "configs" / "application.toml")
-  assert config.copula_arms == full.copula_arms
+  assert config.copula_arms == (
+    "independence",
+    "gaussian",
+    "boostcopula-all",
+    "boostcopula-time",
+    "npcc-random-tabpfn-quantiles-all",
+    "npcc-random-tabpfn-quantiles-time",
+    "npcc-mixture-tabpfn-quantiles-all",
+    "npcc-mixture-tabpfn-quantiles-time",
+  )
+  assert config.responses[RELATIVE_HUMIDITY].transform == "logit"
+  assert config.responses[RELATIVE_HUMIDITY].boundary_nudge == 0.05
+  assert config.device_for("tabpfn-quantiles") == "cuda"
   assert config.stations == ((0,) if "smoke" in name else None)
 
 
@@ -243,63 +245,40 @@ def test_the_shipped_triple_configs(name: str) -> None:
 @pytest.mark.parametrize(
   ("block", "match"),
   [
-    ('\nmodeled = ["obs:air_temperature", "obs:wind"]\n', "subset"),
-    ("\nmodeled = []\n", "subset"),
+    ('modeled = ["obs:air_temperature", "obs:wind"]\n', "subset"),
+    ("modeled = []\n", "subset"),
     (
-      '\nmodeled = ["obs:air_temperature", "obs:dew_point_temperature"]\n'
+      'modeled = ["obs:air_temperature", "obs:relative_humidity"]\n'
       'derived = ["obs:water_vapor_mixing_ratio"]\n',
       "not modeled",
     ),
     (
-      '\nmodeled = ["obs:air_temperature", "obs:dew_point_temperature", '
-      '"obs:surface_air_pressure", "obs:relative_humidity"]\n'
-      'derived = ["obs:relative_humidity"]\n',
+      'modeled = ["obs:air_temperature", "obs:relative_humidity", '
+      '"obs:surface_air_pressure", "obs:dew_point_temperature"]\n'
+      'derived = ["obs:dew_point_temperature"]\n',
       "not both",
     ),
     (
-      '\nmodeled = ["obs:air_temperature", "obs:dew_point_temperature", '
-      '"obs:surface_air_pressure"]\nderived = ["obs:relative_humidity"]\n',
+      'modeled = ["obs:air_temperature", "obs:relative_humidity", '
+      '"obs:surface_air_pressure"]\nderived = ["obs:dew_point_temperature"]\n',
       "modeled or derived",
     ),
     (
-      '\nmodeled = ["obs:air_temperature", "obs:relative_humidity", '
+      'modeled = ["obs:air_temperature", "obs:dew_point_temperature", '
       '"obs:surface_air_pressure", "obs:water_vapor_mixing_ratio"]\n'
-      'derived = ["obs:dew_point_temperature"]\n',
+      'derived = ["obs:relative_humidity"]\n',
       "with a formula",
     ),
-    (_TRIPLE + "saturation_nudge = 100.0\n", r"\[0, 100\)"),
-    (_TRIPLE + 'saturation_nudge = "0.05"\n', "number"),
     (_TRIPLE + 'magnus = "goff-gratch"\n', "magnus must be one of"),
-    (_TRIPLE + 'clip_dew_point = "yes"\n', "true or false"),
-    ("\nclip_dew_point = true\n", "unless responses are derived"),
-    (
-      "\nsaturation_nudge = 0.05\n" + '\nmodeled = ["obs:air_temperature", '
-      '"obs:relative_humidity", "obs:surface_air_pressure", '
-      '"obs:water_vapor_mixing_ratio", "obs:dew_point_temperature"]\n',
-      None,
-    ),
-    (
-      '\nmodeled = ["obs:air_temperature", "obs:relative_humidity", '
-      '"obs:surface_air_pressure", "obs:water_vapor_mixing_ratio"]\n'
-      "saturation_nudge = 0.05\n",
-      "both modeled",
-    ),
+    (_TRIPLE + "saturation_nudge = 0.05\n", "saturation_nudge"),
   ],
 )
 def test_a_design_that_cannot_be_derived_is_refused(
-  tmp_path: Path, block: str, match: str | None
+  tmp_path: Path, block: str, match: str
 ) -> None:
-  """A derived response without inputs, or a response left out, must stop.
-
-  The one config here that does load models every response and nudges the
-  dew point, which the triple's checks allow.
-  """
-  path = _triple_config(tmp_path, block)
-  if match is None:
-    assert load_config(path).saturation_nudge == 0.05
-    return
+  """A derived response without inputs, or a response left out, must stop."""
   with pytest.raises((ValueError, TypeError), match=match):
-    load_config(path)
+    load_config(_triple_config(tmp_path, block))
 
 
 # ---------------------------------------------------------------------------
@@ -310,21 +289,20 @@ def test_a_design_that_cannot_be_derived_is_refused(
 def _triple_set(
   n_train: int = 120, n_test: int = 5, seed: int = 0
 ) -> MarginalSet:
-  """Gaussian margins of (T, Td, p), RH and w derived from the observations."""
+  """Gaussian margins of (T, RH, p), Td and w derived from the observations."""
   rng = np.random.default_rng(seed)
-  mu = np.array([12.0, 6.0, 950.0])
-  sigma = np.array([4.0, 3.0, 8.0])
+  mu = np.array([12.0, 70.0, 950.0])
+  sigma = np.array([4.0, 8.0, 8.0])
   levels = (np.arange(99) + 0.5) / 99
 
   def sample(n: int) -> np.ndarray:
     y = mu + sigma * rng.standard_normal((n, 3))
-    y[:, 1] = np.minimum(y[:, 1], y[:, 0])
+    y[:, 1] = np.clip(y[:, 1], 5.0, 100.0)
     return y
 
   y_train, y_test = sample(n_train), sample(n_test)
-  derived_train, _ = derive(y_train, _MODELED, _DERIVED)
-  derived_test, _ = derive(y_test, _MODELED, _DERIVED)
   quantiles = mu + sigma * stats.norm.ppf(levels)[:, None]
+  quantiles[:, 1] = np.clip(quantiles[:, 1], 1.0, 100.0)
   x = rng.standard_normal((n_train + n_test, 2))
   return MarginalSet(
     station=4,
@@ -335,12 +313,8 @@ def _triple_set(
     x_test=x[n_train:],
     y_train=y_train,
     y_test=y_test,
-    time_train=np.arange(n_train)
-    .astype("datetime64[D]")
-    .astype("datetime64[ns]"),
-    time_test=np.arange(n_test)
-    .astype("datetime64[D]")
-    .astype("datetime64[ns]"),
+    time_train=np.arange(n_train).astype("datetime64[ns]"),
+    time_test=np.arange(n_test).astype("datetime64[ns]"),
     pit_train=stats.norm.cdf((y_train - mu) / sigma),
     pit_test=stats.norm.cdf((y_test - mu) / sigma),
     logpdf_test=stats.norm.logpdf(y_test, loc=mu, scale=sigma),
@@ -349,30 +323,35 @@ def _triple_set(
       quantiles, (n_test, *quantiles.shape)
     ).copy(),
     derived=_DERIVED,
-    y_derived_train=derived_train,
-    y_derived_test=derived_test,
+    y_derived_train=derive(y_train, _MODELED, _DERIVED),
+    y_derived_test=derive(y_test, _MODELED, _DERIVED),
   )
 
 
-def _run(arm: str, ms: MarginalSet, n_draws: int = 40) -> copulas.CopulaResult:
-  (result,) = copulas.run_copula_arm(
+def _run(
+  arm: str,
+  ms: MarginalSet,
+  n_draws: int = 40,
+  estimators: dict[str, EstimatorSpec] | None = None,
+  mixture_k: int = 1,
+) -> list[copulas.CopulaResult]:
+  return copulas.run_copula_arm(
     arm,
     ms,
-    estimators={},
+    estimators=estimators or {},
     n_draws=n_draws,
     sample_batch_size=50,
-    mixture_k=1,
+    mixture_k=mixture_k,
     seed=9,
     device="cpu",
   )
-  return result
 
 
 def test_the_modeled_log_score_adds_the_copula_to_three_margins() -> None:
   """``joint_nll_modeled`` is the copula's log-density plus the triple's."""
   ms = _triple_set()
   for arm in ("independence", "gaussian"):
-    result = _run(arm, ms)
+    (result,) = _run(arm, ms)
     np.testing.assert_allclose(
       result.joint_nll,
       -(result.logcop_test + ms.logpdf_test.sum(axis=1)),
@@ -380,22 +359,22 @@ def test_the_modeled_log_score_adds_the_copula_to_three_margins() -> None:
     )
     assert result.info["modeled"] == list(_MODELED)
     assert result.info["derived"] == list(_DERIVED)
+    assert result.info["magnus"] == "meteoswiss"
 
 
 def test_the_energy_score_covers_all_five_with_the_derived_draws() -> None:
-  """The joint scores read RH and w from each draw of the triple.
+  """The joint scores read Td and w from each draw of the triple.
 
-  Rebuilt from the arm's own draws: the triple's through the quantiles, RH
+  Rebuilt from the arm's own draws: the triple's through the quantiles, Td
   and w derived from them, all five divided by their training SD; each
   response's CRPS is the one-dimensional energy score in its units.
   """
   ms = _triple_set()
-  result = _run("independence", ms)
+  (result,) = _run("independence", ms)
   seed = derive_seed(9, ms.station, ms.model, "independence", "draws")
   uniforms = np.random.default_rng(seed).random((len(ms.y_test), 40, 3))
   draws = inverse_margins(uniforms, ms.levels, ms.quantiles_test)
-  extra, above = derive(draws, _MODELED, _DERIVED)
-  full = np.concatenate([draws, extra], axis=2)
+  full = np.concatenate([draws, derive(draws, _MODELED, _DERIVED)], axis=2)
   observed = np.concatenate([ms.y_test, ms.y_derived_test], axis=1)
   scale = np.concatenate(
     [ms.y_train.std(axis=0), ms.y_derived_train.std(axis=0)]
@@ -416,15 +395,6 @@ def test_the_energy_score_covers_all_five_with_the_derived_draws() -> None:
       energy_score(full[:, :, j : j + 1], observed[:, j : j + 1]),
       rtol=1e-14,
     )
-  assert result.dew_point_above_share is not None
-  np.testing.assert_array_equal(
-    result.dew_point_above_share, above.mean(axis=1)
-  )
-  assert result.info["dew_point_above_draws_share"] == pytest.approx(
-    above.mean()
-  )
-  assert result.info["clip_dew_point"] is False
-  assert result.info["magnus"] == "sonntag1990"
 
 
 def test_the_sample_crps_is_the_gaussian_crps() -> None:
@@ -435,9 +405,65 @@ def test_the_sample_crps_is_the_gaussian_crps() -> None:
   draws = mu + sigma * rng.standard_normal((3, 40_000, 1))
 
   np.testing.assert_allclose(
-    energy_score(draws, y),
-    gaussian_crps(y[:, 0], mu, sigma),
-    rtol=2e-2,
+    energy_score(draws, y), gaussian_crps(y[:, 0], mu, sigma), rtol=2e-2
+  )
+
+
+def test_three_variables_have_three_structures() -> None:
+  """A 3-d R-vine is fixed by the middle variable of its first tree."""
+  assert [copulas.n_rvine_structures(d) for d in (2, 3, 4, 5)] == [
+    1,
+    3,
+    24,
+    480,
+  ]
+  edges = [
+    frozenset(copulas._external_vine.edges(s))
+    for s in copulas.all_structures(3)
+  ]
+  assert len(set(edges)) == 3
+  with pytest.raises(ValueError, match="smaller mixture_k"):
+    copulas.all_structures(4)
+
+
+def test_the_d3_mixture_averages_every_structure(
+  register_linear_gaussian_backend: None,
+) -> None:
+  """At d = 3 the mixture is of all three structures, the selected first.
+
+  Asked for five members, it takes three: TLL's selection, then the other
+  two in a fixed order, each also scored on its own.
+  """
+  del register_linear_gaussian_backend
+  spec = EstimatorSpec("lin", "linear-gaussian", "probit")
+  ms = _triple_set(n_train=80, n_test=3)
+  results = _run(
+    "npcc-mixture-tabpfn-quantiles-time",
+    ms,
+    n_draws=6,
+    estimators={"tabpfn-quantiles": spec},
+    mixture_k=5,
+  )
+
+  assert [r.arm for r in results] == [
+    "npcc-mixture-tabpfn-quantiles-time",
+    *(f"npcc-mixture-tabpfn-quantiles-time-m{j}" for j in (1, 2, 3)),
+  ]
+  mixture = results[0]
+  assert mixture.info["mixture_k"] == 3
+  assert mixture.info["mixture_k_requested"] == 5
+  assert mixture.info["every_structure"] is True
+  assert mixture.info["n_distinct_structures"] == 3
+  members = mixture.info["members"]
+  assert isinstance(members, list)
+  assert [m["structure_method"] for m in members] == [
+    "dissmann-tll",
+    "enumerated",
+    "enumerated",
+  ]
+  logs = np.stack([r.logcop_test for r in results[1:]])
+  np.testing.assert_allclose(
+    mixture.logcop_test, np.log(np.exp(logs).mean(axis=0)), rtol=1e-10
   )
 
 
@@ -492,14 +518,14 @@ def test_boostcopulas_initial_matrix_at_three_and_five() -> None:
 
 @needs_r
 def test_boostcopula_fits_the_triple(monkeypatch: pytest.MonkeyPatch) -> None:
-  """boostCopula fits and scores three variables, five derived."""
+  """boostCopula fits three variables; all five are scored."""
   try:
     copulas.check_boostcopula(str(_SCRIPT))
   except RuntimeError as exc:
     pytest.skip(f"needs boostCopula: {exc}")
   monkeypatch.setattr(copulas, "BOOSTCOPULA_SCRIPT", str(_SCRIPT))
   ms = _triple_set(n_train=60, n_test=3)
-  result = _run("boostcopula-time", ms, n_draws=6)
+  (result,) = _run("boostcopula-time", ms, n_draws=6)
 
   assert np.isfinite(result.joint_nll).all()
   assert np.isfinite(result.energy).all()
@@ -515,23 +541,23 @@ def test_boostcopula_fits_the_triple(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_the_triple_runs_end_to_end_from_the_command_line(
   tmp_path: Path, register_linear_gaussian_backend: None
 ) -> None:
-  """Margins on the triple, copulas with RH and w derived, and the tables.
+  """Margins on the triple, copulas with Td and w derived, and the tables.
 
-  On synthetic data that obeys the identities, with 5% of cases saturated:
-  the moved cases are counted, the copula units carry the triple's log
-  score and every response's CRPS, and evaluate reports them.
+  On synthetic data that obeys the identities: the RH = 100 cases are
+  counted, the derivation reproduces the observed Td and w, the copula
+  units carry the triple's log score and every response's CRPS, and
+  evaluate reports them.
   """
   del register_linear_gaussian_backend
-  from npcc.experiments.application.data import write_synthetic
-
   data = tmp_path / "data"
-  write_synthetic(data, n_stations=2, step_days=7, seed=3, saturated_share=0.05)
+  write_synthetic(data, n_stations=2, step_days=7, seed=3, measured=True)
   text = config_text(data, stations="[0, 1]").replace(
     "[responses]\n", "[responses]\n" + _TRIPLE
   )
   config = tmp_path / "triple.toml"
   config.write_text(text)
   run = tmp_path / "run"
+  assert main(["preflight", "--config", str(config)]) == 0
   for stage in ("margins", "copulas", "evaluate"):
     assert main([stage, "--config", str(config), "--out", str(run)]) == 0
 
@@ -539,28 +565,29 @@ def test_the_triple_runs_end_to_end_from_the_command_line(
   assert ms.variables == _MODELED
   assert ms.derived == _DERIVED
   assert ms.quantiles_test.shape[2] == 3
-  rh = ms.y_derived_test[:, 0]
-  assert ((rh == 100.0) == (ms.y_test[:, 1] == ms.y_test[:, 0])).all()
   info = json.loads(
     (run / "stations/000/margins/emos-seasonal/info.json").read_text()
   )
   assert info["derived"] == list(_DERIVED)
-  detail = info["variables"][DEW_POINT]
-  assert detail["saturated_train"] > 0
-  assert detail["saturated_test"] >= 0
-  saturation = pd.read_csv(run / "tables" / "saturation_by_station.csv")
-  assert set(saturation["station"]) == {0, 1}
+  detail = info["variables"][RELATIVE_HUMIDITY]
+  rh_train = ms.y_train[:, 1]
+  assert detail["at_upper_train"] == int((rh_train == 100.0).sum()) > 0
+  assert detail["at_lower_train"] == 0
+  bounds = pd.read_csv(run / "tables" / "bounds_by_station.csv")
+  assert set(bounds["station"]) == {0, 1}
+  assert set(bounds["variable"]) == {RELATIVE_HUMIDITY}
+  residual = pd.read_csv(run / "tables" / "derivation_residuals.csv")
+  assert set(residual["variable"]) == set(_DERIVED)
+  assert (residual["max_abs"] < 1e-9).all()
   pooled = pd.read_csv(run / "tables" / "copulas_pooled.csv")
   assert "joint_nll" not in pooled
   for column in (
     "joint_nll_modeled",
     "joint_nll_modeled_gain",
-    "crps_relative_humidity",
+    "crps_dew_point_temperature",
     "crps_water_vapor_mixing_ratio_skill",
-    "dew_point_above_share",
   ):
     assert column in pooled, column
-  assert pooled["dew_point_above_share"].between(0, 1).all()
   margins = pd.read_csv(run / "tables" / "margins_pooled.csv")
   assert set(margins["variable"]) == set(_MODELED)
   unit = json.loads(
@@ -568,11 +595,3 @@ def test_the_triple_runs_end_to_end_from_the_command_line(
   )
   assert unit["modeled"] == list(_MODELED)
   assert unit["derived"] == list(_DERIVED)
-  assert math.isclose(
-    unit["results"]["gaussian"]["info"]["dew_point_above_draws_share"],
-    float(
-      pd.read_parquet(
-        run / "stations/001/copulas/emos-seasonal/gaussian/scores.parquet"
-      )["dew_point_above_share"].mean()
-    ),
-  )

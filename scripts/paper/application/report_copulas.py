@@ -17,7 +17,7 @@ The joint NLL gain is independence's mean less the arm's; the energy and
 variogram skills are ``1 - mean(arm) / mean(independence)``. Where responses
 are derived from the modeled ones, the log score is ``joint_nll_modeled``,
 over the modeled responses only, and each response's CRPS from the draws and
-the share of draws whose dew point exceeds the temperature are reported too.
+are reported too.
 
 Usage (from the repository root)::
 
@@ -68,8 +68,6 @@ def metrics(
     (f"{c}_skill", f"CRPS skill, {c.removeprefix('crps_')}", True)
     for c in scores[3:]
   ]
-  if "dew_point_above_share" in columns:
-    crps.append(("dew_point_above_share", "Share of draws with Td > T", False))
   cases = [
     *headline[:4],
     ("energy_gain", "Energy gain / pooled independence", True),
@@ -125,11 +123,9 @@ def build(run: Path, out: Path) -> list[Path]:
   failures = common.read_table(run, "copula_failures")
   stored = stored_cases(run, failures)
   _, scores = copula_score_columns(stored)
-  above = "dew_point_above_share"
-  extra = [above] if above in stored else []
-  cases = copula_tables(
-    stored[["station", "model", "arm", "row", *scores, *extra]]
-  )["cases"]
+  cases = copula_tables(stored[["station", "model", "arm", "row", *scores]])[
+    "cases"
+  ]
   headline, crps, case_metrics = metrics(pooled.columns)
   out.mkdir(parents=True, exist_ok=True)
   table_path = out / "copula_table.csv"
@@ -183,9 +179,7 @@ def build(run: Path, out: Path) -> list[Path]:
           table,
           f"{model}: each response's CRPS from the draws, equal station "
           "weights",
-          "Derived responses are computed from each draw of the modeled ones; "
-          "the Td > T share counts draws whose dew point exceeds the "
-          "temperature, whether the run clips them or not.",
+          "Derived responses are computed from each draw of the modeled ones.",
         )
         report.table(
           pool[["arm", *(m for m, _, _ in crps)]],

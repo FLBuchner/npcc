@@ -39,7 +39,7 @@ from urllib.request import urlopen
 import numpy as np
 import xarray as xr
 
-from npcc.experiments.application.derived import mixing_ratio, relative_humidity
+from npcc.experiments.application import derived
 
 #: The day-of-year terms: the ``time`` scope, and part of the ``emos`` one.
 TIME_FEATURES: tuple[str, ...] = ("time:sin_dayofyear", "time:cos_dayofyear")
@@ -590,7 +590,7 @@ def write_synthetic(
   end: dt.date = dt.date(2022, 1, 31),
   step_days: int = 1,
   seed: int = 0,
-  saturated_share: float = 0.0,
+  measured: bool = False,
 ) -> None:
   """Write a synthetic ``x.nc`` and ``y.nc`` in the application's layout.
 
@@ -617,12 +617,12 @@ def write_synthetic(
       Days between initializations.
   seed : int, default=0
       Seed of the draws.
-  saturated_share : float, default=0.0
-      Above 0, the responses obey the identities the real data obeys
-      (:mod:`~npcc.experiments.application.derived`): the dew point equals
-      the temperature in about this share of rows, and relative humidity and
-      the mixing ratio are computed from temperature, dew point and pressure.
-      At 0, they are drawn with noise of their own.
+  measured : bool, default=False
+      Whether the responses obey the identities the real data obeys
+      (:mod:`~npcc.experiments.application.derived`): temperature, relative
+      humidity (some of it exactly 100, none 0) and pressure on a 0.1 grid,
+      the dew point and the mixing ratio computed from them. Otherwise each
+      is drawn with noise of its own.
   """
   if n_stations < 1 or step_days < 1:
     raise ValueError(
@@ -689,16 +689,19 @@ def write_synthetic(
   humidity = responses["relative_humidity"]
   humidity[np.arange(n) % 11 == 0] = 100.0
   humidity[np.arange(n) % 17 == 1] = 0.0
-  if saturated_share > 0.0:
-    t = responses["air_temperature"]
-    td = np.minimum(responses["dew_point_temperature"], t)
-    saturated = rng.random(n) < saturated_share
-    td[saturated] = t[saturated]
-    responses["dew_point_temperature"] = td
-    responses["relative_humidity"] = relative_humidity(t, td)
-    responses["water_vapor_mixing_ratio"] = mixing_ratio(
-      t, td, responses["surface_air_pressure"]
-    )
+  if measured:
+    # T, RH and p on a 0.1 grid, RH in (0, 100], and Td and w from them.
+    for name in (
+      "air_temperature",
+      "relative_humidity",
+      "surface_air_pressure",
+    ):
+      responses[name] = np.round(responses[name], 1)
+    humidity = np.maximum(responses["relative_humidity"], 1.0)
+    responses["relative_humidity"] = humidity
+    t, p = responses["air_temperature"], responses["surface_air_pressure"]
+    responses["dew_point_temperature"] = derived.dew_point(t, humidity)
+    responses["water_vapor_mixing_ratio"] = derived.mixing_ratio(t, humidity, p)
   covariates["coe:leadtime"] = lead.astype(float)
   covariates["time:sin_dayofyear"] = np.sin(annual)
   covariates["time:cos_dayofyear"] = np.cos(annual)

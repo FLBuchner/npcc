@@ -91,11 +91,6 @@ class CopulaResultLike(Protocol):
     """Each response's CRPS from the draws, when responses are derived."""
     ...
 
-  @property
-  def dew_point_above_share(self) -> np.ndarray | None:
-    """Each test case's share of draws whose dew point exceeds T."""
-    ...
-
 
 # ---------------------------------------------------------------------------
 # Paths and atomic writes
@@ -717,8 +712,6 @@ def write_copula(
         for v, values in result.sample_crps.items()
       },
     }
-    if result.dew_point_above_share is not None:
-      columns["dew_point_above_share"] = result.dew_point_above_share
     for name, values in columns.items():
       values = np.asarray(values)
       if values.shape != (n_test,) or not np.isfinite(values).all():

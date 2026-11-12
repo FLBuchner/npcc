@@ -84,6 +84,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import subprocess
 import tempfile
 from collections.abc import Iterable, Mapping
@@ -187,9 +188,6 @@ class CopulaResult:
   sample_crps : dict of str to numpy.ndarray
       With derived responses only: every response's CRPS of each test case,
       modeled and derived, estimated from the draws in its own units.
-  dew_point_above_share : numpy.ndarray or None
-      With derived responses only: each test case's share of draws whose
-      dew point exceeds the temperature, clipped or not.
   """
 
   arm: str
@@ -200,7 +198,6 @@ class CopulaResult:
   timings: dict[str, float]
   info: dict[str, object]
   sample_crps: dict[str, np.ndarray] = field(default_factory=dict)
-  dew_point_above_share: np.ndarray | None = None
 
 
 class CopulaFailure(ValueError):
@@ -301,6 +298,59 @@ def scope_columns(feature_names: tuple[str, ...], scope: str) -> list[int]:
       f"got no {missing}"
     )
   return [feature_names.index(f) for f in TIME_FEATURES]
+
+
+def n_rvine_structures(d: int) -> int:
+  """The number of distinct R-vine structures on ``d`` labeled variables.
+
+  ``d! / 2 * 2^((d - 2)(d - 3) / 2)`` for ``d >= 3`` (Morales-Napoles,
+  2011): 3 at ``d = 3``, 24 at 4, 480 at 5; and 1 at ``d = 2``.
+
+  Parameters
+  ----------
+  d : int
+      The number of variables, at least 2.
+
+  Returns
+  -------
+  int
+      The count.
+  """
+  if d < 2:
+    raise ValueError(f"d must be at least 2; got {d}")
+  if d == 2:
+    return 1
+  return math.factorial(d) // 2 * int(math.pow(2, (d - 2) * (d - 3) // 2))
+
+
+def all_structures(d: int) -> list[pv.RVineStructure]:
+  """Every R-vine structure on ``d <= 3`` variables, in a fixed order.
+
+  At ``d = 3`` a structure is fixed by the middle variable of its first
+  tree, so there are three D-vines, ordered by that variable: ``2-1-3``,
+  ``1-2-3``, ``1-3-2``.
+
+  Parameters
+  ----------
+  d : int
+      The number of variables, 2 or 3.
+
+  Returns
+  -------
+  list of pyvinecopulib.RVineStructure
+      Every structure, each once.
+  """
+  if d == 2:
+    return [pv.RVineStructure.from_order([1, 2])]
+  if d == 3:
+    return [
+      pv.RVineStructure.from_order(order)
+      for order in ([2, 1, 3], [1, 2, 3], [1, 3, 2])
+    ]
+  raise ValueError(
+    f"d must be 2 or 3 to enumerate every structure; got {d}, which has "
+    f"{n_rvine_structures(d)}. Use a smaller mixture_k."
+  )
 
 
 def mixture_draws(
@@ -542,17 +592,13 @@ def _score(
   timings["inverse_margins"] = perf_counter() - t0
 
   sample_crps: dict[str, np.ndarray] = {}
-  above_share = None
-  above_draws = 0.0
   observed_raw, scale = ms.y_test, inputs.scale
   if ms.derived:
     t0 = perf_counter()
-    extra, above = derive(draws, ms.variables, ms.derived, ms.derivation)
+    extra = derive(draws, ms.variables, ms.derived, ms.derivation)
     draws = np.concatenate([draws, extra], axis=2)
     observed_raw = np.concatenate([ms.y_test, ms.y_derived_test], axis=1)
     scale = np.concatenate([inputs.scale, inputs.derived_scale])
-    above_share = above.mean(axis=1)
-    above_draws = float(above.mean())
     timings["derived_responses"] = perf_counter() - t0
     bad = np.flatnonzero(~np.isfinite(extra).all(axis=(1, 2)))
     if bad.size:
@@ -594,8 +640,6 @@ def _score(
       "modeled": list(ms.variables),
       "derived": list(ms.derived),
       "magnus": ms.derivation.magnus,
-      "clip_dew_point": ms.derivation.clip_dew_point,
-      "dew_point_above_draws_share": above_draws,
     }
   return CopulaResult(
     arm=name,
@@ -606,7 +650,6 @@ def _score(
     timings=timings,
     info=info,
     sample_crps=sample_crps,
-    dew_point_above_share=above_share,
   )
 
 
@@ -793,8 +836,19 @@ class _Vines:
     return _score(arm, self.inputs, logcop, uniforms, timings, info)
 
   def mixture(self, arm: str, k: int) -> list[CopulaResult]:
-    """The mixture of ``k`` vines, then each member on its own."""
+    """The mixture of ``k`` vines, then each member on its own.
+
+    Where ``k`` reaches the number of distinct R-vine structures on the
+    variables, as at ``d = 3``, the mixture is of every structure: the
+    selected one first, then the others in :func:`all_structures`'s order.
+    """
     ms = self.inputs.ms
+    requested = k
+    d = len(ms.variables)
+    others: list[pv.RVineStructure] = []
+    every = k >= n_rvine_structures(d)
+    if every:
+      k = n_rvine_structures(d)
     members: list[CopulaResult] = []
     members_info: list[dict[str, object]] = []
     logs: list[np.ndarray] = []
@@ -807,6 +861,15 @@ class _Vines:
         structure_seed = None
         method = "dissmann-tll"
         structure = select_structure(self.u_train)
+        if every:
+          chosen = _external_vine.edges(structure)
+          others = [
+            s for s in all_structures(d) if _external_vine.edges(s) != chosen
+          ]
+      elif every:
+        structure_seed = None
+        method = "enumerated"
+        structure = others[j - 2]
       else:
         structure_seed = derive_seed(
           self.inputs.seed, "mixture-structure", ms.station, j
@@ -856,6 +919,8 @@ class _Vines:
     info = {
       **self.info,
       "mixture_k": k,
+      "mixture_k_requested": requested,
+      "every_structure": every,
       "members": members_info,
       "n_distinct_structures": len(distinct),
       "choice_seed": choice_seed,

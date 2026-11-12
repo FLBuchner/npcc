@@ -43,85 +43,80 @@ them and set `verify = false`.
 
 ## Two responses are functions of the other three
 
-In the data, relative humidity and the water vapor mixing ratio are computed
-from temperature `T`, dew point `Td` (both in degrees Celsius) and surface
-pressure `p` (hPa):
+Temperature `T` (degrees Celsius), relative humidity `RH` (percent) and
+surface pressure `p` (hPa) are measured, and stored exactly on a 0.1 grid.
+The dew point `Td` and the water vapor mixing ratio `w` are not on that
+grid: they are computed from the other three,
 
-- `RH = 100 e_s(Td) / e_s(T)`, the Magnus formula with Sonntag's (1990)
-  constants, `e_s(t) = 6.112 exp(17.62 t / (243.12 + t))` hPa. Its largest
-  error over all 131 stations is 0.17 RH points.
-- `w = 622 e / (p - e)` g/kg with `e = e_s(Td)`. Its log residual has a
-  standard deviation of 0.0017.
-- `Td` is clipped at `T`: `RH = 100` exactly where `Td = T` exactly, in 4.4%
-  of the training rows, at 104 stations; `Td > T` never occurs.
+- `e = RH / 100 e_s(T)`, with MeteoSwiss's piecewise Magnus formula
+  `e_s(t) = c exp(a t / (b + t))`, `a, b, c = 17.368, 238.83, 6.107` hPa at
+  and above 0 C and `17.856, 245.52, 6.108` below, as Zanetta et al. (2023)
+  use;
+- `Td = e_s^-1(e)`, on the branch of `Td`'s own sign;
+- `w = 1000 * 0.622 e / (p - e)` g/kg.
 
-The constants are in `src/npcc/experiments/application/derived.py`, one
-`Magnus` object per set, chosen by `[responses] magnus`: `"sonntag1990"`,
-above, or `"meteoswiss"`, the piecewise set Zanetta et al. (2023) use
-(`a = 17.368, b = 238.83, c = 6.107` hPa at and above 0 C; `17.856, 245.52,
-6.108` below). Which set the data was computed with is pending; both
-configs of the triple name `"sonntag1990"` until it is settled.
+In the forward direction, `Td -> RH, w`, the data matches to an RH residual
+SD of 0.008 points (max 0.085) and a `w` residual SD of 0.00046 g/kg (max
+0.0049). The inverse direction, `(T, RH, p) -> Td, w`, which the triple
+uses: Td residual SD *[to fill from the smoke run]*, w residual SD *[to
+fill]*. `npcc-application preflight` prints both per station, and
+`evaluate` writes them to `tables/derivation_residuals.csv`. The constants
+are in `src/npcc/experiments/application/derived.py`, one `Magnus` object
+per set; `[responses] magnus` names it (Sonntag's 1990 set is the other).
+Since `RH <= 100`, `Td <= T` follows.
 
 **Why a five-variable log score is not defined.** The five responses lie on
 a three-dimensional surface of five-dimensional space, so their joint
 distribution has no density, and a five-dimensional copula times five
 margins is a density for a distribution the data cannot come from. Its log
-score at an observation measures nothing proper: a model is not rewarded for
-putting mass where the data is, since the data has no density to match. On
-top of that, `RH = 100` is an atom.
+score at an observation does not compare forecasts of the data.
 
 **The triple.** `configs/application_triple.toml` (and its station-0 smoke,
-`application_smoke_triple.toml`) model `(T, Td, p)` only:
+`application_smoke_triple.toml`) model the measured triple:
 
 ```toml
 [responses]
-modeled = ["obs:air_temperature", "obs:dew_point_temperature", "obs:surface_air_pressure"]
-derived = ["obs:relative_humidity", "obs:water_vapor_mixing_ratio"]
-clip_dew_point = false   # pending
-saturation_nudge = 0.0   # pending
-magnus = "sonntag1990"   # pending
+modeled = ["obs:air_temperature", "obs:relative_humidity", "obs:surface_air_pressure"]
+derived = ["obs:dew_point_temperature", "obs:water_vapor_mixing_ratio"]
+magnus = "meteoswiss"
 ```
 
-The margins are fitted to the three, and the copulas to their PITs (d = 3).
-`configs/application.toml`, the five-response design, stays the default and
-is unchanged; none of these keys is set there. A derivation reads `T`, `Td`
-and `p` from the modeled responses through `derived.QUANTITIES`, so a triple
-that models another function of them, such as the dew-point deficit
-`T - Td` as Zanetta et al. do, would name it there.
+The margins are fitted to the three, each with FLBuchner's choices: RH
+keeps its logit transform, its 100 -> 99.95 boundary nudge and its beta
+EMOS. The copulas are fitted to their PITs (d = 3). `configs/application.toml`,
+the five-response design, is unchanged, though nothing runs it.
 
-**Derived responses.** Each copula draw of `(T, Td, p)`, mapped through the
-margins' quantiles, gives a draw of RH and w by the formulas above. A draw
-can have `Td > T`, which the data never has. With `clip_dew_point = true`
-it is clipped as the data clips, `min(Td, T)` in both formulas, so RH = 100
-there; with `false`, the default while the choice is pending, RH exceeds
-100 there. Either way each test case's share of draws with `Td > T` is
-stored (`dew_point_above_share`) and averaged per station, marginal model
-and arm in the copula tables. A derived response must have its inputs
-modeled; both read the temperature.
+**Derived responses.** Each copula draw of `(T, RH, p)`, mapped through the
+margins' quantiles, gives a draw of `Td` and `w` by the formulas above.
 
 **Scores of the triple.** Per copula arm and test case:
 
-- `joint_nll_modeled`: the log score of the modeled responses only, the
-  copula's log-density plus their three margins'; named so that it cannot
-  be mistaken for a five-variable one, with the lists of modeled and
-  derived responses in each unit's `info.json`;
+- `joint_nll_modeled`: the log score of the `(T, RH, p)` density, the
+  copula's log-density plus the three margins'; named so that it cannot be
+  mistaken for a five-variable one, with the lists of modeled and derived
+  responses in each unit's `info.json`;
 - `energy` and `variogram` (p = 1/2) over all five responses, the derived
   ones from the derived draws, each response divided by its training
   standard deviation;
 - `crps_<response>` for all five: the one-dimensional energy-score estimator
-  on that response's draws, in its own units, so that RH and w get a CRPS.
+  on that response's draws, in its own units.
 
-The margins themselves are scored on the three modeled responses with the
-quantile CRPS, as in the default design.
+The marginal stage scores the three modeled margins as before: quantile
+CRPS and log score.
 
-**The saturation atom.** Nothing models it. With `saturation_nudge > 0`, as
-FLBuchner's RH nudge moves an RH of exactly 100 to 99.95, a case of the
-triple with `Td = T` has its dew point moved, before its margins see it, to
-`T - delta(T)`, where the Magnus RH is `100 - saturation_nudge`; at 0, the
-default while the choice is pending, nothing moves. Either way the cases
-with `Td = T` are counted per station, training and test, stored with each
-margin unit and written to `tables/saturation_by_station.csv`; the CRPS and
-the copula's energy and variogram scores use the observed dew point.
+**RH = 100.** The cases with RH exactly 100 (or 0) are moved to 99.95 (or
+0.05) by the boundary nudge, as in FLBuchner's code. Their counts, per
+station, split and marginal model, are stored with each margin unit and
+written to `tables/bounds_by_station.csv`.
+
+**The d = 3 mixture.** A 3-d R-vine has exactly three structures, one per
+choice of the middle variable of its first tree. Where `mixture_k` reaches
+the number of distinct structures on d variables, the npcc mixture arm
+averages every one with equal weights instead of drawing weighted random
+ones: member 1 is TLL's Dissmann selection, members 2 and 3 the other two
+structures in a fixed order, each also scored on its own. At d = 3 with
+`mixture_k = 5` the mixture therefore has three members. The random arm
+keeps one uniformly random structure per station.
 
 **boostCopula at d = 3.** `r_methods/fit_boostcopula_vine.R` fits any
 d >= 2, starting from an initial matrix of the same pattern as FLBuchner's

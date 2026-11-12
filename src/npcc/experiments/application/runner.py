@@ -36,6 +36,7 @@ from npcc.experiments.application.data import (
   load_station,
   station_ids,
 )
+from npcc.experiments.application.derived import residuals
 from npcc.experiments.application.margins import build_predictor, fit_station
 from npcc.experiments.application.scores import (
   copula_tables,
@@ -257,6 +258,19 @@ def preflight(config: ApplicationConfig, options: RunOptions) -> list[str]:
       for model in models:
         feature_columns(data.feature_names, model.scope, variable)
     feature_columns(data.feature_names, "time")
+    if config.derived:
+      found = residuals(
+        data.y_train[:, [data.column(v) for v in config.modeled]],
+        config.modeled,
+        config.derived,
+        data.y_train[:, [data.column(v) for v in config.derived]],
+        config.derivation,
+      )
+      lines.extend(
+        f"station {station}: derived {name} against the observed, training "
+        f"residual sd {stats['sd']:.3g}, max {stats['max_abs']:.3g}"
+        for name, stats in found.items()
+      )
     lines.append(
       f"station {station}: {len(data.row_train)} training and "
       f"{len(data.row_test)} test cases, {len(data.feature_names)} covariates, "
@@ -442,10 +456,15 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
         release_gpu()
 
 
-def _saturation(
+def _bounds(
   out: Path, stations: Sequence[int], models: Sequence[str]
 ) -> pd.DataFrame:
-  """The cases each margin unit moved off saturation, where any recorded it."""
+  """The cases at a bound of the unit interval, where a margin counted them.
+
+  They are the cases the response's boundary nudge moves inside it, such as
+  RH = 100 moved to 99.95, counted per station, split and marginal model.
+  """
+  keys = ("at_upper_train", "at_upper_test", "at_lower_train", "at_lower_test")
   rows = []
   for station in stations:
     for model in models:
@@ -453,16 +472,40 @@ def _saturation(
         (margin_dir(out, station, model) / "info.json").read_text()
       )
       for variable, detail in info["variables"].items():
-        if "saturated_train" in detail:
+        if "at_upper_train" in detail:
           rows.append(
             {
               "station": station,
               "model": model,
               "variable": variable,
-              "saturated_train": detail["saturated_train"],
-              "saturated_test": detail["saturated_test"],
+              **{k: detail[k] for k in keys},
             }
           )
+  return pd.DataFrame(rows)
+
+
+def _residuals(
+  config: ApplicationConfig, out: Path, stations: Sequence[int]
+) -> pd.DataFrame:
+  """The derivation against each station's observed training responses."""
+  if not config.derived:
+    return pd.DataFrame()
+  rows = []
+  for station in stations:
+    data = read_station_data(out, station)
+    modeled = [data.column(v) for v in config.modeled]
+    derived = [data.column(v) for v in config.derived]
+    found = residuals(
+      data.y_train[:, modeled],
+      config.modeled,
+      config.derived,
+      data.y_train[:, derived],
+      config.derivation,
+    )
+    rows.extend(
+      {"station": station, "variable": name, **stats}
+      for name, stats in found.items()
+    )
   return pd.DataFrame(rows)
 
 
@@ -515,9 +558,12 @@ def evaluate(config: ApplicationConfig, options: RunOptions) -> list[str]:
       ["station", "model", "stage"], as_index=False
     )["seconds"].sum(),
   }
-  saturation = _saturation(out, stations, models)
-  if not saturation.empty:
-    tables["saturation_by_station"] = saturation
+  bounds = _bounds(out, stations, models)
+  if not bounds.empty:
+    tables["bounds_by_station"] = bounds
+  residual = _residuals(config, out, stations)
+  if not residual.empty:
+    tables["derivation_residuals"] = residual
   copula_models = [m for m in config.copula_models if m in models]
   ran = any(
     (station_dir(out, s) / "copulas" / m).is_dir()

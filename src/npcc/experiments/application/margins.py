@@ -41,11 +41,6 @@ from npcc.experiments.application.config import (
   ResponseSpec,
 )
 from npcc.experiments.application.data import StationData, feature_columns
-from npcc.experiments.application.derived import (
-  DEW_POINT,
-  TEMPERATURE,
-  nudge_saturated,
-)
 from npcc.experiments.application.emos import EMOS, emos_for
 from npcc.experiments.application.scores import marginal_case_scores
 from npcc.experiments.application.store import quantile_columns
@@ -328,26 +323,15 @@ def fit_margin(
   columns = feature_columns(data.feature_names, model.scope, variable)
   names = [data.feature_names[c] for c in columns]
   x_train, x_test = data.x_train[:, columns], data.x_test[:, columns]
-  observed_train, observed_test = data.y_train[:, j], data.y_test[:, j]
-  saturated: dict[str, float] = {}
-  # Off the default design, the cases at saturation are counted whether or
-  # not they are moved.
-  if (
-    variable == DEW_POINT
-    and not config.is_default_design
-    and TEMPERATURE in config.modeled
-  ):
-    t = data.column(TEMPERATURE)
-    formula = config.derivation.formula
-    observed_train, saturated["saturated_train"] = nudge_saturated(
-      data.y_train[:, t], observed_train, config.saturation_nudge, formula
-    )
-    observed_test, saturated["saturated_test"] = nudge_saturated(
-      data.y_test[:, t], observed_test, config.saturation_nudge, formula
-    )
-    saturated["saturation_nudge"] = config.saturation_nudge
-  y_train = response.to_model(observed_train, variable)
-  y_test = response.to_model(observed_test, variable)
+  y_train = response.to_model(data.y_train[:, j], variable)
+  y_test = response.to_model(data.y_test[:, j], variable)
+  # Off the default design, the cases at a bound of the unit interval, which
+  # to_model moves inside it, are counted.
+  bounds: dict[str, int] = {}
+  if not config.is_default_design and response.support == (0.0, 1.0):
+    for split, values in (("train", data.y_train), ("test", data.y_test)):
+      bounds[f"at_upper_{split}"] = int((values[:, j] == response.scale).sum())
+      bounds[f"at_lower_{split}"] = int((values[:, j] == 0.0).sum())
   seed = derive_seed(
     config.base_seed, "margin", data.station, model.name, variable
   )
@@ -384,7 +368,7 @@ def fit_margin(
       "scale": response.scale,
       "boundary_nudge": response.boundary_nudge,
     },
-    **saturated,
+    **bounds,
   }
   if isinstance(predictor, EMOS):
     info["emos"] = {"class": type(predictor).__name__, **predictor.parameters}

@@ -206,13 +206,19 @@ def build(
       ["model", "variable", *(coverage_column(n) for n in NOMINAL_COVERAGE)]
     ]
     report.table(coverage, "Central-interval coverage, every station pooled")
-    saturation = run / "tables" / "saturation_by_station.csv"
-    if saturation.exists():
+    bounds = run / "tables" / "bounds_by_station.csv"
+    if bounds.exists():
       report.table(
-        pd.read_csv(saturation),
-        "Cases moved off saturation (dew point equal to temperature)",
-        "Cases whose dew point equals their temperature, counted whether or "
-        "not saturation_nudge moves them before the margins see them.",
+        pd.read_csv(bounds),
+        "Cases at a bound, moved inside it (RH = 100 to 99.95)",
+        "Counted per station, split and marginal model.",
+      )
+    residual = run / "tables" / "derivation_residuals.csv"
+    if residual.exists():
+      report.table(
+        pd.read_csv(residual),
+        "The derivation against the observed training responses",
+        "Residual: derived less observed, per station.",
       )
     common.timing_pages(
       report,
