@@ -28,9 +28,10 @@ the arm ``mixture-member-<k>``, so the mixture can be read against its
 average member and against its first, the selected structure.
 
 **Chain.** ``chain`` asks what a vine adds at all. On the same fitted margins
-it fits ``chain_k`` chain-rule copula densities
-(:class:`~npcc.experiments.chain.ChainCopula`), each along a variable order
-drawn uniformly per ``(d, rep)`` (:func:`chain_orders`), and scores their
+it fits ``min(chain_k, d!)`` chain-rule copula densities
+(:class:`~npcc.experiments.chain.ChainCopula`), each along a variable order,
+the orders distinct and drawn uniformly per ``(d, rep)``
+(:func:`chain_orders`), and scores their
 equal-weight mixture exactly as ``mixture`` scores its vines. Each order is
 also scored on its own, as the arm ``chain-m<k>``. Factor ``k`` of an order
 conditions on the earlier scores and ``x`` together and has a torch seed of
@@ -102,7 +103,7 @@ from npcc.experiments._study import (
   summarize,
   sweep,
 )
-from npcc.experiments.chain import ChainCopula, draw_order
+from npcc.experiments.chain import ChainCopula, draw_orders
 from npcc.experiments.config import EstimatorSpec, RunConfig
 from npcc.experiments.vine_config import (
   GAMVINE_ARMS,
@@ -169,10 +170,13 @@ def random_structure_for(base_seed: int, d: int, rep: int) -> pv.RVineStructure:
 
 
 def chain_orders(base_seed: int, d: int, rep: int, k: int) -> list[list[int]]:
-  """The ``chain`` arm's ``k`` variable orders in repetition ``rep``.
+  """The ``chain`` arm's ``min(k, d!)`` distinct variable orders in ``rep``.
 
   Keyed on ``(d, rep)`` alone, as the truth and the test points are, so every
-  sample size in a repetition mixes the same orders.
+  sample size in a repetition mixes the same orders. They are distinct, as
+  the mixture's structures are: an order drawn twice would weigh twice in an
+  equal-weight mixture, which at d = 3 is likely (five draws from six
+  orders repeat one with probability 0.91).
 
   Parameters
   ----------
@@ -183,18 +187,19 @@ def chain_orders(base_seed: int, d: int, rep: int, k: int) -> list[list[int]]:
   rep : int
       The repetition.
   k : int
-      How many orders.
+      How many orders wanted.
 
   Returns
   -------
   list of list of int
-      Order ``j`` (1-based) drawn by :func:`~npcc.experiments.chain.
-      draw_order` from ``derive_seed(base_seed, "chain", d, rep, j)``.
+      ``min(k, d!)`` distinct orders by
+      :func:`~npcc.experiments.chain.draw_orders`, order ``j`` (1-based)
+      from the seed ``derive_seed(base_seed, "chain", d, rep, j)``: where no
+      draw repeats, exactly the orders each seed's first draw gives.
   """
-  return [
-    draw_order(d, derive_seed(base_seed, "chain", d, rep, j))
-    for j in range(1, k + 1)
-  ]
+  return draw_orders(
+    d, [derive_seed(base_seed, "chain", d, rep, j) for j in range(1, k + 1)]
+  )
 
 
 def chain_factor_seeds(
@@ -366,7 +371,13 @@ def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
     # Only where it changes what a cell computes, so that a grid without the
     # mixture keeps the signature it had before the arm existed.
     **({"mixture_k": grid.mixture_k} if "mixture" in grid.arms else {}),
-    **({"chain_k": grid.chain_k} if "chain" in grid.arms else {}),
+    # The chain's orders are distinct (`chain_orders`); a folder of chains
+    # drawn before they were, where one may repeat, must not be resumed.
+    **(
+      {"chain_k": grid.chain_k, "chain_orders": "distinct"}
+      if "chain" in grid.arms
+      else {}
+    ),
     # `batch_size` chunks the query set without changing any prediction's
     # context, so it changes throughput and not results.
     "base_seed": run.base_seed,
@@ -893,7 +904,7 @@ def summarize_one_cell(
       }
       factor_seeds = [
         chain_factor_seeds(cell_seed, est.estimator_id, j, cell.d)
-        for j in range(1, grid.chain_k + 1)
+        for j in range(1, len(orders) + 1)
       ]
       torch.manual_seed(derive_seed(cell_seed, "chain", est.estimator_id))
       reset_gpu_peaks()

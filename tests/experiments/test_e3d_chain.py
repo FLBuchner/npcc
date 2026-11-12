@@ -14,7 +14,7 @@ import pytest
 import torch
 
 from npcc.experiments._study import derive_seed
-from npcc.experiments.chain import ChainCopula, draw_order
+from npcc.experiments.chain import ChainCopula, draw_order, draw_orders
 from npcc.experiments.config import EstimatorSpec
 
 _PAPER = Path(__file__).resolve().parents[2] / "scripts" / "paper"
@@ -83,11 +83,14 @@ def test_a_cell_mixes_its_seeded_orders(
     cell_dir=cell_dir,
     extra={"note": "test"},
   )
-  orders = [
-    draw_order(3, derive_seed("E3d", "chain", "decay", 3, 101, j))
-    for j in (1, 2)
-  ]
+  orders = draw_orders(
+    3, [derive_seed("E3d", "chain", "decay", 3, 101, j) for j in (1, 2)]
+  )
+  # This cell's two seeds draw the same order first; the second is redrawn.
+  first = draw_order(3, derive_seed("E3d", "chain", "decay", 3, 101, 2))
+  assert first == orders[0] != orders[1]
   assert json.loads(row["orders"]) == orders
+  assert row["n_distinct_orders"] == 2
   seeds = [
     [
       derive_seed("E3d", "chain", "decay", 3, 101, j, f, est.estimator_id)

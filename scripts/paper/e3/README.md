@@ -28,8 +28,9 @@ its weights, and which command produces each output file.
   go to `results/e10_e3d_2026-11-11/`, and TabPFN's at d = 10 on `decay` to
   `results/e10_e3d_gpu053_2026-11-11/`.
 - **E11 on E3d**: on the same truths and samples, no vine at all: an
-  equal-weight mixture of K = 5 chain-rule copula densities, one per
-  random variable order, for NPCC. Outputs go to their own folder.
+  equal-weight mixture of K = min(5, d!) chain-rule copula densities, one
+  per variable order, the orders distinct and drawn uniformly at random,
+  for NPCC. Outputs go to their own folder.
 
 Two environments are involved. VDC's code runs only in its own (`~/vdc/env`,
 Python 3.10, pyvinecopulib 0.7.5). Everything else runs in npcc's (`uv run
@@ -588,8 +589,13 @@ variable order, `c(u) = prod_{k=2..d} f(u_pi(k) | u_pi(<k))`. Each factor
 is one Rosenblatt direction of the estimator
 (`npcc.experiments.chain.ChainCopula`), here conditioning on the earlier
 scores alone, since E3d has no `x`. An order costs `d - 1` regressions:
-- per cell, K = 5 orders drawn uniformly, order k seeded by
-  `derive_seed("E3d", "chain", design, d, seed, k)`;
+- per cell, K = min(5, d!) distinct orders drawn uniformly at random,
+  order k from a generator seeded by
+  `derive_seed("E3d", "chain", design, d, seed, k)`, which draws again where
+  its order repeats an earlier one (`chain.draw_orders`). The d = 5 run from
+  fa7aee3 kept a repeat in one cell (`decay`, seed 202), and is superseded
+  by a rerun under this rule; at d = 10 every cell's orders were already
+  distinct, so that run's are this rule's;
 - factor f of order k has the torch seed
   `derive_seed("E3d", "chain", design, d, seed, k, f, estimator_id)`;
 - `--estimator` is an E1 label, read from E1's config as the other E3
