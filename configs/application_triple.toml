@@ -72,7 +72,11 @@ arms_by_margin = { "emos-seasonal" = [
   "boostcopula-time",
 ] }
 n_draws = 200
-sample_batch_size = 5000
+# 20000 rows per sampling call: on station 0's npcc-random arm, the copula
+# prediction took 36.3 s, against 39.6 s at the smoke run's 5000 and 73.5 s
+# at 80000 (every draw at once); the log densities are the same bit for bit,
+# the draws another Monte Carlo sample.
+sample_batch_size = 20000
 mixture_k = 5
 
 # `--device` overrides every entry. A backend left out picks its own: CUDA
