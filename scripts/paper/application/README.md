@@ -118,6 +118,22 @@ structures in a fixed order, each also scored on its own. At d = 3 with
 `mixture_k = 5` the mixture therefore has three members. The random arm
 keeps one uniformly random structure per station.
 
+**Which arms run on which margins.** `[copulas] arms_by_margin` narrows the
+arms on one marginal model's sets; a model it does not name runs every arm.
+The triple's full run fits the npcc mixtures to the TabPFN margins alone, and
+the classical arms (independence, Gaussian, boostCopula) to both, so EMOS
+with a Gaussian copula is the reference pipeline. An npcc copula conditions
+on the covariates. Fitted to PITs that are not uniform given them, as EMOS's
+are, it partly recalibrates the margins: its density, the average of its two
+Rosenblatt directions, then differs from what its one-directional
+inverse-Rosenblatt simulation draws, and which response keeps its margin
+depends on the R-vine's order. The station-0 smoke run shows it
+(`results/application_triple_smoke_2026-11-12/checks/order_dependence.csv`):
+on the EMOS margins, two fits of one structure with identical log copula
+densities at every test case give a CRPS of T of 0.981 and 1.304, depending
+on whether T is drawn first. The random arm is dropped from the full run,
+since at d = 3 it is one of the mixture's members.
+
 **boostCopula at d = 3.** `r_methods/fit_boostcopula_vine.R` fits any
 d >= 2, starting from an initial matrix of the same pattern as FLBuchner's
 5 x 5, which it reproduces at d = 5. The matrix only supplies the formulas;
@@ -152,4 +168,15 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   arm against independence on its own margins, and `reports/copula_table.csv`,
   the paper's table;
 - `plot_rolling_tau.py --run <run> --station 0`: rolling Kendall's tau of the
-  observations and of each margin's training PITs.
+  observations and of each margin's training PITs;
+- `paired_summary.py --run <run>`: the triple's primary summaries, fixed
+  before its full run's results were seen, in `<run>/analysis/`.
+  `pooled_means.csv` and `.md` hold each arm's mean score over all test
+  cases, one table per score. `paired.csv` holds each arm against the
+  Gaussian copula on its own margins and against the npcc mixture on all
+  covariates on the TabPFN margins: the mean over stations of the
+  difference of station means (negative favors the arm), its standard error
+  across stations, and the stations where the arm is lower, higher or level;
+  on every station and again without station 106, whose pressure shifts by
+  about 5 hPa across the train/test split. `paired_by_station.csv` holds
+  each station's difference.
