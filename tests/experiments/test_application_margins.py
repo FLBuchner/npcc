@@ -321,7 +321,7 @@ def test_crossing_quantiles_are_refused(
   config: ApplicationConfig,
   monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  """Copula draws mapped through crossing quantiles are not draws of anything."""
+  """Draws mapped through crossing quantiles are draws of no distribution."""
 
   class Crossing:
     def fit(self, y: np.ndarray, *, x: np.ndarray) -> Crossing:

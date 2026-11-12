@@ -1,4 +1,4 @@
-"""Shared helpers of the application's tests: a config, small data, a fake copula stage.
+"""The application tests' helpers: a config, small data, a fake copula stage.
 
 The configs fit the hermetic ``linear-gaussian`` backend of
 ``tests/conftest.py``, which the ``register_linear_gaussian_backend`` fixture

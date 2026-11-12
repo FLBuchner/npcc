@@ -1,8 +1,8 @@
 """What the application's report scripts share: a run's tables, and pages.
 
 Every report reads a finished run folder (``npcc-application evaluate`` has
-written its ``tables/``) and fits nothing. Pages are A4 landscape figures
-saved into one PDF, numbered as they are added.
+written its ``tables/``) and fits nothing. Pages are A4 figures, wider than
+tall, saved into one PDF and numbered as they are added.
 """
 
 from __future__ import annotations

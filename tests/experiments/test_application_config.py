@@ -97,7 +97,7 @@ def test_the_full_config_holds_the_decided_models_and_arms() -> None:
 
 
 def test_the_smoke_config_runs_every_arm_the_copula_stage_knows() -> None:
-  """An arm left out of the smoke run would meet its first cost in the full one."""
+  """An arm left out of the smoke run first costs in the full run."""
   copulas = pytest.importorskip("npcc.experiments.application.copulas")
   smoke = load_config(_ROOT / "configs" / "application_smoke.toml")
 

@@ -39,7 +39,7 @@ def test_the_reports_read_a_finished_run_and_fit_nothing(
   register_linear_gaussian_backend: None,
   monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  """A report that breaks on the run's own tables fails only once the run is done.
+  """A report that breaks on a run's own tables fails once the run is done.
 
   Each script reads the tables ``evaluate`` wrote and the stored units, with
   a failed copula arm among them, and writes its files.

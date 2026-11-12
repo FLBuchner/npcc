@@ -1,4 +1,4 @@
-"""The run folder: units written whole, read back exactly, refused when stale."""
+"""The run folder: units written whole, read back exactly, refused if stale."""
 
 from __future__ import annotations
 

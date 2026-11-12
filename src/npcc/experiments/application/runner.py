@@ -230,7 +230,7 @@ def preflight(config: ApplicationConfig, options: RunOptions) -> list[str]:
     if not (config.data_dir / name).is_file():
       raise FileNotFoundError(
         f"data.dir must hold {name}; got {str(config.data_dir)!r}, resolved "
-        f"against {Path.cwd()}"
+        f"against {Path.cwd()}. Fetch the data with `npcc-application fetch`."
       )
   models = [config.marginal_model(m) for m in _models(config, options)]
   arms = _arms(config, options)
@@ -242,7 +242,8 @@ def preflight(config: ApplicationConfig, options: RunOptions) -> list[str]:
     absent = sorted(set(config.responses) - set(data.variables))
     if missing or absent:
       raise ValueError(
-        f"responses must be exactly station {station}'s {list(data.variables)}; "
+        f"responses must be exactly station {station}'s "
+        f"{list(data.variables)}; "
         f"missing {missing}, absent from the data {absent}"
       )
     for variable in data.variables:
@@ -286,6 +287,7 @@ def preflight(config: ApplicationConfig, options: RunOptions) -> list[str]:
         f"got {exc}"
       ) from exc
     lines.append(f"copula arms: {', '.join(arms)}")
+    lines.append(f"copula margins: {', '.join(config.copula_models)}")
     if any(a.startswith("boostcopula") for a in arms):
       lines.append(f"boostCopula: {check_boostcopula()}")
   return lines

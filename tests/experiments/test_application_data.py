@@ -292,7 +292,7 @@ def test_the_all_scope_leaves_out_what_is_constant() -> None:
 def test_a_scope_that_cannot_be_met_is_refused(
   names: list[str], scope: str, variable: str | None, match: str
 ) -> None:
-  """A model fitted on fewer covariates than its scope names is another model."""
+  """A model on fewer covariates than its scope names is another model."""
   with pytest.raises(ValueError, match=match):
     feature_columns(names, scope, variable)
 
@@ -416,7 +416,7 @@ def test_a_refused_download_says_to_use_a_browser(
 def test_a_file_in_place_is_kept_when_published_and_refused_otherwise(
   published: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-  """Fetching again must not download what is there, nor overwrite a stranger."""
+  """Fetching again must neither download what is there nor overwrite it."""
   target = tmp_path / "data"
   fetch_data(target)
 
