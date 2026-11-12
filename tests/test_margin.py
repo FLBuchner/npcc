@@ -635,3 +635,71 @@ def test_pointwise_methods_place_the_values(method: str) -> None:
 
   assert out.dtype is torch.float64
   assert out.shape == (3,)
+
+
+def _counting_margin(
+  monkeypatch: pytest.MonkeyPatch,
+) -> tuple[NormalQuantileBackend, list[int]]:
+  """A fitted margin that counts the rows reaching its backend."""
+  margin = make_margin("logit")
+  margin.fit(
+    torch.linspace(0.1, 0.9, 12, dtype=torch.float64),
+    x=torch.linspace(0.0, 1.0, 12, dtype=torch.float64).reshape(-1, 1),
+  )
+  calls: list[int] = []
+  original = margin._predict_quantiles
+
+  def count(x: torch.Tensor, alphas: torch.Tensor) -> torch.Tensor:
+    calls.append(int(x.shape[0]))
+    return original(x, alphas)
+
+  monkeypatch.setattr(margin, "_predict_quantiles", count)
+  return margin, calls
+
+
+def test_a_repeat_read_at_the_same_rows_reuses_the_table(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """A density then a distribution at the same rows must predict once.
+
+  A vine reads each pair direction twice at the same conditioning rows, for
+  its density and for its h-function; predicting the table twice there
+  doubles the backend's work for the same numbers.
+  """
+  margin, calls = _counting_margin(monkeypatch)
+  y = torch.tensor([0.2, 0.5, 0.7], dtype=torch.float64)
+  x = torch.tensor([[0.1], [0.4], [0.9]], dtype=torch.float64)
+  pdf = margin.pdf(y, x=x)
+  cdf = margin.cdf(y, x=x)
+  assert len(calls) == 1
+  margin._last_table = None
+  torch.testing.assert_close(margin.cdf(y, x=x), cdf, rtol=0.0, atol=0.0)
+  torch.testing.assert_close(margin.pdf(y, x=x), pdf, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.parametrize("change", ["rows", "in_place", "refit", "inference"])
+def test_the_table_is_predicted_again_when_its_inputs_change(
+  monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+  """A kept table must never answer for other rows, another fit or mode.
+
+  Each of these would hand back quantiles predicted for something else: other
+  conditioning rows, rows the caller edited in place since, a model since
+  refitted, or inference tensors to a call that may record a graph.
+  """
+  margin, calls = _counting_margin(monkeypatch)
+  y = torch.tensor([0.2, 0.5, 0.7], dtype=torch.float64)
+  x = torch.tensor([[0.1], [0.4], [0.9]], dtype=torch.float64)
+  with torch.inference_mode(change == "inference"):
+    margin.cdf(y, x=x)
+  if change == "rows":
+    x = x + 0.05
+  elif change == "in_place":
+    x.add_(0.05)
+  elif change == "refit":
+    margin.fit(
+      torch.linspace(0.2, 0.8, 12, dtype=torch.float64),
+      x=torch.linspace(0.0, 1.0, 12, dtype=torch.float64).reshape(-1, 1),
+    )
+  margin.cdf(y, x=x)
+  assert len(calls) == 2

@@ -10,6 +10,7 @@ from pyvinecopulib.core import (
 )
 
 from npcc import (
+  ConditionalMargin,
   FitControlsRosenblattBicop,
   FitControlsRosenblattVinecop,
   RosenblattBicop,
@@ -391,3 +392,55 @@ def test_set_pair_copulas_calls_the_invalidation_hook() -> None:
 
   assert len(calls) == before + 1
   assert vine._batched is None
+
+
+def test_reusing_quantile_tables_changes_no_vine_density(
+  register_linear_gaussian_backend: None,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """A vine's density must be bitwise the same with tables reused or not.
+
+  Each margin keeps its last quantile table for a repeat read at the same
+  rows; a key that let one answer for other rows would move the density, and
+  a key that never matched would cost the backend calls it exists to save.
+  """
+  u = random_tensor((80, 4), low=0.05, high=0.95, seed=7)
+  u[:, 1] = 0.5 * u[:, 1] + 0.4 * u[:, 0]
+  x = random_tensor((80, 1), low=0.0, high=1.0, seed=8)
+  controls = FitControlsRosenblattVinecop(
+    backend="linear-gaussian", device="cpu"
+  )
+  vine = RosenblattVinecop(
+    None,
+    RVineStructure.from_order([1, 2, 3, 4]),
+    device="cpu",
+    context=NonSimplifiedContext(),
+  ).fit(u, controls, x=x)
+  test_u = random_tensor((50, 4), low=0.05, high=0.95, seed=9)
+  test_x = random_tensor((50, 1), low=0.0, high=1.0, seed=10)
+
+  hits: list[bool] = []
+  predict = ConditionalMargin._predict_quantile_table
+
+  def counted(
+    self: ConditionalMargin, x: torch.Tensor, **kwargs: object
+  ) -> object:
+    last = self._last_table
+    hits.append(last is not None and torch.equal(last[0], x))
+    return predict(self, x, **kwargs)  # ty: ignore[invalid-argument-type] - forwards the caller's own keywords
+
+  monkeypatch.setattr(ConditionalMargin, "_predict_quantile_table", counted)
+  with torch.inference_mode():
+    reused = vine.logpdf(test_u, x=test_x)
+
+  def fresh(
+    self: ConditionalMargin, x: torch.Tensor, **kwargs: object
+  ) -> object:
+    self._last_table = None
+    return predict(self, x, **kwargs)  # ty: ignore[invalid-argument-type] - forwards the caller's own keywords
+
+  monkeypatch.setattr(ConditionalMargin, "_predict_quantile_table", fresh)
+  with torch.inference_mode():
+    recomputed = vine.logpdf(test_u, x=test_x)
+  torch.testing.assert_close(reused, recomputed, rtol=0.0, atol=0.0)
+  assert any(hits)

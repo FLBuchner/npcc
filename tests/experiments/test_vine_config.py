@@ -87,12 +87,40 @@ def test_e2d_is_e2_at_n_2000(name: str, dims: list[int], e2_name: str) -> None:
 
 
 @pytest.mark.parametrize(
+  ("name", "dims", "e2_name"),
+  [
+    ("vine_study_mixture.toml", [3, 5], "vine_study.toml"),
+    ("vine_study_mixture_d10.toml", [10], "vine_study_d10.toml"),
+  ],
+)
+def test_e10_mixtures_run_on_e2s_cells(
+  name: str, dims: list[int], e2_name: str
+) -> None:
+  """E10's mixtures must fit E2's cells with E2's estimator.
+
+  The mixture is read against E2's arms at the same (d, n, rep), and its
+  first member against the selected arm there; any other drift would score
+  it on other data, test points or pair copulas.
+  """
+  e2 = load_vine_grid(_CONFIGS / e2_name)
+  e10 = load_vine_grid(_CONFIGS / name)
+  assert e10.dims == dims == e2.dims
+  assert e10.n == [500, 1000, 2000]
+  assert e10.arms == ["mixture"]
+  assert e10.mixture_k == 5
+  for f in fields(VineGridConfig):
+    if f.name not in {"n", "arms", "mixture_k"}:
+      assert getattr(e10, f.name) == getattr(e2, f.name), f.name
+
+
+@pytest.mark.parametrize(
   ("overrides", "match"),
   [
     ({"arms": ["oracle", "bogus"]}, "arms must be drawn"),
     ({"arms": ["tll", "tll"]}, "arms must be unique"),
     ({"dims": [1]}, "dims must be"),
     ({"eval_m": 5}, "eval_m must be"),
+    ({"mixture_k": 0}, "mixture_k must be"),
     (
       {"arms": ["gamvine-ns"], "gamvine_script": "missing.R"},
       "gamvine_script must name an existing file",

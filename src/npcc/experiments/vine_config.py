@@ -32,6 +32,13 @@ from npcc.experiments.config import (
 #   a user who does not know the structure would fit.
 # `tll`: pyvinecopulib with kernel-density margins and TLL pairs on the true
 #   structure, ignoring `x` -- what leaving the covariate out costs.
+# `mixture`: the equal-weight mixture of `mixture_k` non-simplified vines
+#   sharing one set of fitted margins. The first member's structure is the
+#   `selected` arm's; each other is a weighted random spanning-tree draw on
+#   the same transforms, diverse but favoring strong pairs. A non-simplified
+#   vine is consistent on any structure, so averaging over structures hedges
+#   selecting one; by Jensen's inequality the mixture's KL is at most its
+#   members' mean.
 # `gamvine-oracle`, `gamvine-selected`, `gamvine-ns`: E2b's GAM vines, fitted
 #   in R by `gamvine_script` on mgcv margins with `x` a smooth term in every
 #   pair -- on the true structure, on a selected one, and on a selected one
@@ -41,11 +48,12 @@ ARMS: tuple[str, ...] = (
   "random",
   "selected",
   "tll",
+  "mixture",
   "gamvine-oracle",
   "gamvine-selected",
   "gamvine-ns",
 )
-NPCC_ARMS: tuple[str, ...] = ("oracle", "random", "selected")
+NPCC_ARMS: tuple[str, ...] = ("oracle", "random", "selected", "mixture")
 GAMVINE_ARMS: tuple[str, ...] = (
   "gamvine-oracle",
   "gamvine-selected",
@@ -80,6 +88,7 @@ class VineGridConfig:
   eval_m: int = 1000
   projection_grid_size: int = 30
   batch_size: int | None = None
+  mixture_k: int = 5
   #: The GAM vines' script, relative to the working directory unless
   #: absolute; read only when a GAM-vine arm runs.
   gamvine_script: str = "r_methods/fit_gamvine.R"
@@ -121,6 +130,8 @@ class VineGridConfig:
       raise ValueError(f"eval_x_n must be >= 1; got {self.eval_x_n}")
     if self.eval_m < 10:
       raise ValueError(f"eval_m must be >= 10; got {self.eval_m}")
+    if self.mixture_k < 1:
+      raise ValueError(f"mixture_k must be >= 1; got {self.mixture_k}")
     if any(a in GAMVINE_ARMS for a in self.arms):
       script = Path(self.gamvine_script)
       if not script.is_file():
@@ -148,6 +159,7 @@ _VINE_OPTIONAL: dict[str, Callable[[Any], object]] = {
   "eval_m": int,
   "projection_grid_size": int,
   "batch_size": int,
+  "mixture_k": int,
   "gamvine_script": str,
 }
 

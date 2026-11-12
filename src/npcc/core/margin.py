@@ -204,6 +204,13 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
   batch_size: int
   _device: torch.device
   _fitted: bool
+  #: The last table predicted, with what it was predicted from: the rows, the
+  #: chunk size, the configuration and ``eps`` it was built with, and whether
+  #: inference mode was on.
+  _last_table: (
+    tuple[torch.Tensor, int, QuantileTableConfig, float, bool, QuantileTable]
+    | None
+  ) = None
 
   def __init__(
     self,
@@ -441,6 +448,7 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
     z_t = self._transform_y(y_t)
 
     self._fitted = False
+    self._last_table = None
     self._fit_model(x_t, z_t)
     self._nobs = y_t.shape[0]
     self._fitted = True
@@ -537,11 +545,34 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
     its conditioning rows -- one per point of the other axis -- and a backend
     predicts every row independently of the others in its chunk, so a repeat
     would only recompute the same quantiles.
+
+    The last table is kept with the rows it was predicted for, and a call on
+    the same rows, chunk size, configuration and ``eps`` returns it rather
+    than predicting it again. A pair copula in a vine reads each direction
+    twice at the same rows -- its density, then its h-function for the next
+    tree -- so this halves the backend's work there and changes no value. A
+    refit drops it. So does a change of inference mode: a table built under
+    it holds inference tensors, which autograd refuses to save, so it is not
+    handed to a call that may record a graph.
     """
     self._check_fitted()
     effective_batch_size = self._resolve_batch_size(batch_size)
 
     cfg = self.quantile_table_config
+    inference = torch.is_inference_mode_enabled()
+    last = self._last_table
+    if (
+      last is not None
+      and last[1] == effective_batch_size
+      and last[2] == cfg
+      and last[3] == self.eps
+      and last[4] == inference
+      and last[0].shape == x.shape
+      and last[0].dtype == x.dtype
+      and last[0].device == x.device
+      and torch.equal(last[0], x)
+    ):
+      return last[5]
     alphas = cfg.alphas(device=x.device, dtype=x.dtype)
     n_alphas = alphas.shape[0]
     distinct, inverse = torch.unique(x, dim=0, return_inverse=True)
@@ -570,7 +601,7 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
       else torch.empty((0, n_alphas), dtype=torch.float64, device=self._device)
     )
 
-    return QuantileTable(
+    out = QuantileTable(
       table,
       limit=cfg.normal_limit,
       transform=self._response_transform,
@@ -578,6 +609,17 @@ class ConditionalMargin(TensorPlacement, MarginBase[torch.Tensor], ABC):
       smoothing=cfg.smoothing,
       min_slope=cfg.min_slope,
     )
+    # A copy of the rows, so a caller that later edits its tensor in place
+    # cannot make a stale table look current.
+    self._last_table = (
+      x.clone(),
+      effective_batch_size,
+      cfg,
+      self.eps,
+      inference,
+      out,
+    )
+    return out
 
   def _rows(
     self, values: torch.Tensor, x: torch.Tensor | None, name: str

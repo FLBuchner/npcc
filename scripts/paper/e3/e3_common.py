@@ -39,10 +39,14 @@ import time
 import zipfile
 from pathlib import Path
 
-VDC_REPO = Path("/home/thibault/vdc/vine-denoising-copula")
-VDC_PYTHON = Path("/home/thibault/vdc/env/bin/python")
-NPCC_REPO = Path("/home/thibault/npcc")
-NPCC_PYTHON = NPCC_REPO / ".venv" / "bin" / "python"
+#: This machine's paths. Elsewhere, ``E3_NPCC_REPO`` names the npcc checkout
+#: whose ``results/`` the scripts read and write, ``E3_NPCC_PYTHON`` its
+#: interpreter (``<repo>/.venv/bin/python`` by default), and ``E3_VDC_REPO``
+#: and ``E3_VDC_PYTHON`` VDC's clone and environment.
+VDC_REPO = Path(os.environ.get("E3_VDC_REPO", "/home/thibault/vdc/vine-denoising-copula"))
+VDC_PYTHON = Path(os.environ.get("E3_VDC_PYTHON", "/home/thibault/vdc/env/bin/python"))
+NPCC_REPO = Path(os.environ.get("E3_NPCC_REPO", "/home/thibault/npcc"))
+NPCC_PYTHON = Path(os.environ.get("E3_NPCC_PYTHON", str(NPCC_REPO / ".venv" / "bin" / "python")))
 RESULTS = NPCC_REPO / "results" / "e3_vdc"
 #: The directory of the E3 scripts; every module here is fingerprinted.
 E3_DIR = Path(__file__).resolve().parent
@@ -206,11 +210,15 @@ def provenance(script: Path | str, device: str) -> dict:
   dict
       Column name to value; every value is a scalar.
   """
-  vdc_env = env_versions(VDC_PYTHON, VDC_ENV_PACKAGES)
+  # A machine without VDC's environment can still run the npcc-only arms;
+  # its rows then hold None for VDC's versions rather than this machine's.
+  has_vdc = VDC_PYTHON.exists()
+  vdc_env = (env_versions(VDC_PYTHON, VDC_ENV_PACKAGES) if has_vdc
+             else dict.fromkeys(("python", *VDC_ENV_PACKAGES)))
   npcc_env = env_versions(NPCC_PYTHON, NPCC_ENV_PACKAGES)
   return {
     "vdc_tag": VDC_TAG,
-    "vdc_commit": git_short(VDC_REPO),
+    "vdc_commit": git_short(VDC_REPO) if has_vdc else None,
     "vdc_main_merge_commit": VDC_MAIN_MERGE_COMMIT,
     "checkpoint_sha256": CHECKPOINT_SHA256,
     "pyvinecopulib_vdc_env": vdc_env["pyvinecopulib"],

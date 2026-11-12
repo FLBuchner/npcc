@@ -153,6 +153,9 @@ def test_probit_hands_the_backend_qnorm_of_the_clamped_score(
 
   for evaluate in (model.pdf, model.hfunc1, model.hinv1):
     v_given_u.predicted_x.clear()
+    # Each path at the same rows would otherwise reuse the table the one
+    # before it kept, and reach the backend not at all.
+    v_given_u._last_table = None
     evaluate(uv, x=x)
     seen = torch.cat(v_given_u.predicted_x)
     torch.testing.assert_close(
