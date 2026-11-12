@@ -1,0 +1,116 @@
+# The weather application: station-wise margins, then copulas on their PITs.
+# Run with (from the repository root):
+#   npcc-application fetch     --config configs/application.toml
+#   npcc-application preflight --config configs/application.toml
+#   npcc-application margins   --config configs/application.toml --out results/application
+#   npcc-application copulas   --config configs/application.toml --out results/application
+#   npcc-application evaluate  --config configs/application.toml --out results/application
+# Each of `margins` and `copulas` takes `--shard I/K` to run every K-th
+# station from the I-th in its own process, and `--resume` to skip what an
+# earlier run of the same folder finished; `--models` and `--copulas`
+# narrow the lists below.
+#
+# The design is FLBuchner's (npcc-paper PR #4): per station, midnight
+# initializations at 24 h lead, trained on 2017-2020 and tested on 2021.
+#
+# The data is the anonymized MeteoSwiss station sample of Zanetta, Nerini,
+# Beucler and Liniger (2023), arXiv:2212.04487, which the paper cites; see
+# scripts/paper/application/README.md. `fetch` downloads it into `dir`.
+
+base_seed = 317
+
+[data]
+# x.nc (covariates coe:*, time:*) and y.nc (responses obs:*), rows along `s`,
+# outside the repository. Each file must have its published SHA-256, which
+# `verify = false` turns off for files of another source, such as synthetic
+# ones (npcc.experiments.application.data.write_synthetic).
+dir = "~/npcc-data/meteoswiss_zanetta2023"
+verify = true
+stations = "all"
+lead_hours = 24
+init_hour = 0
+# Initialization dates, first and last, both inclusive.
+train = [2017-01-01, 2020-12-31]
+test = [2021-01-01, 2021-12-31]
+min_cases = 20
+
+[margins]
+# `emos-seasonal`, then `<backend>-<scope>`: an [[estimators]] backend on all
+# the covariates, or on the EMOS ones (the response's ensemble mean and the
+# two day-of-year terms).
+models = [
+  "emos-seasonal",
+  "lightgbm-all",
+  "lightgbm-emos",
+  "tabpfn-quantiles-all",
+  "tabpfn-quantiles-emos",
+  "tabicl-all",
+  "tabicl-emos",
+]
+# Quantile levels (k + 0.5) / n_levels, k = 0, ..., n_levels - 1: what CRPS
+# is computed from and what copula draws are mapped back through.
+n_levels = 199
+
+# Each response's scale. A margin's npcc transform is its response's, which
+# encodes the support; the EMOS family follows it too: beta on (0, 1), a
+# zero-truncated normal on (0, inf), the seasonal Gaussian on the real line.
+# Relative humidity is in percent: modeled as a fraction, with an
+# observation of exactly 0 or 100 first moved to 0.05 or 99.95.
+[responses]
+"obs:air_temperature" = { transform = "identity" }
+"obs:dew_point_temperature" = { transform = "identity" }
+"obs:relative_humidity" = { transform = "logit", scale = 100.0, boundary_nudge = 0.05 }
+"obs:surface_air_pressure" = { transform = "identity" }
+"obs:water_vapor_mixing_ratio" = { transform = "log" }
+
+[copulas]
+# The marginal sets the copula arms are fitted on, and the arms. The other
+# backends' arms (npcc-{random,mixture}-{lightgbm,tabicl}-{all,time}) and the
+# other marginal sets are optional extras: add them here, or run them with
+# configs/application_smoke.toml's lists, which hold every one.
+margins = ["emos-seasonal", "tabpfn-quantiles-all"]
+arms = [
+  "independence",
+  "gaussian",
+  "boostcopula-all",
+  "boostcopula-time",
+  "npcc-random-tabpfn-quantiles-all",
+  "npcc-random-tabpfn-quantiles-time",
+  "npcc-mixture-tabpfn-quantiles-all",
+  "npcc-mixture-tabpfn-quantiles-time",
+]
+# Draws per test case, scored by the energy and variogram scores.
+n_draws = 200
+# The most rows one npcc sampling call draws, across test cases.
+sample_batch_size = 5000
+# Members of an npcc-mixture arm, as in E10.
+mixture_k = 5
+
+# `--device` overrides every entry. A backend left out picks its own: CUDA
+# where there is one.
+[devices]
+lightgbm = "cpu"
+tabpfn-quantiles = "cuda"
+tabicl = "cuda"
+
+# E1's entries, copied verbatim from configs/study.toml, so a label means the
+# same backend configuration in both; tests/experiments/
+# test_application_config.py pins their estimator_id to E1's. A margin uses
+# an entry's backend and backend_kwargs on its response's transform; a copula
+# uses the entry whole.
+
+[[estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[estimators]]
+label = "tabicl-probit"
+backend = "tabicl"
+transform = "probit"
+
+[[estimators]]
+label = "lightgbm-probit"
+backend = "lightgbm"
+transform = "probit"

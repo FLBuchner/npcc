@@ -1,0 +1,92 @@
+# configs/application.toml's design in full on station 0 alone: every
+# marginal set and every copula arm, so each one's cost is seen once before
+# the full run.
+#   npcc-application margins --config configs/application_smoke.toml --out <folder>
+#   npcc-application copulas --config configs/application_smoke.toml --out <folder>
+# For a dry run on the synthetic files that
+# `npcc.experiments.application.data.write_synthetic` writes, point `dir` at
+# them and set `verify = false`.
+
+base_seed = 317
+
+[data]
+dir = "~/npcc-data/meteoswiss_zanetta2023"
+verify = true
+stations = [0]
+lead_hours = 24
+init_hour = 0
+train = [2017-01-01, 2020-12-31]
+test = [2021-01-01, 2021-12-31]
+min_cases = 20
+
+[margins]
+models = [
+  "emos-seasonal",
+  "lightgbm-all",
+  "lightgbm-emos",
+  "tabpfn-quantiles-all",
+  "tabpfn-quantiles-emos",
+  "tabicl-all",
+  "tabicl-emos",
+]
+n_levels = 199
+
+[responses]
+"obs:air_temperature" = { transform = "identity" }
+"obs:dew_point_temperature" = { transform = "identity" }
+"obs:relative_humidity" = { transform = "logit", scale = 100.0, boundary_nudge = 0.05 }
+"obs:surface_air_pressure" = { transform = "identity" }
+"obs:water_vapor_mixing_ratio" = { transform = "log" }
+
+[copulas]
+margins = [
+  "emos-seasonal",
+  "lightgbm-all",
+  "lightgbm-emos",
+  "tabpfn-quantiles-all",
+  "tabpfn-quantiles-emos",
+  "tabicl-all",
+  "tabicl-emos",
+]
+arms = [
+  "independence",
+  "gaussian",
+  "boostcopula-all",
+  "boostcopula-time",
+  "npcc-random-lightgbm-all",
+  "npcc-random-lightgbm-time",
+  "npcc-random-tabpfn-quantiles-all",
+  "npcc-random-tabpfn-quantiles-time",
+  "npcc-random-tabicl-all",
+  "npcc-random-tabicl-time",
+  "npcc-mixture-lightgbm-all",
+  "npcc-mixture-lightgbm-time",
+  "npcc-mixture-tabpfn-quantiles-all",
+  "npcc-mixture-tabpfn-quantiles-time",
+  "npcc-mixture-tabicl-all",
+  "npcc-mixture-tabicl-time",
+]
+n_draws = 200
+sample_batch_size = 5000
+mixture_k = 5
+
+[devices]
+lightgbm = "cpu"
+tabpfn-quantiles = "cuda"
+tabicl = "cuda"
+
+[[estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[estimators]]
+label = "tabicl-probit"
+backend = "tabicl"
+transform = "probit"
+
+[[estimators]]
+label = "lightgbm-probit"
+backend = "lightgbm"
+transform = "probit"

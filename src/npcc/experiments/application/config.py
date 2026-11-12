@@ -1,0 +1,642 @@
+"""The application's configuration, read from one TOML file.
+
+It names the data and which of its cases enter (``[data]``), the marginal
+models and how each response is put on its model's scale (``[margins]``,
+``[responses]``), the copula arms and their Monte Carlo settings
+(``[copulas]``), where each backend runs (``[devices]``), and the npcc
+estimators (``[[estimators]]``), which are the simulation study's own entries
+copied verbatim, so that a label means the same backend configuration in both.
+
+A marginal model is ``emos-seasonal`` or ``<backend>-<scope>``: an
+estimator's backend on the ``all`` or the ``emos`` covariates. Its transform
+is the response's, not the estimator's, since each response has its own
+support; the estimator contributes its backend and ``backend_kwargs``.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import math
+import tomllib
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, cast, get_args
+
+import numpy as np
+import torch
+
+from npcc.core.controls import Transform
+from npcc.core.errors import EstimatorConfigError
+from npcc.experiments.application.data import (
+  DATA_SHA256,
+  DEFAULT_DATA_DIR,
+  CaseSelection,
+)
+from npcc.experiments.config import EstimatorSpec, _parse_estimator
+
+#: The seasonal EMOS baseline's model name.
+EMOS_MODEL = "emos-seasonal"
+#: The covariate scopes a ``<backend>-<scope>`` marginal model may name.
+MARGIN_SCOPES: tuple[str, ...] = ("all", "emos")
+
+_SUPPORTS: dict[str, tuple[float, float]] = {
+  "identity": (-math.inf, math.inf),
+  "log": (0.0, math.inf),
+  "logit": (0.0, 1.0),
+  "probit": (0.0, 1.0),
+}
+
+
+@dataclass(frozen=True)
+class ResponseSpec:
+  """How one response is put on its marginal model's scale.
+
+  The model sees ``y / scale``. On the unit interval, an observation exactly
+  at either bound is first moved ``boundary_nudge`` inside it, in the
+  response's own units, since no continuous model there gives a bound
+  positive density; on ``(0, inf)``, one at or below 0 is refused.
+
+  Attributes
+  ----------
+  transform : str
+      The npcc margin's response transform; its support is the model scale's.
+  scale : float, default=1.0
+      The response's unit relative to the model scale's, such as 100 for a
+      percentage modeled as a fraction.
+  boundary_nudge : float, default=0.0
+      Distance an observation at a bound of the unit interval is moved
+      inside it, in the response's units. Positive for ``logit`` and
+      ``probit``, zero otherwise.
+  """
+
+  transform: Transform
+  scale: float = 1.0
+  boundary_nudge: float = 0.0
+
+  def __post_init__(self) -> None:
+    """Refuse a transform, scale or nudge that cannot be applied."""
+    if self.transform not in _SUPPORTS:
+      raise ValueError(
+        f"transform must be one of {list(_SUPPORTS)}; got {self.transform!r}"
+      )
+    if not (math.isfinite(self.scale) and self.scale > 0.0):
+      raise ValueError(f"scale must be positive and finite; got {self.scale}")
+    if self.support == (0.0, 1.0):
+      if not 0.0 < self.boundary_nudge < 0.5 * self.scale:
+        raise ValueError(
+          f"boundary_nudge must lie in (0, scale / 2) for transform "
+          f"{self.transform!r}, whose bounds an observation can sit on; got "
+          f"{self.boundary_nudge} with scale {self.scale}"
+        )
+    elif self.boundary_nudge != 0.0:
+      raise ValueError(
+        f"boundary_nudge must be 0 for transform {self.transform!r}, which "
+        f"has no upper bound to move an observation off; got "
+        f"{self.boundary_nudge}"
+      )
+
+  @property
+  def support(self) -> tuple[float, float]:
+    """The model scale's support, ``(lo, hi)``."""
+    return _SUPPORTS[self.transform]
+
+  @property
+  def log_scale(self) -> float:
+    """``log(scale)``: what a model-scale log-density loses on the way back."""
+    return math.log(self.scale)
+
+  def to_model(self, y: np.ndarray, name: str) -> np.ndarray:
+    """Responses on the model scale.
+
+    Parameters
+    ----------
+    y : numpy.ndarray
+        Observations in the response's own units.
+    name : str
+        The response, for the message.
+
+    Returns
+    -------
+    numpy.ndarray
+        A new array, ``y / scale`` after the bound handling above.
+    """
+    out = np.array(y, dtype=np.float64, copy=True)
+    lo, hi = self.support
+    if hi == 1.0:
+      outside = (out < 0.0) | (out > self.scale)
+      if outside.any():
+        raise ValueError(
+          f"{name} must lie in [0, {self.scale}] for transform "
+          f"{self.transform!r}; got {int(outside.sum())} values outside"
+        )
+      out[out == 0.0] = self.boundary_nudge
+      out[out == self.scale] = self.scale - self.boundary_nudge
+    elif lo == 0.0:
+      bad = out <= 0.0
+      if bad.any():
+        raise ValueError(
+          f"{name} must be positive for transform {self.transform!r}; got "
+          f"{int(bad.sum())} values at or below 0"
+        )
+    return out / self.scale
+
+
+@dataclass(frozen=True)
+class MarginalModel:
+  """A marginal model, parsed from its name.
+
+  Attributes
+  ----------
+  name : str
+      ``emos-seasonal`` or ``<backend>-<scope>``.
+  backend : str or None
+      The npcc backend; ``None`` for EMOS.
+  scope : str
+      The covariate scope it is fitted on.
+  """
+
+  name: str
+  backend: str | None
+  scope: str
+
+  @property
+  def is_emos(self) -> bool:
+    """Whether this is the EMOS baseline."""
+    return self.backend is None
+
+
+@dataclass(frozen=True)
+class ApplicationConfig:
+  """Everything that defines an application run but the command line.
+
+  Attributes
+  ----------
+  data_dir : pathlib.Path
+      The folder holding ``x.nc`` and ``y.nc``: relative to the working
+      directory unless absolute, ``~`` expanded.
+  stations : tuple of int or None
+      The stations to run; ``None`` for every station in the data.
+  selection : CaseSelection
+      The lead, initialization hour and split dates.
+  models : tuple of str
+      The marginal models, in run order.
+  responses : mapping of str to ResponseSpec
+      Every response's scale, by its name in ``y.nc``.
+  estimators : tuple of EstimatorSpec
+      The npcc estimators, at most one per backend.
+  copula_arms : tuple of str
+      The copula arms, checked against the copula stage's list when it runs.
+  copula_margins : tuple of str or None
+      The marginal models whose sets enter the copula stage, drawn from
+      ``models``; ``None`` for all of them (see :attr:`copula_models`).
+  verify_data : bool
+      Whether to refuse input files that are not the published ones, by
+      their SHA-256; off only for files of another source, such as
+      synthetic ones.
+  devices : mapping of str to str
+      The device of each backend named; an unnamed one picks its own.
+  n_levels : int
+      The number of quantile levels, at ``(k + 0.5) / n_levels``.
+  n_draws : int
+      Copula draws per test case.
+  sample_batch_size : int
+      The most rows an npcc copula samples in one call.
+  mixture_k : int
+      Members of a mixture copula arm.
+  base_seed : int
+      The seed every fit's seed is derived from.
+  batch_size : int or None
+      The npcc backends' inference batch size; ``None`` for their default.
+  """
+
+  data_dir: Path
+  stations: tuple[int, ...] | None
+  selection: CaseSelection
+  models: tuple[str, ...]
+  responses: Mapping[str, ResponseSpec]
+  estimators: tuple[EstimatorSpec, ...]
+  copula_arms: tuple[str, ...]
+  copula_margins: tuple[str, ...] | None = None
+  verify_data: bool = True
+  devices: Mapping[str, str] = field(default_factory=dict)
+  n_levels: int = 199
+  n_draws: int = 200
+  sample_batch_size: int = 5000
+  mixture_k: int = 5
+  base_seed: int = 317
+  batch_size: int | None = None
+
+  def __post_init__(self) -> None:
+    """Refuse a configuration no run could honor."""
+    object.__setattr__(
+      self, "responses", MappingProxyType(dict(self.responses))
+    )
+    object.__setattr__(self, "devices", MappingProxyType(dict(self.devices)))
+    if self.stations is not None:
+      if not self.stations or any(s < 0 for s in self.stations):
+        raise ValueError(
+          f"stations must be 'all' or a non-empty list of station ids >= 0; "
+          f"got {list(self.stations)}"
+        )
+      _unique("stations", self.stations)
+    if not self.responses:
+      raise ValueError("responses must name at least one response; got none")
+    self._check_estimators()
+    if not self.models:
+      raise ValueError("models must name at least one marginal model; got none")
+    _unique("models", self.models)
+    for name in self.models:
+      self.marginal_model(name)
+    if not all(self.copula_arms):
+      raise ValueError(
+        f"copula_arms must be non-empty names; got {list(self.copula_arms)}"
+      )
+    _unique("copula_arms", self.copula_arms)
+    if self.copula_margins is not None:
+      _unique("copula_margins", self.copula_margins)
+      unknown = [m for m in self.copula_margins if m not in self.models]
+      if unknown:
+        raise ValueError(
+          f"copula_margins must be drawn from the marginal models "
+          f"{list(self.models)}; got {unknown}"
+        )
+    self._check_devices()
+    for name, low in (
+      ("n_levels", 2),
+      ("n_draws", 2),
+      ("sample_batch_size", 1),
+      ("mixture_k", 1),
+    ):
+      value = getattr(self, name)
+      if value < low:
+        raise ValueError(f"{name} must be at least {low}; got {value}")
+    if self.batch_size is not None and self.batch_size < 1:
+      raise ValueError(
+        f"batch_size must be positive or omitted; got {self.batch_size}"
+      )
+
+  def _check_estimators(self) -> None:
+    """Refuse an estimator a margin cannot be built from."""
+    labels = [e.label for e in self.estimators]
+    _unique("estimator labels", labels)
+    external = [e.label for e in self.estimators if e.kind != "backend"]
+    if external:
+      raise EstimatorConfigError(
+        f"estimators must be kind='backend', since every margin and copula "
+        f"pair is an npcc backend; got the external {external}"
+      )
+    backends = [e.backend for e in self.estimators]
+    if len(set(backends)) != len(backends):
+      raise EstimatorConfigError(
+        f"estimators must name each backend once, since a marginal model "
+        f"names its estimator by backend; got {backends}"
+      )
+
+  def _check_devices(self) -> None:
+    """Refuse a device for a backend no estimator uses, or a bad device."""
+    unknown = sorted(set(self.devices) - set(self.estimators_by_backend))
+    if unknown:
+      raise ValueError(
+        f"devices must name estimator backends "
+        f"{sorted(self.estimators_by_backend)}; got {unknown}"
+      )
+    for backend, device in self.devices.items():
+      try:
+        torch.device(device)
+      except RuntimeError as exc:
+        raise ValueError(
+          f"devices.{backend} must be a torch device; got {device!r}"
+        ) from exc
+
+  @property
+  def copula_models(self) -> tuple[str, ...]:
+    """The marginal models of the copula stage, in the configured order."""
+    return self.models if self.copula_margins is None else self.copula_margins
+
+  @property
+  def data_sha256(self) -> Mapping[str, str] | None:
+    """The digest each input file must have; ``None`` when unchecked."""
+    return DATA_SHA256 if self.verify_data else None
+
+  @property
+  def estimators_by_backend(self) -> Mapping[str, EstimatorSpec]:
+    """Each estimator, by its backend's name."""
+    return MappingProxyType({e.backend: e for e in self.estimators})
+
+  @property
+  def levels(self) -> np.ndarray:
+    """The quantile levels, ``(k + 0.5) / n_levels`` for each ``k``."""
+    return (np.arange(self.n_levels) + 0.5) / self.n_levels
+
+  def marginal_model(self, name: str) -> MarginalModel:
+    """Parse a marginal model's name.
+
+    Parameters
+    ----------
+    name : str
+        ``emos-seasonal`` or ``<backend>-<scope>``.
+
+    Returns
+    -------
+    MarginalModel
+        Its backend and scope.
+    """
+    if name == EMOS_MODEL:
+      return MarginalModel(name=name, backend=None, scope="emos")
+    backend, _, scope = name.rpartition("-")
+    if backend not in self.estimators_by_backend or scope not in MARGIN_SCOPES:
+      raise ValueError(
+        f"models must be {EMOS_MODEL!r} or '<backend>-<scope>' with backend "
+        f"in {sorted(self.estimators_by_backend)} and scope in "
+        f"{list(MARGIN_SCOPES)}; got {name!r}"
+      )
+    return MarginalModel(name=name, backend=backend, scope=scope)
+
+  def device_for(self, name: str) -> str | None:
+    """The configured device of the backend ``name`` names.
+
+    Parameters
+    ----------
+    name : str
+        A backend, or a model or copula arm whose name contains one.
+
+    Returns
+    -------
+    str or None
+        The device of the longest configured backend name in ``name``;
+        ``None`` if there is none, for the backend's own default.
+    """
+    matches = [b for b in self.devices if b in name]
+    return self.devices[max(matches, key=len)] if matches else None
+
+  def signature(self) -> str:
+    """A hash of every setting that changes a stored result.
+
+    Which stations, models and arms run, the devices and the inference batch
+    size are left out: the first three choose what to compute, and the last
+    two change results only at the rounding level.
+
+    Returns
+    -------
+    str
+        A SHA-256 hex digest.
+    """
+    payload = {
+      "selection": _selection_echo(self.selection),
+      "responses": {k: asdict(v) for k, v in sorted(self.responses.items())},
+      "n_levels": self.n_levels,
+      "estimators": {
+        e.backend: e.estimator_id
+        for e in sorted(self.estimators, key=lambda e: e.backend)
+      },
+      "n_draws": self.n_draws,
+      "sample_batch_size": self.sample_batch_size,
+      "mixture_k": self.mixture_k,
+      "base_seed": self.base_seed,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+  def echo(self) -> dict[str, object]:
+    """The resolved configuration, as JSON-able values.
+
+    Returns
+    -------
+    dict
+        Every field, each estimator with its ``estimator_id``, and the
+        signature.
+    """
+    return {
+      "data_dir": str(self.data_dir),
+      "stations": None if self.stations is None else list(self.stations),
+      "selection": _selection_echo(self.selection),
+      "models": list(self.models),
+      "responses": {k: asdict(v) for k, v in self.responses.items()},
+      "estimators": [
+        {"label": e.label, "estimator_id": e.estimator_id, **e.canonical_dict()}
+        for e in self.estimators
+      ],
+      "copula_arms": list(self.copula_arms),
+      "copula_margins": list(self.copula_models),
+      "verify_data": self.verify_data,
+      "data_sha256": dict(DATA_SHA256) if self.verify_data else None,
+      "devices": dict(self.devices),
+      "n_levels": self.n_levels,
+      "n_draws": self.n_draws,
+      "sample_batch_size": self.sample_batch_size,
+      "mixture_k": self.mixture_k,
+      "base_seed": self.base_seed,
+      "batch_size": self.batch_size,
+      "signature": self.signature(),
+    }
+
+
+def _unique(name: str, values: Sequence[object]) -> None:
+  """Refuse a list with a repeated entry."""
+  if len(set(values)) != len(values):
+    repeated = sorted({str(v) for v in values if values.count(v) > 1})
+    raise ValueError(f"{name} must be unique; got {repeated} more than once")
+
+
+def _selection_echo(selection: CaseSelection) -> dict[str, object]:
+  """A selection as JSON-able values."""
+  return {
+    "train": [d.isoformat() for d in selection.train],
+    "test": [d.isoformat() for d in selection.test],
+    "lead_hours": selection.lead_hours,
+    "init_hour": selection.init_hour,
+    "min_cases": selection.min_cases,
+  }
+
+
+_TABLES: dict[str, tuple[str, ...]] = {
+  "data": (
+    "dir",
+    "stations",
+    "train",
+    "test",
+    "lead_hours",
+    "init_hour",
+    "min_cases",
+    "verify",
+  ),
+  "margins": ("models", "n_levels", "batch_size"),
+  "copulas": (
+    "arms",
+    "margins",
+    "n_draws",
+    "sample_batch_size",
+    "mixture_k",
+  ),
+}
+_TOP_LEVEL = (*_TABLES, "responses", "devices", "estimators", "base_seed")
+
+
+def _table(raw: Mapping[str, object], name: str) -> dict[str, object]:
+  """The table ``[name]``, refusing a key it does not define."""
+  table = raw.get(name, {})
+  if not isinstance(table, dict):
+    raise TypeError(f"[{name}] must be a table; got {table!r}")
+  allowed = _TABLES.get(name)
+  if allowed is not None:
+    unknown = sorted(set(table) - set(allowed))
+    if unknown:
+      raise ValueError(
+        f"[{name}] must hold only {list(allowed)}; got unknown {unknown}"
+      )
+  return cast("dict[str, object]", table)
+
+
+def _required(table: Mapping[str, object], name: str, key: str) -> object:
+  if key not in table:
+    raise ValueError(f"[{name}] must define {key!r}")
+  return table[key]
+
+
+def _date(value: object, name: str) -> dt.date:
+  """A TOML date, or an ISO date string."""
+  if isinstance(value, dt.datetime):
+    raise TypeError(f"{name} must be a date without a time; got {value}")
+  if isinstance(value, dt.date):
+    return value
+  if isinstance(value, str):
+    try:
+      return dt.date.fromisoformat(value)
+    except ValueError as exc:
+      raise ValueError(f"{name} must be an ISO date; got {value!r}") from exc
+  raise ValueError(f"{name} must be a date; got {value!r}")
+
+
+def _dates(value: object, name: str) -> tuple[dt.date, dt.date]:
+  if not isinstance(value, list) or len(value) != 2:
+    raise ValueError(f"{name} must be [first, last], two dates; got {value!r}")
+  return _date(value[0], name), _date(value[1], name)
+
+
+def _int(value: object, name: str) -> int:
+  if isinstance(value, bool) or not isinstance(value, int):
+    raise TypeError(f"{name} must be an integer; got {value!r}")
+  return value
+
+
+def _strings(value: object, name: str) -> tuple[str, ...]:
+  if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+    raise ValueError(f"{name} must be a list of strings; got {value!r}")
+  return tuple(cast("list[str]", value))
+
+
+def _stations(value: object) -> tuple[int, ...] | None:
+  if value == "all":
+    return None
+  if not isinstance(value, list):
+    raise TypeError(
+      f"data.stations must be 'all' or a list of station ids; got {value!r}"
+    )
+  return tuple(_int(v, "data.stations") for v in value)
+
+
+def _response(name: str, value: object) -> ResponseSpec:
+  if not isinstance(value, dict):
+    raise TypeError(
+      f"responses.{name} must be a table such as {{ transform = 'identity' }}; "
+      f"got {value!r}"
+    )
+  unknown = sorted(set(value) - {"transform", "scale", "boundary_nudge"})
+  if unknown:
+    raise ValueError(
+      f"responses.{name} must hold only transform, scale and "
+      f"boundary_nudge; got unknown {unknown}"
+    )
+  transform = _required(value, f"responses.{name}", "transform")
+  if transform not in get_args(Transform):
+    raise ValueError(
+      f"responses.{name}.transform must be one of {list(_SUPPORTS)}; got "
+      f"{transform!r}"
+    )
+  return ResponseSpec(
+    transform=cast("Transform", transform),
+    scale=float(cast("float", value.get("scale", 1.0))),
+    boundary_nudge=float(cast("float", value.get("boundary_nudge", 0.0))),
+  )
+
+
+def load_config(path: str | Path) -> ApplicationConfig:
+  """Read an :class:`ApplicationConfig` from a TOML file.
+
+  Parameters
+  ----------
+  path : str or pathlib.Path
+      The file.
+
+  Returns
+  -------
+  ApplicationConfig
+      The validated configuration.
+  """
+  with Path(path).open("rb") as fh:
+    raw = tomllib.load(fh)
+  unknown = sorted(set(raw) - set(_TOP_LEVEL))
+  if unknown:
+    raise ValueError(
+      f"the configuration must hold only {list(_TOP_LEVEL)}; got unknown "
+      f"{unknown}"
+    )
+  data = _table(raw, "data")
+  margins = _table(raw, "margins")
+  copulas = _table(raw, "copulas")
+  responses = _table(raw, "responses")
+  devices = _table(raw, "devices")
+  raw_estimators = raw.get("estimators", [])
+  if not isinstance(raw_estimators, list):
+    raise EstimatorConfigError(
+      "estimators must be an [[estimators]] array of tables"
+    )
+  selection = CaseSelection(
+    train=_dates(_required(data, "data", "train"), "data.train"),
+    test=_dates(_required(data, "data", "test"), "data.test"),
+    **{
+      key: _int(data[key], f"data.{key}")
+      for key in ("lead_hours", "init_hour", "min_cases")
+      if key in data
+    },
+  )
+  # A key the file leaves out takes the dataclass default, written once.
+  options: dict[str, Any] = {
+    key: _int(table[key], f"{name}.{key}")
+    for name, table, keys in (
+      ("margins", margins, ("n_levels", "batch_size")),
+      ("copulas", copulas, ("n_draws", "sample_batch_size", "mixture_k")),
+    )
+    for key in keys
+    if key in table
+  }
+  if "base_seed" in raw:
+    options["base_seed"] = _int(raw["base_seed"], "base_seed")
+  if "verify" in data:
+    if not isinstance(data["verify"], bool):
+      raise TypeError(
+        f"data.verify must be true or false; got {data['verify']!r}"
+      )
+    options["verify_data"] = data["verify"]
+  if "margins" in copulas:
+    options["copula_margins"] = _strings(copulas["margins"], "copulas.margins")
+  for key, value in devices.items():
+    if not isinstance(value, str):
+      raise TypeError(f"devices.{key} must be a string; got {value!r}")
+  return ApplicationConfig(
+    data_dir=Path(str(data.get("dir", DEFAULT_DATA_DIR))).expanduser(),
+    stations=_stations(data.get("stations", "all")),
+    selection=selection,
+    models=_strings(_required(margins, "margins", "models"), "margins.models"),
+    responses={k: _response(k, v) for k, v in responses.items()},
+    estimators=tuple(
+      _parse_estimator(cast("Mapping[str, object]", e)) for e in raw_estimators
+    ),
+    copula_arms=_strings(copulas.get("arms", []), "copulas.arms"),
+    devices=cast("dict[str, str]", devices),
+    **options,
+  )
