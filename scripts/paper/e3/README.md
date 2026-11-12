@@ -1,4 +1,4 @@
-# E3 — comparison with VDC (§3.3)
+# E3 — comparison with VDC (§3.4)
 
 The scripts here compare NPCC with VDC (Safaai 2026, the vine denoising
 copula; <https://github.com/KempnerInstitute/vine-denoising-copula>) on VDC's
@@ -35,6 +35,54 @@ npcc's `.venv`. Where an npcc-side fit needs VDC's estimate — the adapted VDC
 pair copula of E3a's cross-check and of E3c — it gets it from
 `e3_vdc_server.py`, a process in VDC's environment.
 
+## The runs the paper cites
+
+The paper's E3a to E3d rows are the summaries `e3_collect.py` wrote in the
+finish of the probit rerun (TAG 2026-11-10, b7702e1; `../README.md`), at
+03:05 on 2026-11-11: `results/e3_vdc/e3{a,b,c}_summary.csv` and
+`results/e3d_unknown_structure/e3d_{summary,paired}.csv`. The rerun refitted
+every NPCC arm; every competitor row was reused from the runs before E8, and
+the rerun checked that none of those files changed. Every row records the
+commit it ran from in `npcc_commit`:
+
+| rows | commit | how they ran |
+|---|---|---|
+| E3a, E3b: every NPCC arm | b7702e1 | the rerun: the gradient boosters in lane C, one core each, `--device cpu`; the in-context learners in lane B (`e3_run_gpu_arms.py --main-tabpfn v3 --stages e3a e3b --no-collect`) |
+| E3a, E3b: VDC, TLL, parametric and the references | c2f0cb7 | reused |
+| E3a: `vdc_adapted`, the cross-check | 349ec08 | reused |
+| E3c: every NPCC arm and `rosenblatt-vinecop-check` | b7702e1 | the rerun: the boosters in lane C; TabPFN v3 in lane V, d = 10 and then d = 5 on each design |
+| E3c `decay`: VDC, TLL, `tll_cpp` and parametric | d10182b | reused |
+| E3c `strong`: the same | d18480b | reused |
+| E3c: VDC's own vine (`vdc_own`), both designs | d10182b | reused |
+| E3d: CatBoost's `random-ns`, `random-s`, `tll-ns` and `true-s` | b7702e1 | the rerun's lane C |
+| E3d: TabPFN v3's `random-ns` and `tll-ns` | b7702e1 | the rerun's lane V: d = 5 on both designs; d = 10 on `decay`, ten seeds; `tll-ns` at d = 10 on `strong`, seeds 101-505 |
+| E3d: VDC, TLL, parametric, `tll_true` and `parametric_true` | 2b319b7 | reused |
+| E3d: `vdc_true` | 4b83733; 2b319b7 in one d = 10 seed of each design | reused |
+| `e3_nan_diagnostics.csv` | 73a78c9 | not rerun: its rows are parametric fits, which the rerun reused |
+
+E3e and E10 on E3d, which `tab:unknown-structure` adds, ran later from
+d9dc80e; their sections below have their records.
+
+**Logs.** The rerun's NPCC logs are in `results/rerun_2026-11-10/logs/`
+(`laneC_*.log`, `laneV.log`, `e3ab_gpu.log`, `e3_collect.log`). Of the logs
+in `results/e3_vdc/`, the `*_vdc_side.log`, `*_competitors.log`,
+`e3a_npcc_vdc_adapted.log` and `table1_rerun_cpu.log` belong to reused rows;
+`e3a_npcc_gpu.log` and `e3b_npcc_gpu.log` hold every run's in-context arms,
+appended in turn, the rerun's probit lines last; the other `*_npcc_*.log`
+files, `gpu_mem_monitor.log` and `gpu_queue.log` belong to superseded NPCC
+arms. Likewise, of the `e3d_unknown_structure_*.log` files at the results
+root, `truth`, `vdc_side` and `competitors*` belong to reused rows, and
+`catboost_*` and `gpu_*` to superseded arms.
+
+### Superseded
+
+- The NPCC arms from before E8, on logit, written beside the competitor rows
+  above on 2026-11-05 and 06. The logit rerun (TAG 2026-11-09) moved them,
+  with the collector's tables of the time, into
+  `results/superseded_2026-11-06/` (`MANIFEST.txt`).
+- The logit rerun's own NPCC arms, from 50d2ca5, moved by the probit rerun
+  into `results/superseded_2026-11-10/` (`MANIFEST.txt`).
+
 ## The scripts
 
 | Script | Env | What it does |
@@ -60,7 +108,7 @@ pair copula of E3a's cross-check and of E3c — it gets it from
 | `e3_collect.py` | npcc | Long tables, summaries, cross-checks, the common-set scoring, and the code check |
 | `e3_nan_diagnostics.py` | npcc | Which arms, trees and pair copulas give non-finite vine densities |
 | `e3_run_gpu_arms.py` | npcc | The pending GPU arms, once the GPU is free |
-| `e6_timing.sh` | both | E6's §3.3 part: clean timings of E3a's pairs and E3d's vines, one job at a time |
+| `e6_timing.sh` | both | E6's §3.4 part: clean timings of E3a's pairs and E3d's vines, one job at a time |
 | `e6_timing.py` | npcc | Its vine timings (competitors with and without selection, the TabPFN v3 vine) and `e3_timing.csv` |
 | `e6_timing_vdc.py` | VDC | Its VDC vine timings, with and without VDC's order selection |
 
@@ -114,12 +162,13 @@ The download comes from Hugging Face, `hsafaai/vdc-denoiser-m64-v1`
 
 Every NPCC arm is one of E1's estimators at the probit transform, the only
 one the paper presents (E8, in `../README.md`); `e3_npcc.py` lists them. The
-run recorded before E8 used the same commands with E1's logit estimators.
+runs before E8 used the same commands with E1's logit estimators. "The runs
+the paper cites" (above) says which run wrote each row.
 
 Run everything from the npcc repository root. The CPU runs pin each process
 to one core and one BLAS/OpenMP thread, as VDC's runner times its methods;
 those are the settings below, with `nice -n 10` because the machine was
-shared. The core numbers are what the recorded run used and only matter for
+shared. The core numbers are what the run before E8 used and only matter for
 timings. First, in the shell that runs them:
 
 ```bash
@@ -194,8 +243,8 @@ taskset -c 15 nice -n 10 uv run --no-sync python scripts/paper/e3/e3b_npcc_fit.p
 ### E3c
 
 The two designs share `e3c_npcc_fit.py`, which takes the design's folder.
-For the primary `decay` design (`results/e3_vdc/e3c_decay/`; the recorded
-run used cores 10–13):
+For the primary `decay` design (`results/e3_vdc/e3c_decay/`; the run before
+E8 used cores 10–13):
 
 ```bash
 taskset -c 10 nice -n 10 ~/vdc/env/bin/python scripts/paper/e3/e3c_decay_vdc_side.py \
@@ -235,9 +284,10 @@ Each design's folder then holds:
 
 The collector labels every merged E3c row with its `design`.
 
-The recorded run of E3a, E3b and the strong design ran as five chains, one
-per core (11–15), starting each npcc-side command once its VDC side had
-written `vdc_side.json`. An npcc-side script needs nothing else, so the order
+The run before E8, whose VDC-side and competitor rows the paper cites, ran
+E3a, E3b and the strong design as five chains, one per core (11–15),
+starting each npcc-side command once its VDC side had written
+`vdc_side.json`. An npcc-side script needs nothing else, so the order
 across sub-experiments is free.
 
 ### E3d (unknown structure)
@@ -338,8 +388,9 @@ one machine; where E3d's folder supplies `tll-ns`, it goes first:
 R=scripts/paper/e3/e3e_report.py
 uv run --no-sync python $R results/e3d_unknown_structure results/e3e_simplification_2x2 \
     --dims 5 --out results/e3e_simplification_2x2/analysis_d5
+# The folder held the decay design only when this ran, hence the name.
 uv run --no-sync python $R results/e3e_simplification_2x2_gpu053 \
-    --dims 10 --out results/e3e_simplification_2x2_gpu053/analysis_d10
+    --dims 10 --out results/e3e_simplification_2x2_gpu053/analysis_d10_decay
 ```
 
 **Ran.**
@@ -572,7 +623,7 @@ resuming from its per-fit files, then the collector. It removes
 `PYTORCH_CUDA_ALLOC_CONF` from the children's environment, since
 `expandable_segments` fails on this machine's vGPU.
 
-### E6's timings (§3.3)
+### E6's timings (§3.4)
 
 E6's driver, `scripts/paper/e6/run_all.sh`, runs this part last, on an idle
 machine, one job at a time:
