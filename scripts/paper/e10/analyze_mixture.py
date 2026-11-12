@@ -119,17 +119,26 @@ def stat(values: pd.Series) -> tuple[float, float]:
   return float(np.mean(v)), se
 
 
-def others(paths: list[Path], ours: pd.DataFrame) -> pd.DataFrame:
-  """The ``--with`` runs' rows for E2's arms, checked to pair with ours."""
+def others(
+  paths: list[Path],
+  ours: pd.DataFrame,
+  arms: tuple[str, ...] = OTHER_ARMS,
+) -> pd.DataFrame:
+  """The ``--with`` runs' rows for ``arms``, checked to pair with ours.
+
+  E2's arms by default; ``analyze_mixture_gamvine.py`` passes E2b's, and
+  E11's analysis reads its references through this too, so every run
+  paired with a mixture or a chain is held to the same check.
+  """
   frames = []
   mine = ours.groupby(KEY)[["seed", "loglik_true"]].first()
   for path in paths:
     theirs = load(path)
-    theirs = theirs[theirs["arm"].isin(OTHER_ARMS)]
+    theirs = theirs[theirs["arm"].isin(arms)]
     got = theirs.groupby(KEY)[["seed", "loglik_true"]].first()
     shared = mine.index.intersection(got.index)
     if len(shared) == 0:
-      raise SystemExit(f"{path} must share cells with the mixture run")
+      raise SystemExit(f"{path} must share cells with the analyzed run")
     if not (
       (mine.loc[shared, "seed"] == got.loc[shared, "seed"]).all()
       and (
@@ -137,7 +146,7 @@ def others(paths: list[Path], ours: pd.DataFrame) -> pd.DataFrame:
       ).all()
     ):
       raise SystemExit(
-        f"{path} must be scored on the mixture run's cells and test points, "
+        f"{path} must be scored on the analyzed run's cells and test points, "
         "with the same seed and true log-density at every shared (d, n, rep, x)"
       )
     frames.append(theirs)

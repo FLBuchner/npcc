@@ -225,6 +225,51 @@ def test_code_provenance_names_this_checkout_and_only_a_checkout(
   }
 
 
+def test_code_provenance_names_an_unstaged_file_by_its_whole_path(
+  tmp_path: Path,
+) -> None:
+  """An unstaged change is recorded under its full path.
+
+  ``git status --porcelain`` starts such a line with a space (an empty
+  staging column), so stripping the output before splitting it shifts the
+  first line by one character, and the record names ``rc/...`` for a file
+  under ``src/``: a path that does not exist.
+  """
+  from npcc.experiments import _study
+
+  def git(*command: str) -> None:
+    subprocess.run(
+      ["git", "-C", str(tmp_path), *command],
+      capture_output=True,
+      check=True,
+    )
+
+  module = tmp_path / "src" / "npcc" / "experiments" / "module.py"
+  module.parent.mkdir(parents=True)
+  module.write_text("before\n")
+  try:
+    git("init", "-q")
+  except (OSError, subprocess.CalledProcessError):
+    pytest.skip("git is not available")
+  git("add", "src")
+  git(
+    "-c",
+    "user.name=npcc",
+    "-c",
+    "user.email=npcc@example.invalid",
+    "commit",
+    "-q",
+    "-m",
+    "init",
+  )
+  module.write_text("after\n")
+
+  record = _study.code_provenance(module)
+  assert record["uncommitted"] == ["src/npcc/experiments/module.py"]
+  assert isinstance(record["npcc_commit"], str)
+  assert len(record["npcc_commit"]) == 40
+
+
 @pytest.mark.parametrize("bad", ["1", "a/2", "-1/2", "1/"])
 def test_a_malformed_shard_is_refused_by_the_parser(bad: str) -> None:
   """``--shard`` takes ``I/K`` in whole numbers, and says so at parse time."""

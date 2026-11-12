@@ -27,6 +27,15 @@ copula density the members' mean. Each member is also scored on its own, as
 the arm ``mixture-member-<k>``, so the mixture can be read against its
 average member and against its first, the selected structure.
 
+**Chain.** ``chain`` asks what a vine adds at all. On the same fitted margins
+it fits ``chain_k`` chain-rule copula densities
+(:class:`~npcc.experiments.chain.ChainCopula`), each along a variable order
+drawn uniformly per ``(d, rep)`` (:func:`chain_orders`), and scores their
+equal-weight mixture exactly as ``mixture`` scores its vines. Each order is
+also scored on its own, as the arm ``chain-m<k>``. Factor ``k`` of an order
+conditions on the earlier scores and ``x`` together and has a torch seed of
+its own (:func:`chain_factor_seeds`).
+
 **GAM vines.** E2b's arms are fitted in R by the grid's ``gamvine_script``,
 one script run per arm and cell (:mod:`~npcc.experiments._external_vine`),
 on the cell's training sample, and evaluated at its test points.
@@ -93,6 +102,7 @@ from npcc.experiments._study import (
   summarize,
   sweep,
 )
+from npcc.experiments.chain import ChainCopula, draw_order
 from npcc.experiments.config import EstimatorSpec, RunConfig
 from npcc.experiments.vine_config import (
   GAMVINE_ARMS,
@@ -156,6 +166,62 @@ def random_structure_for(base_seed: int, d: int, rep: int) -> pv.RVineStructure:
   return pv.RVineStructure.sample(
     d, seeds=[derive_seed(base_seed, "random", d, rep)]
   )
+
+
+def chain_orders(base_seed: int, d: int, rep: int, k: int) -> list[list[int]]:
+  """The ``chain`` arm's ``k`` variable orders in repetition ``rep``.
+
+  Keyed on ``(d, rep)`` alone, as the truth and the test points are, so every
+  sample size in a repetition mixes the same orders.
+
+  Parameters
+  ----------
+  base_seed : int
+      The run's base seed.
+  d : int
+      The dimension.
+  rep : int
+      The repetition.
+  k : int
+      How many orders.
+
+  Returns
+  -------
+  list of list of int
+      Order ``j`` (1-based) drawn by :func:`~npcc.experiments.chain.
+      draw_order` from ``derive_seed(base_seed, "chain", d, rep, j)``.
+  """
+  return [
+    draw_order(d, derive_seed(base_seed, "chain", d, rep, j))
+    for j in range(1, k + 1)
+  ]
+
+
+def chain_factor_seeds(
+  cell_seed: int, estimator_id: str, j: int, d: int
+) -> list[int]:
+  """The torch seeds of order ``j``'s factors, one per factor ``2, ..., d``.
+
+  Parameters
+  ----------
+  cell_seed : int
+      The cell's seed.
+  estimator_id : str
+      The estimator's id, so two estimators' factors draw differently.
+  j : int
+      The order, 1-based.
+  d : int
+      The dimension.
+
+  Returns
+  -------
+  list of int
+      ``derive_seed(cell_seed, "chain", estimator_id, j, f)`` for factor
+      ``f = 2, ..., d``.
+  """
+  return [
+    derive_seed(cell_seed, "chain", estimator_id, j, f) for f in range(2, d + 1)
+  ]
 
 
 def mixture_log_density(member_logs: torch.Tensor) -> torch.Tensor:
@@ -300,6 +366,7 @@ def grid_signature(grid: VineGridConfig, run: RunConfig) -> str:
     # Only where it changes what a cell computes, so that a grid without the
     # mixture keeps the signature it had before the arm existed.
     **({"mixture_k": grid.mixture_k} if "mixture" in grid.arms else {}),
+    **({"chain_k": grid.chain_k} if "chain" in grid.arms else {}),
     # `batch_size` chunks the query set without changing any prediction's
     # context, so it changes throughput and not results.
     "base_seed": run.base_seed,
@@ -407,6 +474,42 @@ def _fit_npcc(
   return RosenblattVinedist(vine, margins), vine, selection_time
 
 
+def _fit_margins(
+  controls: FitControlsRosenblattVinecop, y: torch.Tensor, x: torch.Tensor
+) -> tuple[list[ConditionalMargin], torch.Tensor]:
+  """Fit the margins as :meth:`RosenblattVinedist.fit` does; return their PITs.
+
+  Each margin is fitted on its column with no margin controls, and the copula
+  data are the transforms ``copula_data`` assembles from them.
+  """
+  margins = _new_margins(controls, y.shape[1])
+  for j, margin in enumerate(margins):
+    margin.fit(y[:, j], None, x=x)
+  return margins, RosenblattVinedist.copula_data(margins, y, x=x)
+
+
+def _margin_terms(
+  margins: list[ConditionalMargin], points: EvalPoints, x_eval: torch.Tensor
+) -> tuple[torch.Tensor, list[torch.Tensor]]:
+  """The test points' fitted transforms and each margin's log-density there.
+
+  Returns
+  -------
+  layout : torch.Tensor, shape (m, d)
+      The fitted margins' probability integral transforms of the test points.
+  margin_logs : list of torch.Tensor
+      Each margin's log-density at the test points, in variable order.
+  """
+  y_eval = torch.cat(points.y)
+  with torch.inference_mode():
+    layout = RosenblattVinedist.copula_data(margins, y_eval, x=x_eval)
+    y_eval = y_eval.to(device=layout.device)
+    margin_logs = [
+      m.logpdf(y_eval[:, j], x=x_eval) for j, m in enumerate(margins)
+    ]
+  return layout, margin_logs
+
+
 def _mixture_densities(
   est: EstimatorSpec,
   member_seeds: list[int],
@@ -455,10 +558,7 @@ def _mixture_densities(
     batch_size=batch_size,
   )
   t0 = perf_counter()
-  margins = _new_margins(controls, y.shape[1])
-  for j, margin in enumerate(margins):
-    margin.fit(y[:, j], None, x=x)
-  u = RosenblattVinedist.copula_data(margins, y, x=x)
+  margins, u = _fit_margins(controls, y, x)
   t1 = perf_counter()
   structures = [select_structure(u)] + [
     weighted_random_structure(u, seed) for seed in member_seeds
@@ -467,14 +567,8 @@ def _mixture_densities(
   fit_time = perf_counter() - t0
 
   t0 = perf_counter()
-  y_eval = torch.cat(points.y)
   u_eval = torch.cat(points.u)
-  with torch.inference_mode():
-    layout = RosenblattVinedist.copula_data(margins, y_eval, x=x_eval)
-    y_eval = y_eval.to(device=layout.device)
-    margin_logs = [
-      m.logpdf(y_eval[:, j], x=x_eval) for j, m in enumerate(margins)
-    ]
+  layout, margin_logs = _margin_terms(margins, points, x_eval)
   pdf_time = perf_counter() - t0
 
   copula_logs: list[torch.Tensor] = []
@@ -506,6 +600,73 @@ def _mixture_densities(
   )
 
 
+def _chain_densities(
+  est: EstimatorSpec,
+  orders: list[list[int]],
+  factor_seeds: list[list[int]],
+  y: torch.Tensor,
+  x: torch.Tensor,
+  points: EvalPoints,
+  x_eval: torch.Tensor,
+  *,
+  device: str | None,
+  projection_grid_size: int,
+  batch_size: int | None,
+) -> tuple[torch.Tensor, list[torch.Tensor], torch.Tensor, dict[str, float]]:
+  """Fit one chain-rule density per order and evaluate each at the test points.
+
+  The margins are fitted once, as :func:`_mixture_densities` fits them, and
+  every order's factors on the transforms they give, with ``x``. Each order
+  is evaluated as soon as it is fitted and then released, so only one
+  order's factors occupy the device at a time.
+
+  Returns
+  -------
+  copula_logs : torch.Tensor, shape (k, m)
+      Each order's copula log-density at the test points' fitted transforms.
+  margin_logs : list of torch.Tensor
+      Each margin's log-density at the test points, in variable order.
+  copula_pdfs : torch.Tensor, shape (k, m)
+      Each order's copula density at the test points' true transforms.
+  seconds : dict of str to float
+      ``fit_time`` (margins and every order) and ``pdf_time``.
+  """
+  controls = est.controls(
+    FitControlsRosenblattVinecop,
+    device=device,
+    projection_grid_size=projection_grid_size,
+    batch_size=batch_size,
+  )
+  t0 = perf_counter()
+  margins, u = _fit_margins(controls, y, x)
+  fit_time = perf_counter() - t0
+
+  t0 = perf_counter()
+  u_eval = torch.cat(points.u)
+  layout, margin_logs = _margin_terms(margins, points, x_eval)
+  pdf_time = perf_counter() - t0
+
+  copula_logs: list[torch.Tensor] = []
+  copula_pdfs: list[torch.Tensor] = []
+  for order, seeds in zip(orders, factor_seeds, strict=True):
+    t0 = perf_counter()
+    density = ChainCopula(order, controls).fit(u, x=x, seeds=seeds)
+    fit_time += perf_counter() - t0
+    t0 = perf_counter()
+    with torch.inference_mode():
+      copula_logs.append(density.logpdf(layout, x=x_eval))
+      copula_pdfs.append(density.pdf(u_eval, x=x_eval))
+    pdf_time += perf_counter() - t0
+    del density
+    release_gpu()
+  return (
+    torch.stack(copula_logs),
+    margin_logs,
+    torch.stack(copula_pdfs),
+    {"fit_time": fit_time, "pdf_time": pdf_time},
+  )
+
+
 def _metric_rows(
   base: Mapping[str, object],
   points: EvalPoints,
@@ -520,6 +681,46 @@ def _metric_rows(
     }
     for k, x_val in enumerate(points.x_axis)
   ]
+
+
+def _mixture_metric_rows(
+  base: Mapping[str, object],
+  points: EvalPoints,
+  copula_logs: torch.Tensor,
+  margin_logs: list[torch.Tensor],
+  copula_pdfs: torch.Tensor,
+  member_prefix: str,
+) -> list[dict[str, Any]]:
+  """A mixture's metric rows, then each member's, as arm ``<prefix><j>``.
+
+  The mixture's joint density is the margins' times the members' mixed copula
+  densities, and its copula density their mean. Beside each of its rows go
+  its members' mean ``KL`` and ``KL_copula`` at the same ``x``, which
+  Jensen's inequality bounds the mixture's by.
+  """
+  joint, joint_members = joint_log_densities(copula_logs, margin_logs)
+  split = points.y[0].shape[0]
+  rows = _metric_rows(
+    base,
+    points,
+    list(joint.exp().cpu().split(split)),
+    list(copula_pdfs.mean(dim=0).cpu().split(split)),
+  )
+  member_rows = [
+    _metric_rows(
+      {**base, "arm": f"{member_prefix}{j + 1}"},
+      points,
+      list(joint_members[j].exp().cpu().split(split)),
+      list(copula_pdfs[j].cpu().split(split)),
+    )
+    for j in range(copula_logs.shape[0])
+  ]
+  for i, row in enumerate(rows):
+    for name in ("KL", "KL_copula"):
+      row[f"{name}_members_mean"] = float(
+        np.mean([m[i][name] for m in member_rows])
+      )
+  return rows + [row for member in member_rows for row in member]
 
 
 def summarize_one_cell(
@@ -657,33 +858,14 @@ def summarize_one_cell(
           batch_size=grid.batch_size,
         )
       )
-      joint, joint_members = joint_log_densities(copula_logs, margin_logs)
-      split = grid.eval_m
-      rows = _metric_rows(
+      metric_rows += _mixture_metric_rows(
         base,
         points,
-        list(joint.exp().cpu().split(split)),
-        list(copula_pdfs.mean(dim=0).cpu().split(split)),
+        copula_logs,
+        margin_logs,
+        copula_pdfs,
+        "mixture-member-",
       )
-      member_rows = [
-        _metric_rows(
-          {**base, "arm": f"mixture-member-{j + 1}"},
-          points,
-          list(joint_members[j].exp().cpu().split(split)),
-          list(copula_pdfs[j].cpu().split(split)),
-        )
-        for j in range(len(members))
-      ]
-      # Beside the mixture's own scores, its members' mean at the same x,
-      # which Jensen's inequality bounds the mixture's KL by.
-      for i, row in enumerate(rows):
-        for name in ("KL", "KL_copula"):
-          row[f"{name}_members_mean"] = float(
-            np.mean([m[i][name] for m in member_rows])
-          )
-      metric_rows += rows
-      for m in member_rows:
-        metric_rows += m
       _record(
         base,
         seconds["fit_time"],
@@ -694,7 +876,50 @@ def summarize_one_cell(
         ),
         selection_time=seconds["selection_time"],
       )
-      del copula_logs, margin_logs, copula_pdfs, joint, joint_members
+      del copula_logs, margin_logs, copula_pdfs
+      release_gpu()
+
+  if "chain" in grid.arms:
+    orders = chain_orders(base_seed, cell.d, cell.rep, grid.chain_k)
+    x_all = points.x_axis.repeat_interleave(grid.eval_m).reshape(-1, 1)
+    for est in grid.estimators:
+      base = {
+        **cell_base,
+        "arm": "chain",
+        "label": est.label,
+        "estimator_id": est.estimator_id,
+        "backend": est.backend,
+        "transform": est.transform,
+      }
+      factor_seeds = [
+        chain_factor_seeds(cell_seed, est.estimator_id, j, cell.d)
+        for j in range(1, grid.chain_k + 1)
+      ]
+      torch.manual_seed(derive_seed(cell_seed, "chain", est.estimator_id))
+      reset_gpu_peaks()
+      copula_logs, margin_logs, copula_pdfs, seconds = _chain_densities(
+        est,
+        orders,
+        factor_seeds,
+        y,
+        x,
+        points,
+        x_all,
+        device=device,
+        projection_grid_size=grid.projection_grid_size,
+        batch_size=grid.batch_size,
+      )
+      metric_rows += _mixture_metric_rows(
+        base, points, copula_logs, margin_logs, copula_pdfs, "chain-m"
+      )
+      _record(
+        base,
+        seconds["fit_time"],
+        seconds["pdf_time"],
+        chain_orders=json.dumps(orders),
+        chain_factor_seeds=json.dumps(factor_seeds),
+      )
+      del copula_logs, margin_logs, copula_pdfs
       release_gpu()
 
   if "tll" in grid.arms:

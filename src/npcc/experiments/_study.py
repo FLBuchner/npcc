@@ -657,11 +657,14 @@ def code_provenance(
       )
     except (OSError, subprocess.SubprocessError):
       return None
-    return done.stdout.strip()
+    return done.stdout
 
   top = git("rev-parse", "--show-toplevel")
-  if top is None or Path(top).resolve() != root:
+  if top is None or Path(top.strip()).resolve() != root:
     return {"npcc_commit": None, "uncommitted": None}
+  # Each porcelain line is two status columns, a space and the path. The
+  # first column is a space for a file changed but not staged, so the output
+  # is split into lines without stripping it.
   status = git(
     "status",
     "--porcelain",
@@ -671,11 +674,12 @@ def code_provenance(
     "configs",
     "r_methods",
   )
+  head = git("rev-parse", "HEAD")
   return {
-    "npcc_commit": git("rev-parse", "HEAD"),
+    "npcc_commit": None if head is None else head.strip(),
     "uncommitted": None
     if status is None
-    else [line[3:] for line in status.splitlines()],
+    else [line[3:] for line in status.splitlines() if line],
   }
 
 

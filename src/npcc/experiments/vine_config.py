@@ -39,6 +39,11 @@ from npcc.experiments.config import (
 #   vine is consistent on any structure, so averaging over structures hedges
 #   selecting one; by Jensen's inequality the mixture's KL is at most its
 #   members' mean.
+# `chain`: E11's baseline without a vine, the equal-weight mixture of
+#   `chain_k` chain-rule copula densities (`npcc.experiments.chain`), each
+#   along a uniformly random variable order and sharing the margins as the
+#   mixture's members do. Factor k of an order is one Rosenblatt direction
+#   conditioning on the earlier scores and `x` together.
 # `gamvine-oracle`, `gamvine-selected`, `gamvine-ns`: E2b's GAM vines, fitted
 #   in R by `gamvine_script` on mgcv margins with `x` a smooth term in every
 #   pair -- on the true structure, on a selected one, and on a selected one
@@ -49,11 +54,18 @@ ARMS: tuple[str, ...] = (
   "selected",
   "tll",
   "mixture",
+  "chain",
   "gamvine-oracle",
   "gamvine-selected",
   "gamvine-ns",
 )
-NPCC_ARMS: tuple[str, ...] = ("oracle", "random", "selected", "mixture")
+NPCC_ARMS: tuple[str, ...] = (
+  "oracle",
+  "random",
+  "selected",
+  "mixture",
+  "chain",
+)
 GAMVINE_ARMS: tuple[str, ...] = (
   "gamvine-oracle",
   "gamvine-selected",
@@ -89,6 +101,7 @@ class VineGridConfig:
   projection_grid_size: int = 30
   batch_size: int | None = None
   mixture_k: int = 5
+  chain_k: int = 5
   #: The GAM vines' script, relative to the working directory unless
   #: absolute; read only when a GAM-vine arm runs.
   gamvine_script: str = "r_methods/fit_gamvine.R"
@@ -132,6 +145,8 @@ class VineGridConfig:
       raise ValueError(f"eval_m must be >= 10; got {self.eval_m}")
     if self.mixture_k < 1:
       raise ValueError(f"mixture_k must be >= 1; got {self.mixture_k}")
+    if self.chain_k < 1:
+      raise ValueError(f"chain_k must be >= 1; got {self.chain_k}")
     if any(a in GAMVINE_ARMS for a in self.arms):
       script = Path(self.gamvine_script)
       if not script.is_file():
@@ -160,6 +175,7 @@ _VINE_OPTIONAL: dict[str, Callable[[Any], object]] = {
   "projection_grid_size": int,
   "batch_size": int,
   "mixture_k": int,
+  "chain_k": int,
   "gamvine_script": str,
 }
 
