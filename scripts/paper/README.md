@@ -576,6 +576,43 @@ with Clayton and Gaussian copulas:
     beside E2's arms, and `logs/margins_side_check.txt` what mgcv's default
     smoothing (GCV) costs the margins at d = 10, against REML. The pilot ran
     with GCV margins; the study runs with REML.
+  - **Ran** on 2026-11-11 and 12, here on the CPU, from a clean worktree at
+    c6a876a, the tip of E2b's pull request (#50) with the igraph fix. The
+    four configs ran in turn, each as 6 single-threaded shards on cores 4
+    to 9 and then the aggregation pass, into `results/<config>_2026-11-11b`.
+    No fit failed in any of them.
+
+    | config | cells | shards |
+    |---|---|---|
+    | `vine_study_gamvine` | 80 | 20:18 to 20:43 |
+    | `vine_study_gamvine_d10` | 40 | 20:43 to 22:58 |
+    | `vine_study_gamvine_n2000` | 40 | 22:58 to 23:18 |
+    | `vine_study_gamvine_d10_n2000` | 20 | 23:18 to 01:02 |
+
+    Each run's analysis is `analyze.py` on the E2 run it pairs with, with
+    the GAM run after `--with`, written into the GAM run's own `analysis/`,
+    which leaves the E2 runs' cited `analysis/` folders as they were:
+
+    ```bash
+    A=scripts/paper/e2/analyze.py
+    R=results
+    uv run --no-sync python $A $R/vine_2026-11-10 --with $R/vine_2026-11-11_selected \
+        $R/vine_study_gamvine_2026-11-11b --out $R/vine_study_gamvine_2026-11-11b/analysis
+    uv run --no-sync python $A $R/vine_d10_2026-11-11 --with $R/vine_study_gamvine_d10_2026-11-11b \
+        --out $R/vine_study_gamvine_d10_2026-11-11b/analysis
+    uv run --no-sync python $A $R/vine_n2000_2026-11-11 --with $R/vine_study_gamvine_n2000_2026-11-11b \
+        --out $R/vine_study_gamvine_n2000_2026-11-11b/analysis
+    uv run --no-sync python $A $R/vine_d10_n2000_2026-11-11 \
+        --with $R/vine_study_gamvine_d10_n2000_2026-11-11b \
+        --out $R/vine_study_gamvine_d10_n2000_2026-11-11b/analysis
+    ```
+
+    Each run's `logs/` holds the launcher (`e2b.sh`), `provenance.txt`
+    with every command, R's and the packages' versions, and each shard's
+    log. A first run from fa3b844, before the igraph fix, went into
+    `results/vine_study_gamvine_2026-11-11` and `..._d10_2026-11-11`; it
+    was stopped and superseded, and each holds a `SUPERSEDED.txt` saying
+    why. Do not cite it.
 
 - E2d, E2 at n = 2000:
   - **Config.** `configs/vine_study_n2000.toml` (d = 3 and 5) and
@@ -589,6 +626,23 @@ with Clayton and Gaussian copulas:
   - **Analysis.** `analyze.py` and `tree1_diagnostic.py` on each run alone,
     as at d = 10. The rows for n = 2000 come from these runs and the rows
     for n = 500 and 1000 from E2's.
+  - **Ran** on 2026-11-11 from b0523c5, the tip of E2d's pull request
+    (#48):
+    - d = 3 and 5, here, from a clean worktree, as one GPU process
+      (`npcc-vinestudy --config configs/vine_study_n2000.toml --out
+      results/vine_n2000_2026-11-11 --workers 1 --resume --gpu-mem-fraction
+      0.9`, 4 threads), 17:22 to 18:44 for the 40 cells. `analyze.py` and
+      `tree1_diagnostic.py` followed from the same worktree.
+    - d = 10, on gpu053 from a checkout at b0523c5: a pilot of one cell
+      (rep 0) into `vine_d10_n2000_pilot_2026-11-11` in 21 min, then the
+      run into `vine_d10_n2000_2026-11-11`, one process with the same
+      flags, 17:58 to 22:10 for the 20 cells. Both were copied unchanged
+      into `results/` and analyzed here on the CPU from 2f300e9, the base
+      after #48 and #49.
+
+    Each run's `logs/` holds its launcher, `provenance.txt` with every
+    command, and `steps.log`. E10's analysis (below) pairs both runs with
+    E2's cell by cell and refuses any that do not pair; it accepted both.
 
 ## E10 — structure mixtures
 
@@ -632,7 +686,52 @@ Monte-Carlo KL point by point.
   h-function. Each `ConditionalMargin` now keeps its last table and returns
   it for a repeat read. `scripts/paper/e10/check_table_reuse.py` checks that
   this changes no TabPFN vine density bitwise, on one E2 cell and one E3d
-  sample, and measures the speed-up.
+  sample, and measures the speed-up. It times three passes, off, on and off,
+  each starting with no table kept.
+  - On E2's cell d = 5, n = 1000, rep 0 (random arm, 5,000 points), from
+    a49337f into `results/e10_table_reuse_2026-11-11`: 52.8 s, 31.7 s and
+    52.7 s, 1.67x, joint and copula densities bitwise equal. That folder's
+    E3d timing is void: before 444ea50, each pass reused the tables the
+    previous pass had kept.
+  - On E3d's `decay`, d = 5, seed 101 (random structure, non-simplified,
+    20,000 points), from d9dc80e into
+    `results/e10_table_reuse_e3d_2026-11-11` (`--skip-e2 --e3d-folder
+    results/e3d_unknown_structure`): 93.2 s, 61.0 s and 95.0 s, 1.54x,
+    bitwise equal.
+  - On gpu053, E3d's `decay`, d = 10, seed 101 (2,000 points), from d9dc80e
+    into `results/e10_table_reuse_gpu053_2026-11-11`: 37.3 s, 23.5 s and
+    37.2 s, 1.58x, bitwise equal.
+- **Ran (d = 3 and 5)** here, from a clean worktree at d9dc80e, the tip of
+  E10's pull request (#51) before the base was merged into it, as one GPU
+  process (4 threads, `--workers 1 --resume --gpu-mem-fraction 0.9`) into
+  `results/vine_study_mixture_2026-11-11`. It ran in two passes: n = 500
+  and 1000 from 22:59 on 2026-11-11 to 01:33, then n = 2000, resuming the
+  first pass's cells, to 03:04, for 120 cells. The analysis:
+
+  ```bash
+  R=results
+  uv run --no-sync python scripts/paper/e10/analyze_mixture.py $R/vine_study_mixture_2026-11-11 \
+      --with $R/vine_2026-11-10 $R/vine_2026-11-11_selected $R/vine_n2000_2026-11-11
+  ```
+
+  It wrote `analysis/` with `vine_mixture.csv`, `vine_mixture_cells.csv` and
+  `vine_mixture_checks.json`: Jensen's bound holds in every cell (to
+  3e-17), and member 1 equals the selected arm bit for bit. The first
+  pass's own analysis named the n = 2000 run, which had no cell in common
+  with it yet, and was refused; its log is `logs/analyze_mixture_pass1.log`.
+  `logs/` also holds the launcher, `vine_two_pass.sh`, and
+  `provenance.txt`.
+- **Ran (d = 10)** on gpu053, as a whole experiment, from a checkout at
+  d9dc80e, into `vine_study_mixture_d10_2026-11-11`: one sample size at a
+  time, n = 1000, then 2000, then 500, each as one process
+  (`--workers 1 --resume --gpu-mem-fraction 0.9`, 4 threads) on a copy of
+  the config narrowed to that n (`config_n<n>.toml` in the run's folder).
+  Each n is analyzed as it finishes, against gpu053's own E2 runs at
+  d = 10, into `analysis_after_n1000`, then `analysis_after_n1000_2000`,
+  and `analysis` when all three are in. n = 1000 ran from 05:45 to 09:19 on
+  2026-11-12. The run's `logs/` holds the queue (`gpu053_queue_v2.sh`),
+  its log, and `provenance.txt`, and `env_gpu053.txt` records the machine.
+  The folder is copied unchanged into `results/`.
 
 ## E3 — comparison with VDC (§3.4)
 
@@ -920,3 +1019,13 @@ not this screen's.
   `tabpfn-quantiles-v3-probit` fits, both from b7702e1, whose
   `src/npcc/core` this branch leaves as it was with the setting off: half
   the time, at the cost of pairing across runs.
+- **Ran** on 2026-11-11 here, with `WANT=a42716a TAG=2026-11-11`, the tip
+  of the screen's pull request (#49), into `results/qnorm_screen_2026-11-11`:
+  E1's 80 cells from 18:51 to 19:16, E3a's 180 fits to 20:03, so 1 h 12 min
+  in all.
+- **Verdict: keep `u`.** `report.txt` closes with "KEEP u: gain overall
+  (z = -10.43), but loss beyond 2 SE in family frank". The overall score is
+  -0.00196 (SE 0.00019), and every n gains beyond 2 SE. The Frank family
+  (E3a's Frank copula at theta = 5, both `n_train`) loses: +0.00091 (SE
+  0.00016, z = +5.7), with `qnorm(u)` worse in all 10 of its pairs. By the
+  rule, `u` is kept.
