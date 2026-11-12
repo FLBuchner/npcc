@@ -430,6 +430,10 @@ uv run --no-sync python $R results/e3e_simplification_2x2_gpu053 \
   `tll-ns` differs from this machine's refit of it (E10's member 1, equal to
   E3d's `tll-ns` on the five seeds E3d has) by -0.044 to +0.069 per seed,
   +0.002 on average (sd 0.032).
+- **Cited**, and frozen: `analysis_d5/`, `analysis_d10_decay/`, and
+  `analysis_d10/`, whose `strong` rows `tab:unknown-structure`'s d = 10 full
+  cells and §3.4's 2 x 2 read from the paper's 3fee304 on. A later analysis
+  of these runs takes a new `--out`.
 
 **Check (CPU, CatBoost, `decay`, d = 5, seed 101).** Run into a scratch
 folder, `tll-ns` and `true-s` reproduced E3d's CatBoost cells bit for bit
