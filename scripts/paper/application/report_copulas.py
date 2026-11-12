@@ -14,7 +14,10 @@ left out of that model's comparisons and listed instead. Writes, under
   arm, pooled means and skills with their equal-station intervals.
 
 The joint NLL gain is independence's mean less the arm's; the energy and
-variogram skills are ``1 - mean(arm) / mean(independence)``.
+variogram skills are ``1 - mean(arm) / mean(independence)``. Where responses
+are derived from the modeled ones, the log score is ``joint_nll_modeled``,
+over the modeled responses only, and each response's CRPS from the draws and
+the share of clipped draws are reported too.
 
 Usage (from the repository root)::
 
@@ -33,22 +36,46 @@ import report_common as common
 
 from npcc.experiments.application.scores import (
   INDEPENDENCE,
+  copula_score_columns,
   copula_tables,
 )
 
-_METRICS = (
-  ("joint_nll", "Joint NLL", False),
-  ("energy", "Energy score", False),
-  ("variogram", "Variogram score", False),
-  ("joint_nll_gain", "NLL gain on independence", True),
-  ("energy_skill", "Energy skill", True),
-  ("variogram_skill", "Variogram skill", True),
-)
-_CASE_METRICS = (
-  *_METRICS[:4],
-  ("energy_gain", "Energy gain / pooled independence", True),
-  ("variogram_gain", "Variogram gain / pooled independence", True),
-)
+Metric = tuple[str, str, bool]
+
+
+def metrics(
+  columns: pd.Index,
+) -> tuple[list[Metric], list[Metric], list[Metric]]:
+  """The headline, per-response CRPS and per-case metrics present.
+
+  The log score is ``joint_nll``, or ``joint_nll_modeled`` where responses
+  are derived and it covers the modeled ones only; the per-response CRPS
+  from the draws exists only then.
+  """
+  frame = pd.DataFrame(columns=columns)
+  nll, scores = copula_score_columns(frame)
+  label = "Joint NLL" if nll == "joint_nll" else "Joint NLL, modeled responses"
+  headline = [
+    (nll, label, False),
+    ("energy", "Energy score", False),
+    ("variogram", "Variogram score", False),
+    (f"{nll}_gain", "NLL gain on independence", True),
+    ("energy_skill", "Energy skill", True),
+    ("variogram_skill", "Variogram skill", True),
+  ]
+  crps = [(c, f"CRPS, {c.removeprefix('crps_')}", False) for c in scores[3:]]
+  crps += [
+    (f"{c}_skill", f"CRPS skill, {c.removeprefix('crps_')}", True)
+    for c in scores[3:]
+  ]
+  if "clipped_share" in columns:
+    crps.append(("clipped_share", "Share of draws with Td > T, clipped", False))
+  cases = [
+    *headline[:4],
+    ("energy_gain", "Energy gain / pooled independence", True),
+    ("variogram_gain", "Variogram gain / pooled independence", True),
+  ]
+  return headline, crps, cases
 
 
 def stored_cases(run: Path, failures: pd.DataFrame) -> pd.DataFrame:
@@ -81,7 +108,8 @@ def paper_table(
     validate="1:1",
   )
   out = merged[["model", "arm", "n_stations", "n_cases"]].copy()
-  for metric, _, _ in _METRICS:
+  headline, crps, _ = metrics(pooled.columns)
+  for metric, _, _ in [*headline, *crps]:
     out[metric] = merged[metric]
     out[f"{metric}_station_mean"] = merged[f"{metric}_stations"]
     out[f"{metric}_low"] = merged[f"{metric}_low"]
@@ -95,11 +123,13 @@ def build(run: Path, out: Path) -> list[Path]:
   station_mean = common.read_table(run, "copulas_station_mean")
   by_station = common.read_table(run, "copulas_by_station")
   failures = common.read_table(run, "copula_failures")
+  stored = stored_cases(run, failures)
+  _, scores = copula_score_columns(stored)
+  extra = ["clipped_share"] if "clipped_share" in stored else []
   cases = copula_tables(
-    stored_cases(run, failures)[
-      ["station", "model", "arm", "row", "joint_nll", "energy", "variogram"]
-    ]
+    stored[["station", "model", "arm", "row", *scores, *extra]]
   )["cases"]
+  headline, crps, case_metrics = metrics(pooled.columns)
   out.mkdir(parents=True, exist_ok=True)
   table_path = out / "copula_table.csv"
   paper_table(pooled, station_mean).to_csv(table_path, index=False)
@@ -127,13 +157,13 @@ def build(run: Path, out: Path) -> list[Path]:
       )
       mean = station_mean.loc[station_mean["model"] == model]
       table = pd.DataFrame({"Arm": mean["arm"], "Stations": mean["n_stations"]})
-      for metric, label, _ in _METRICS:
+      for metric, label, _ in headline:
         table[label] = common.with_interval(mean, metric)
       report.table(table, f"{model}: equal station weights")
       common.box_page(
         report,
         by_station.loc[by_station["model"] == model],
-        _METRICS,
+        headline,
         arms,
         by="arm",
         title=f"{model}: one value per station",
@@ -141,13 +171,38 @@ def build(run: Path, out: Path) -> list[Path]:
       )
       pool = pooled.loc[pooled["model"] == model]
       report.table(
-        pool[["arm", "n_stations", "n_cases", *(m for m, _, _ in _METRICS)]],
+        pool[["arm", "n_stations", "n_cases", *(m for m, _, _ in headline)]],
         f"{model}: every station's cases pooled",
       )
+      if crps:
+        table = pd.DataFrame({"Arm": mean["arm"]})
+        for metric, label, _ in crps:
+          table[label] = common.with_interval(mean, metric)
+        report.table(
+          table,
+          f"{model}: each response's CRPS from the draws, equal station "
+          "weights",
+          "Derived responses are computed from each draw of the modeled ones; "
+          "the clipped share counts draws whose dew point exceeded the "
+          "temperature.",
+        )
+        report.table(
+          pool[["arm", *(m for m, _, _ in crps)]],
+          f"{model}: each response's CRPS from the draws, pooled",
+        )
+        common.box_page(
+          report,
+          by_station.loc[by_station["model"] == model],
+          crps,
+          arms,
+          by="arm",
+          title=f"{model}: each response's CRPS, one value per station",
+          note="Skills: 1 - mean / independence's mean.",
+        )
       common.box_page(
         report,
         cases.loc[cases["model"] == model],
-        _CASE_METRICS,
+        case_metrics,
         arms,
         by="arm",
         title=f"{model}: pooled test cases",

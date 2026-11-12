@@ -67,7 +67,9 @@ def main() -> None:
   info = json.loads((a.folder / "truths.json").read_text())
   samples = a.folder / "samples.npz"
   if common.sha256_file(samples) != info["samples_sha256"]:
-    raise SystemExit(f"{samples} must match the sha256 recorded by e3d_truth.py")
+    raise SystemExit(
+      f"{samples} must match the sha256 recorded by e3d_truth.py"
+    )
   with np.load(samples) as f:
     data = {k: f[k] for k in f.files}
   prov = common.provenance(__file__, a.device)
@@ -80,7 +82,10 @@ def main() -> None:
   ck = torch.load(a.checkpoint, map_location="cpu", weights_only=False)
   bundle.model.load_state_dict(ck["model_state_dict"], strict=True)
   del ck
-  settings = {**VDC_VINE_SETTINGS, "device": a.device}  # no order: VDC selects it
+  settings = {
+    **VDC_VINE_SETTINGS,
+    "device": a.device,
+  }  # no order: VDC selects it
 
   rows: list[dict] = []
   warmed = False
@@ -88,10 +93,16 @@ def main() -> None:
   for design, d, seed in zip(data["design"], data["d"], data["seed"]):
     design, d, seed = str(design), int(d), int(seed)
     key = f"{design}_d{d}_s{seed}"
-    tr, te, logtrue = data[f"{key}_train"], data[f"{key}_test"], data[f"{key}_logtrue"]
+    tr, te, logtrue = (
+      data[f"{key}_train"],
+      data[f"{key}_test"],
+      data[f"{key}_logtrue"],
+    )
     truth = e3d_structure.edges_from_matrix(data[f"{key}_true_matrix"])
     if not warmed:  # VDC's protocol excludes warm-up
-      VineCopulaModel(**settings).fit(tr, diffusion_model=bundle.model, diffusion=None, verbose=False)
+      VineCopulaModel(**settings).fit(
+        tr, diffusion_model=bundle.model, diffusion=None, verbose=False
+      )
       warmed = True
     load_before = common.load_average()
     model = VineCopulaModel(**settings)
@@ -108,33 +119,63 @@ def main() -> None:
     ratio = (logtrue - np.maximum(lp, floor))[finite]
     order = [int(o) + 1 for o in model.structure.order]
     rec = e3d_structure.recovery(e3d_structure.dvine_edges(order), truth)
-    rows.append({
-      "experiment": "E3d", "design": design, "d": d, "seed": seed,
-      "n_train": int(tr.shape[0]), "n_test": int(te.shape[0]), "n_edges": d * (d - 1) // 2,
-      "method": "vdc", "role": "arm",
-      "structure": "selected: VDC's greedy D-vine order", "selected_order": json.dumps(order),
-      "recovery_per_tree": json.dumps(rec["per_tree"]), "recovery_tree1": rec["per_tree"][0],
-      "recovery_overall": rec["overall"], "structure_equals_truth": rec["equal"],
-      "vine_machinery": "VDC's own (vdc.vine.api.VineCopulaModel)", "env": "vdc",
-      "test_loglik": float(np.mean(np.maximum(lp, floor)[finite])),
-      "true_loglik": float(np.mean(logtrue)),
-      "excess_nll": float(np.mean(ratio)),
-      "excess_nll_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
-      "n_nonfinite": int(np.sum(~finite)), "excess_nll_scope": "own finite points",
-      "fit_s": fit_s, "inference_s": inference_s, "selection_in_fit_s": True,
-      "torch_threads": torch.get_num_threads(), "vdc_settings": json.dumps(settings),
-      "samples_sha256": info["samples_sha256"], "load_avg_1m": load_before, **prov,
-    })
-    print(f"{key}: vdc excess {np.mean(ratio):.4f}, tree-1 recovery {rec['per_tree'][0]:.2f}, "
-          f"fit {fit_s:.1f} s, inf {inference_s:.1f} s", flush=True)
+    rows.append(
+      {
+        "experiment": "E3d",
+        "design": design,
+        "d": d,
+        "seed": seed,
+        "n_train": int(tr.shape[0]),
+        "n_test": int(te.shape[0]),
+        "n_edges": d * (d - 1) // 2,
+        "method": "vdc",
+        "role": "arm",
+        "structure": "selected: VDC's greedy D-vine order",
+        "selected_order": json.dumps(order),
+        "recovery_per_tree": json.dumps(rec["per_tree"]),
+        "recovery_tree1": rec["per_tree"][0],
+        "recovery_overall": rec["overall"],
+        "structure_equals_truth": rec["equal"],
+        "vine_machinery": "VDC's own (vdc.vine.api.VineCopulaModel)",
+        "env": "vdc",
+        "test_loglik": float(np.mean(np.maximum(lp, floor)[finite])),
+        "true_loglik": float(np.mean(logtrue)),
+        "excess_nll": float(np.mean(ratio)),
+        "excess_nll_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
+        "n_nonfinite": int(np.sum(~finite)),
+        "excess_nll_scope": "own finite points",
+        "fit_s": fit_s,
+        "inference_s": inference_s,
+        "selection_in_fit_s": True,
+        "torch_threads": torch.get_num_threads(),
+        "vdc_settings": json.dumps(settings),
+        "samples_sha256": info["samples_sha256"],
+        "load_avg_1m": load_before,
+        **prov,
+      }
+    )
+    print(
+      f"{key}: vdc excess {np.mean(ratio):.4f}, tree-1 recovery {rec['per_tree'][0]:.2f}, "
+      f"fit {fit_s:.1f} s, inf {inference_s:.1f} s",
+      flush=True,
+    )
 
   common.write_csv(rows, a.folder / "vdc_side.csv")
-  common.write_json({
-    "experiment": "E3d", "description": "VDC's own vine pipeline with its own structure choice",
-    "provenance": prov, "vdc_settings": {**settings, "order": "selected by VDC (greedy)",
-                                         "source": "paper/neurips2026/runners/run_uci_maf.py"},
-    "samples_sha256": info["samples_sha256"], "log_floor": common.LOG_FLOOR,
-  }, a.folder / "vdc_side.json")
+  common.write_json(
+    {
+      "experiment": "E3d",
+      "description": "VDC's own vine pipeline with its own structure choice",
+      "provenance": prov,
+      "vdc_settings": {
+        **settings,
+        "order": "selected by VDC (greedy)",
+        "source": "paper/neurips2026/runners/run_uci_maf.py",
+      },
+      "samples_sha256": info["samples_sha256"],
+      "log_floor": common.LOG_FLOOR,
+    },
+    a.folder / "vdc_side.json",
+  )
 
 
 if __name__ == "__main__":

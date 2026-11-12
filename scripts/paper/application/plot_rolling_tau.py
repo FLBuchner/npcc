@@ -131,14 +131,16 @@ def build(
       for p in root.iterdir()
       if p.is_dir() and not p.name.startswith(".")
     )
-  names = list(data.variables) if variables is None else variables
-  columns = [data.column(v) for v in names]
-  series = {OBSERVATIONS: data.y_train[:, columns]}
-  for model in models:
-    pit = read_marginal_set(run, station, model).pit_train
+  sets = {model: read_marginal_set(run, station, model) for model in models}
+  # The modeled responses: every one, unless the run derives some.
+  modeled = next(iter(sets.values())).variables if sets else data.variables
+  names = list(modeled) if variables is None else variables
+  series = {OBSERVATIONS: data.y_train[:, [data.column(v) for v in names]]}
+  for model, ms in sets.items():
+    pit = ms.pit_train[:, [ms.variables.index(v) for v in names]]
     if not (np.isfinite(pit) & (pit >= 0) & (pit <= 1)).all():
       raise ValueError(f"{model}'s training PITs must lie in [0, 1]")
-    series[model] = pit[:, columns]
+    series[model] = pit
   frame = rolling_tau(series, tuple(names), times, window)
   out.mkdir(parents=True, exist_ok=True)
   frame.to_csv(out / "rolling_kendall_tau.csv", index=False)

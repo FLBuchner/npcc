@@ -92,25 +92,50 @@ from pyvinecopulib.core import NonSimplifiedContext, SimplifiedContext  # noqa: 
 
 RESULTS = common.NPCC_REPO / "results" / "e3d_unknown_structure"
 #: VDC's ``fit_bicop`` parametric family set.
-PARAMETRIC_FAMILIES = ("indep", "gaussian", "student", "clayton", "gumbel", "frank",
-                       "joe", "bb1", "bb6", "bb7", "bb8", "tawn")
+PARAMETRIC_FAMILIES = (
+  "indep",
+  "gaussian",
+  "student",
+  "clayton",
+  "gumbel",
+  "frank",
+  "joe",
+  "bb1",
+  "bb6",
+  "bb7",
+  "bb8",
+  "tawn",
+)
 COMPETITORS = ("parametric", "tll", "parametric_true", "tll_true", "vdc_true")
-NPCC_VARIANTS = {"random-ns": ("random", "non-simplified"), "tll-ns": ("tll", "non-simplified"),
-                 "random-s": ("random", "simplified"), "true-s": ("true", "simplified"),
-                 "tll-s": ("tll", "simplified"), "true-ns": ("true", "non-simplified")}
+NPCC_VARIANTS = {
+  "random-ns": ("random", "non-simplified"),
+  "tll-ns": ("tll", "non-simplified"),
+  "random-s": ("random", "simplified"),
+  "true-s": ("true", "simplified"),
+  "tll-s": ("tll", "simplified"),
+  "true-ns": ("true", "non-simplified"),
+}
 #: The simplified variants on a structure that is not the truth.
 NPCC_ABLATIONS = ("random-s", "tll-s")
 #: E3e's variants, which E3d's folder (cited by the paper) never holds.
 E3E_VARIANTS = ("tll-s", "true-ns")
-ROLES = {"parametric": "arm", "tll": "arm", "parametric_true": "reference",
-         "tll_true": "reference", "vdc_true": "reference"}
+ROLES = {
+  "parametric": "arm",
+  "tll": "arm",
+  "parametric_true": "reference",
+  "tll_true": "reference",
+  "vdc_true": "reference",
+}
 
 
 def compiled_controls(name: str) -> pv.FitControlsVinecop:
   """Default controls but for the family set (and BIC for parametric)."""
   if name.startswith("parametric"):
-    return pv.FitControlsVinecop(family_set=[getattr(pv.families, f) for f in PARAMETRIC_FAMILIES],
-                                 selection_criterion="bic", num_threads=1)
+    return pv.FitControlsVinecop(
+      family_set=[getattr(pv.families, f) for f in PARAMETRIC_FAMILIES],
+      selection_criterion="bic",
+      num_threads=1,
+    )
   return pv.FitControlsVinecop(family_set=[pv.families.tll], num_threads=1)
 
 
@@ -120,7 +145,7 @@ def parse_npcc_arm(arm: str) -> tuple[str, str] | None:
     return None
   for variant in NPCC_VARIANTS:
     if arm.endswith(f"-{variant}"):
-      label = arm[len("npcc-"):-len(variant) - 1]
+      label = arm[len("npcc-") : -len(variant) - 1]
       if label in e3_npcc.ESTIMATORS:
         return label, variant
   return None
@@ -128,15 +153,33 @@ def parse_npcc_arm(arm: str) -> tuple[str, str] | None:
 
 def main() -> None:  # noqa: PLR0915 - one linear protocol
   p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-  p.add_argument("--folder", type=Path, default=RESULTS,
-                 help="where truths.json and samples.npz are read from")
-  p.add_argument("--out", type=Path, default=None,
-                 help="where cells/ and the CSVs are written (default: --folder)")
+  p.add_argument(
+    "--folder",
+    type=Path,
+    default=RESULTS,
+    help="where truths.json and samples.npz are read from",
+  )
+  p.add_argument(
+    "--out",
+    type=Path,
+    default=None,
+    help="where cells/ and the CSVs are written (default: --folder)",
+  )
   p.add_argument("--arms", nargs="+", required=True)
-  p.add_argument("--designs", nargs="+", default=["decay", "strong"], choices=["decay", "strong"])
+  p.add_argument(
+    "--designs",
+    nargs="+",
+    default=["decay", "strong"],
+    choices=["decay", "strong"],
+  )
   p.add_argument("--dims", type=int, nargs="+", default=[5, 10])
-  p.add_argument("--seeds", type=int, nargs="+", default=None,
-                 help="seeds to run (default: all ten); the d = 10 TabPFN arms use five")
+  p.add_argument(
+    "--seeds",
+    type=int,
+    nargs="+",
+    default=None,
+    help="seeds to run (default: all ten); the d = 10 TabPFN arms use five",
+  )
   p.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
   p.add_argument("--gpu-is-free", action="store_true")
   p.add_argument("--vdc-core", type=int, default=None)
@@ -146,14 +189,24 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
   for arm in a.arms:
     parsed = parse_npcc_arm(arm)
     if arm not in COMPETITORS and parsed is None:
-      raise SystemExit(f"arm must be one of {COMPETITORS} or npcc-<E1 estimator>-"
-                       f"<{'|'.join(NPCC_VARIANTS)}>; got {arm}")
-    if parsed and parsed[1] in E3E_VARIANTS and out.resolve() == RESULTS.resolve():
-      raise SystemExit(f"{arm} must be written outside {RESULTS}, which E3d's rows are cited "
-                       f"from; pass --out <new folder>")
+      raise SystemExit(
+        f"arm must be one of {COMPETITORS} or npcc-<E1 estimator>-"
+        f"<{'|'.join(NPCC_VARIANTS)}>; got {arm}"
+      )
+    if (
+      parsed
+      and parsed[1] in E3E_VARIANTS
+      and out.resolve() == RESULTS.resolve()
+    ):
+      raise SystemExit(
+        f"{arm} must be written outside {RESULTS}, which E3d's rows are cited "
+        f"from; pass --out <new folder>"
+      )
     kind = e3_npcc.ESTIMATORS[parsed[0]][2] if parsed else "cpu"
     if (kind == "gpu") != (a.device == "cuda"):
-      raise SystemExit(f"{arm} must run with --device {'cuda' if kind == 'gpu' else 'cpu'}")
+      raise SystemExit(
+        f"{arm} must run with --device {'cuda' if kind == 'gpu' else 'cpu'}"
+      )
   if a.device == "cuda" and not a.gpu_is_free:
     raise SystemExit("--device cuda requires --gpu-is-free: the GPU is shared")
 
@@ -161,7 +214,9 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
   info = json.loads((a.folder / "truths.json").read_text())
   samples = a.folder / "samples.npz"
   if common.sha256_file(samples) != info["samples_sha256"]:
-    raise SystemExit(f"{samples} must match the sha256 recorded by e3d_truth.py")
+    raise SystemExit(
+      f"{samples} must match the sha256 recorded by e3d_truth.py"
+    )
   with np.load(samples) as f:
     data = {k: f[k] for k in f.files}
   prov = common.provenance(__file__, a.device)
@@ -179,13 +234,21 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
       warmed = parsed is None
       for design, d, seed in zip(data["design"], data["d"], data["seed"]):
         design, d, seed = str(design), int(d), int(seed)
-        if design not in a.designs or d not in a.dims or (a.seeds and seed not in a.seeds):
+        if (
+          design not in a.designs
+          or d not in a.dims
+          or (a.seeds and seed not in a.seeds)
+        ):
           continue
         key = f"{design}_d{d}_s{seed}"
         path = out_dir / f"{key}.json"
         if path.exists():
           continue
-        tr, te, logtrue = data[f"{key}_train"], data[f"{key}_test"], data[f"{key}_logtrue"]
+        tr, te, logtrue = (
+          data[f"{key}_train"],
+          data[f"{key}_test"],
+          data[f"{key}_logtrue"],
+        )
         s_true = pv.RVineStructure.from_matrix(data[f"{key}_true_matrix"])
         s_rand = pv.RVineStructure.from_matrix(data[f"{key}_random_matrix"])
         truth = e3d_structure.edges_from_matrix(data[f"{key}_true_matrix"])
@@ -200,32 +263,56 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
             given = arm.endswith("_true")
             ctl = compiled_controls(arm)
             t0 = time.perf_counter()
-            vc = (pv.Vinecop.from_data(tr, structure=s_true, controls=ctl) if given
-                  else pv.Vinecop.from_data(tr, controls=ctl))
+            vc = (
+              pv.Vinecop.from_data(tr, structure=s_true, controls=ctl)
+              if given
+              else pv.Vinecop.from_data(tr, controls=ctl)
+            )
             fit_s = time.perf_counter() - t0
             t0 = time.perf_counter()
-            lp = np.log(np.maximum(np.asarray(vc.pdf(te), dtype=np.float64), common.LOG_FLOOR))
+            lp = np.log(
+              np.maximum(
+                np.asarray(vc.pdf(te), dtype=np.float64), common.LOG_FLOOR
+              )
+            )
             inference_s = time.perf_counter() - t0
             used = np.asarray(vc.matrix)
-            structure = "true (given)" if given else "selected: Dissmann (pyvinecopulib default)"
+            structure = (
+              "true (given)"
+              if given
+              else "selected: Dissmann (pyvinecopulib default)"
+            )
             machinery = "pyvinecopulib 1.0 compiled Vinecop.from_data"
-            pair = ("parametric family selection (BIC), VDC's fit_bicop set" if arm.startswith("parametric")
-                    else "TLL, pyvinecopulib defaults")
+            pair = (
+              "parametric family selection (BIC), VDC's fit_bicop set"
+              if arm.startswith("parametric")
+              else "TLL, pyvinecopulib defaults"
+            )
           else:  # vdc_true
             n_calls = len(server.calls)
             vine = SharedVinecop(s_true, device="cpu")
             t0 = time.perf_counter()
-            vine.fit(tr_t, fit_edge=lambda t, e, u_e, x_e=None, var_types=("c", "c"): VdcBicop.from_data(u_e))
+            vine.fit(
+              tr_t,
+              fit_edge=lambda t, e, u_e, x_e=None, var_types=("c", "c"): (
+                VdcBicop.from_data(u_e)
+              ),
+            )
             fit_s = time.perf_counter() - t0
             with torch.inference_mode():
               t0 = time.perf_counter()
               lp = vine.logpdf(te_t).detach().cpu().numpy().astype(np.float64)
               inference_s = time.perf_counter() - t0
             calls = server.calls[n_calls:]
-            extra = {"vdc_server_s": sum(c["server_s"] for c in calls),
-                     "vdc_projection_s": sum(c["projection_s"] for c in calls),
-                     "vdc_ipc_s": sum(c["ipc_s"] for c in calls), "vdc_calls": len(calls),
-                     "vdc_server_code_sha256": json.dumps(server.info["code_sha256"], sort_keys=True)}
+            extra = {
+              "vdc_server_s": sum(c["server_s"] for c in calls),
+              "vdc_projection_s": sum(c["projection_s"] for c in calls),
+              "vdc_ipc_s": sum(c["ipc_s"] for c in calls),
+              "vdc_calls": len(calls),
+              "vdc_server_code_sha256": json.dumps(
+                server.info["code_sha256"], sort_keys=True
+              ),
+            }
             used = np.asarray(s_true.matrix)
             structure = "true (given)"
             machinery = "pyvinecopulib 1.0 VinecopBase (e3_vine.SharedVinecop), simplified"
@@ -235,21 +322,39 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
           label, variant = parsed
           which, simplification = NPCC_VARIANTS[variant]
           est = e3_npcc.spec(label)
-          controls = est.controls(FitControlsRosenblattVinecop, device=a.device,
-                                  projection_grid_size=e3_npcc.PROJECTION_GRID_SIZE, batch_size=None)
-          context = NonSimplifiedContext() if simplification == "non-simplified" else SimplifiedContext()
+          controls = est.controls(
+            FitControlsRosenblattVinecop,
+            device=a.device,
+            projection_grid_size=e3_npcc.PROJECTION_GRID_SIZE,
+            batch_size=None,
+          )
+          context = (
+            NonSimplifiedContext()
+            if simplification == "non-simplified"
+            else SimplifiedContext()
+          )
           if not warmed:
-            RosenblattVinecop(None, pv.RVineStructure.from_order([1, 2, 3]), device=a.device,
-                              context=context).fit(tr_t[:, :3], controls)
+            RosenblattVinecop(
+              None,
+              pv.RVineStructure.from_order([1, 2, 3]),
+              device=a.device,
+              context=context,
+            ).fit(tr_t[:, :3], controls)
             warmed = True
           t0 = time.perf_counter()
           if which == "tll":
-            structure_used = pv.Vinecop.from_data(tr, controls=compiled_controls("tll")).structure
+            structure_used = pv.Vinecop.from_data(
+              tr, controls=compiled_controls("tll")
+            ).structure
           else:
             structure_used = s_true if which == "true" else s_rand
           selection_s = time.perf_counter() - t0
-          torch.manual_seed(derive_seed("E3d", design, d, seed, variant, est.estimator_id))
-          vine = RosenblattVinecop(None, structure_used, device=a.device, context=context)
+          torch.manual_seed(
+            derive_seed("E3d", design, d, seed, variant, est.estimator_id)
+          )
+          vine = RosenblattVinecop(
+            None, structure_used, device=a.device, context=context
+          )
           vine.fit(tr_t, controls)
           if a.device == "cuda":
             torch.cuda.synchronize()
@@ -259,41 +364,80 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
             lp = vine.logpdf(te_t).detach().cpu().numpy().astype(np.float64)
             inference_s = time.perf_counter() - t0
           used = np.asarray(structure_used.matrix)
-          structure = {"random": "random (independent of the truth)",
-                       "tll": "selected: TLL's Dissmann structure", "true": "true (given)"}[which]
+          structure = {
+            "random": "random (independent of the truth)",
+            "tll": "selected: TLL's Dissmann structure",
+            "true": "true (given)",
+          }[which]
           machinery = f"npcc.RosenblattVinecop, {type(context).__name__}"
           pair = f"npcc.RosenblattBicop ({label})"
-          role = "reference" if which == "true" else ("ablation" if variant in NPCC_ABLATIONS else "arm")
-          extra = {"estimator": label, "estimator_id": est.estimator_id, "backend": est.backend,
-                   "transform": est.transform, "model_version": e3_npcc.ESTIMATORS[label][1],
-                   "simplification": simplification}
+          role = (
+            "reference"
+            if which == "true"
+            else ("ablation" if variant in NPCC_ABLATIONS else "arm")
+          )
+          extra = {
+            "estimator": label,
+            "estimator_id": est.estimator_id,
+            "backend": est.backend,
+            "transform": est.transform,
+            "model_version": e3_npcc.ESTIMATORS[label][1],
+            "simplification": simplification,
+          }
 
-        np.save(path.with_suffix(".npy"), lp.astype(np.float32))  # raw, NaN kept
+        np.save(
+          path.with_suffix(".npy"), lp.astype(np.float32)
+        )  # raw, NaN kept
         finite = np.isfinite(lp)
         n_nonfinite = int(np.sum(~finite))
         ratio = (logtrue - np.maximum(lp, floor))[finite]
-        rec = e3d_structure.recovery(e3d_structure.edges_from_matrix(used), truth)
+        rec = e3d_structure.recovery(
+          e3d_structure.edges_from_matrix(used), truth
+        )
         row = {
-          "experiment": "E3d", "design": design, "d": d, "seed": seed,
-          "n_train": int(tr.shape[0]), "n_test": int(te.shape[0]), "n_edges": d * (d - 1) // 2,
-          "method": arm, "role": role, "structure": structure,
+          "experiment": "E3d",
+          "design": design,
+          "d": d,
+          "seed": seed,
+          "n_train": int(tr.shape[0]),
+          "n_test": int(te.shape[0]),
+          "n_edges": d * (d - 1) // 2,
+          "method": arm,
+          "role": role,
+          "structure": structure,
           "structure_matrix": json.dumps(used.tolist()),
-          "recovery_per_tree": json.dumps(rec["per_tree"]), "recovery_tree1": rec["per_tree"][0],
-          "recovery_overall": rec["overall"], "structure_equals_truth": rec["equal"],
-          "vine_machinery": machinery, "pair_copula": pair, "env": "npcc",
+          "recovery_per_tree": json.dumps(rec["per_tree"]),
+          "recovery_tree1": rec["per_tree"][0],
+          "recovery_overall": rec["overall"],
+          "structure_equals_truth": rec["equal"],
+          "vine_machinery": machinery,
+          "pair_copula": pair,
+          "env": "npcc",
           "test_loglik": float(np.mean(np.maximum(lp, floor)[finite])),
           "true_loglik": float(np.mean(logtrue)),
           "excess_nll": float(np.mean(ratio)),
-          "excess_nll_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
-          "n_nonfinite": n_nonfinite, "excess_nll_scope": "own finite points",
-          "fit_s": fit_s, "selection_s": selection_s, "inference_s": inference_s,
-          "selection_in_fit_s": structure.startswith("selected"), **extra,
-          "torch_threads": torch.get_num_threads(), "cpu_cores": len(os.sched_getaffinity(0)),
-          "samples_sha256": info["samples_sha256"], "load_avg_1m": load_before, **prov,
+          "excess_nll_mc_se": float(
+            np.std(ratio, ddof=1) / np.sqrt(ratio.size)
+          ),
+          "n_nonfinite": n_nonfinite,
+          "excess_nll_scope": "own finite points",
+          "fit_s": fit_s,
+          "selection_s": selection_s,
+          "inference_s": inference_s,
+          "selection_in_fit_s": structure.startswith("selected"),
+          **extra,
+          "torch_threads": torch.get_num_threads(),
+          "cpu_cores": len(os.sched_getaffinity(0)),
+          "samples_sha256": info["samples_sha256"],
+          "load_avg_1m": load_before,
+          **prov,
         }
         common.write_json(row, path)
-        print(f"{arm} {key}: excess {row['excess_nll']:.4f} (tree-1 recovery "
-              f"{rec['per_tree'][0]:.2f}) fit {fit_s:.1f} s inf {inference_s:.1f} s", flush=True)
+        print(
+          f"{arm} {key}: excess {row['excess_nll']:.4f} (tree-1 recovery "
+          f"{rec['per_tree'][0]:.2f}) fit {fit_s:.1f} s inf {inference_s:.1f} s",
+          flush=True,
+        )
       rows = [json.loads(q.read_text()) for q in sorted(out_dir.glob("*.json"))]
       if rows:
         common.write_csv(rows, out / f"npcc_{arm}.csv")

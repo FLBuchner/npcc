@@ -380,7 +380,12 @@ def copula_score_columns(cases: pd.DataFrame) -> tuple[str, list[str]]:
       draws (``crps_<name>``) where present.
   """
   nll = "joint_nll_modeled" if "joint_nll_modeled" in cases else "joint_nll"
-  crps = [c for c in cases.columns if c.startswith("crps_")]
+  crps = [
+    c
+    for c in cases.columns
+    if c.startswith("crps_")
+    and not c.endswith(("_skill", "_gain", "_low", "_high"))
+  ]
   return nll, [nll, "energy", "variogram", *crps]
 
 

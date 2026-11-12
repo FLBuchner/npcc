@@ -206,6 +206,14 @@ def build(
       ["model", "variable", *(coverage_column(n) for n in NOMINAL_COVERAGE)]
     ]
     report.table(coverage, "Central-interval coverage, every station pooled")
+    saturation = run / "tables" / "saturation_by_station.csv"
+    if saturation.exists():
+      report.table(
+        pd.read_csv(saturation),
+        "Cases moved off saturation (dew point equal to temperature)",
+        "Their dew point is moved to where the Magnus RH is 100 less the "
+        "configured saturation_nudge, before the margins see it.",
+      )
     common.timing_pages(
       report,
       timings,

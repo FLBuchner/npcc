@@ -69,8 +69,11 @@ def case_bicop(case: tuple):  # noqa: ANN201 - a pyvinecopulib Bicop
   family, params, rotation = case
   if family == "indep":
     return pv.Bicop()
-  return pv.Bicop(family=getattr(pv.BicopFamily, family), rotation=rotation,
-                  parameters=np.asarray(params))
+  return pv.Bicop(
+    family=getattr(pv.BicopFamily, family),
+    rotation=rotation,
+    parameters=np.asarray(params),
+  )
 
 
 def main() -> None:
@@ -88,63 +91,121 @@ def main() -> None:
   truths = []
   for d in DIMS:
     for seed in SEEDS:
-      truth = pv.RVineStructure.sample(d, seeds=[derive_seed("E3d", "truth", d, seed)])
-      random = pv.RVineStructure.sample(d, seeds=[derive_seed("E3d", "random", d, seed)])
+      truth = pv.RVineStructure.sample(
+        d, seeds=[derive_seed("E3d", "truth", d, seed)]
+      )
+      random = pv.RVineStructure.sample(
+        d, seeds=[derive_seed("E3d", "random", d, seed)]
+      )
       rng = np.random.default_rng([seed, d, 4])
-      edge_cases = [[int(rng.integers(len(cases))) for _ in range(d - 1 - t)] for t in range(d - 1)]
+      edge_cases = [
+        [int(rng.integers(len(cases))) for _ in range(d - 1 - t)]
+        for t in range(d - 1)
+      ]
       truth_edges = e3d_structure.edges_from_matrix(np.asarray(truth.matrix))
-      rand_rec = e3d_structure.recovery(e3d_structure.edges_from_matrix(np.asarray(random.matrix)),
-                                        truth_edges)
+      rand_rec = e3d_structure.recovery(
+        e3d_structure.edges_from_matrix(np.asarray(random.matrix)), truth_edges
+      )
       for design in DESIGNS:
         if design == "decay":
-          made = [[decayed_bicop(pv, cases[j], t) for j in row] for t, row in enumerate(edge_cases)]
+          made = [
+            [decayed_bicop(pv, cases[j], t) for j in row]
+            for t, row in enumerate(edge_cases)
+          ]
           pcs = [[bc for bc, _ in row] for row in made]
           taus = [tau for row in made for _, tau in row]
         else:
           pcs = [[case_bicop(cases[j]) for j in row] for row in edge_cases]
-          taus = [float(bc.parameters_to_tau(bc.parameters)) for row in pcs for bc in row]
+          taus = [
+            float(bc.parameters_to_tau(bc.parameters))
+            for row in pcs
+            for bc in row
+          ]
         vine = pv.Vinecop.from_structure(structure=truth, pair_copulas=pcs)
-        tr = np.clip(vine.simulate(N_TRAIN, seeds=[seed, d, 11]), 1e-10, 1 - 1e-10)
-        te = np.clip(vine.simulate(N_TEST, seeds=[seed, d, 12]), 1e-10, 1 - 1e-10)
+        tr = np.clip(
+          vine.simulate(N_TRAIN, seeds=[seed, d, 11]), 1e-10, 1 - 1e-10
+        )
+        te = np.clip(
+          vine.simulate(N_TEST, seeds=[seed, d, 12]), 1e-10, 1 - 1e-10
+        )
         logtrue = np.log(np.maximum(np.asarray(vine.pdf(te)), common.LOG_FLOOR))
         if not np.all(np.isfinite(logtrue)):
-          raise RuntimeError(f"{design} d={d} seed={seed}: the true log-density must be finite")
+          raise RuntimeError(
+            f"{design} d={d} seed={seed}: the true log-density must be finite"
+          )
         key = f"{design}_d{d}_s{seed}"
-        arrays.update({f"{key}_train": tr, f"{key}_test": te, f"{key}_logtrue": logtrue,
-                       f"{key}_true_matrix": np.asarray(truth.matrix),
-                       f"{key}_random_matrix": np.asarray(random.matrix),
-                       f"{key}_edge_cases": np.asarray([c for row in edge_cases for c in row]),
-                       f"{key}_edge_taus": np.asarray(taus)})
-        index["design"].append(design); index["d"].append(d); index["seed"].append(seed)
-        truths.append({
-          "design": design, "d": d, "seed": seed,
-          "true_matrix": np.asarray(truth.matrix).tolist(),
-          "random_matrix": np.asarray(random.matrix).tolist(),
-          "random_vs_truth": rand_rec,
-          "edge_cases": [[case_label(*cases[j]) for j in row] for row in edge_cases],
-          "edge_taus": [round(t, 6) for t in taus],
-          "true_loglik": float(np.mean(logtrue)),
-        })
-        print(f"{key}: true ll {np.mean(logtrue):.4f}; random structure recovers "
-              f"{rand_rec['overall']:.2f} of the true edges", flush=True)
+        arrays.update(
+          {
+            f"{key}_train": tr,
+            f"{key}_test": te,
+            f"{key}_logtrue": logtrue,
+            f"{key}_true_matrix": np.asarray(truth.matrix),
+            f"{key}_random_matrix": np.asarray(random.matrix),
+            f"{key}_edge_cases": np.asarray(
+              [c for row in edge_cases for c in row]
+            ),
+            f"{key}_edge_taus": np.asarray(taus),
+          }
+        )
+        index["design"].append(design)
+        index["d"].append(d)
+        index["seed"].append(seed)
+        truths.append(
+          {
+            "design": design,
+            "d": d,
+            "seed": seed,
+            "true_matrix": np.asarray(truth.matrix).tolist(),
+            "random_matrix": np.asarray(random.matrix).tolist(),
+            "random_vs_truth": rand_rec,
+            "edge_cases": [
+              [case_label(*cases[j]) for j in row] for row in edge_cases
+            ],
+            "edge_taus": [round(t, 6) for t in taus],
+            "true_loglik": float(np.mean(logtrue)),
+          }
+        )
+        print(
+          f"{key}: true ll {np.mean(logtrue):.4f}; random structure recovers "
+          f"{rand_rec['overall']:.2f} of the true edges",
+          flush=True,
+        )
 
   samples = a.out / "samples.npz"
-  common.save_npz(samples, {"design": np.asarray(index["design"]), "d": np.asarray(index["d"]),
-                            "seed": np.asarray(index["seed"]), **arrays})
-  common.write_json({
-    "experiment": "E3d", "description": "unconditional vines with an unknown structure: the truths",
-    "provenance": prov,
-    "design_spec": {"dims": list(DIMS), "seeds": list(SEEDS), "designs": list(DESIGNS),
-                    "n_train": N_TRAIN, "n_test": N_TEST,
-                    "structure": "pv.RVineStructure.sample(d, seeds=[derive_seed('E3d', 'truth', d, seed)])",
-                    "random_structure": "pv.RVineStructure.sample(d, seeds=[derive_seed('E3d', 'random', d, seed)])",
-                    "edges": "case index rng.integers(9) per edge, tree by tree, rng = default_rng([seed, d, 4])",
-                    "decay": "tau_case * 0.7 ** (t - 1) (e3c_decay_vdc_side.decayed_bicop)",
-                    "simulate": "pyvinecopulib 1.0, seeds [seed, d, 11] (train), [seed, d, 12] (test)",
-                    "sample_clip": [1e-10, 1 - 1e-10], "cases": cases},
-    "truths": truths,
-    "samples_npz": samples.name, "samples_sha256": common.sha256_file(samples),
-  }, a.out / "truths.json")
+  common.save_npz(
+    samples,
+    {
+      "design": np.asarray(index["design"]),
+      "d": np.asarray(index["d"]),
+      "seed": np.asarray(index["seed"]),
+      **arrays,
+    },
+  )
+  common.write_json(
+    {
+      "experiment": "E3d",
+      "description": "unconditional vines with an unknown structure: the truths",
+      "provenance": prov,
+      "design_spec": {
+        "dims": list(DIMS),
+        "seeds": list(SEEDS),
+        "designs": list(DESIGNS),
+        "n_train": N_TRAIN,
+        "n_test": N_TEST,
+        "structure": "pv.RVineStructure.sample(d, seeds=[derive_seed('E3d', 'truth', d, seed)])",
+        "random_structure": "pv.RVineStructure.sample(d, seeds=[derive_seed('E3d', 'random', d, seed)])",
+        "edges": "case index rng.integers(9) per edge, tree by tree, rng = default_rng([seed, d, 4])",
+        "decay": "tau_case * 0.7 ** (t - 1) (e3c_decay_vdc_side.decayed_bicop)",
+        "simulate": "pyvinecopulib 1.0, seeds [seed, d, 11] (train), [seed, d, 12] (test)",
+        "sample_clip": [1e-10, 1 - 1e-10],
+        "cases": cases,
+      },
+      "truths": truths,
+      "samples_npz": samples.name,
+      "samples_sha256": common.sha256_file(samples),
+    },
+    a.out / "truths.json",
+  )
 
 
 if __name__ == "__main__":

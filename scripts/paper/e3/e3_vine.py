@@ -26,7 +26,12 @@ from typing import Any, ClassVar, Self
 import numpy as np
 import torch
 from pyvinecopulib import RVineStructure
-from pyvinecopulib.core import BicopLike, ControlsLike, SimplifiedContext, VinecopBase
+from pyvinecopulib.core import (
+  BicopLike,
+  ControlsLike,
+  SimplifiedContext,
+  VinecopBase,
+)
 
 from npcc.core._placement import TensorPlacement
 
@@ -66,22 +71,35 @@ class SharedVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
     fit_level: Callable[..., Any] | None = None,
   ) -> Self:
     """Fit every pair along the structure, inputs placed as ``RosenblattVinecop`` does."""
-    return super().fit(self._prep(u), controls, var_types=var_types,
-                       x=None if x is None else self._prep(x),
-                       fit_edge=fit_edge, fit_level=fit_level)
+    return super().fit(
+      self._prep(u),
+      controls,
+      var_types=var_types,
+      x=None if x is None else self._prep(x),
+      fit_edge=fit_edge,
+      fit_level=fit_level,
+    )
 
   def get_pair_copula(self, tree: int, edge: int) -> BicopLike[torch.Tensor]:
     """The pair copula at a tree and edge position."""
     return self.pair_copulas[tree][edge]
 
-  def set_pair_copulas(self, pair_copulas: Sequence[Sequence[BicopLike[torch.Tensor]]]) -> None:
+  def set_pair_copulas(
+    self, pair_copulas: Sequence[Sequence[BicopLike[torch.Tensor]]]
+  ) -> None:
     """Install the pairs the inherited fit engine produced."""
     rows = [list(row) for row in pair_copulas]
-    if len(rows) != self.trunc_lvl or any(len(r) != self.d - t - 1 for t, r in enumerate(rows)):
-      raise ValueError(f"pair_copulas must have {self.trunc_lvl} trees of d - t - 1 edges")
+    if len(rows) != self.trunc_lvl or any(
+      len(r) != self.d - t - 1 for t, r in enumerate(rows)
+    ):
+      raise ValueError(
+        f"pair_copulas must have {self.trunc_lvl} trees of d - t - 1 edges"
+      )
     self.pair_copulas = rows
     self._invalidate_batched()
 
-  def _sample_uniform(self, n: int, qrng: bool, seeds: list[int]) -> torch.Tensor:
+  def _sample_uniform(
+    self, n: int, qrng: bool, seeds: list[int]
+  ) -> torch.Tensor:
     """Base uniforms for inherited sampling."""
     return self._draw_uniform((n, self.d), qrng=qrng, seeds=seeds)

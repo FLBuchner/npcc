@@ -185,7 +185,9 @@ def fit_and_score(
       number of non-finite densities (counted before flooring).
   """
   torch.manual_seed(derive_seed(*salt, est.estimator_id))
-  as_t = lambda a: None if a is None else torch.as_tensor(a, dtype=torch.float64)  # noqa: E731
+  as_t = lambda a: (
+    None if a is None else torch.as_tensor(a, dtype=torch.float64)
+  )  # noqa: E731
   _sync(device)
   t0 = time.perf_counter()
   model = RosenblattBicop(
@@ -207,10 +209,14 @@ def fit_and_score(
     grid_pdf = spot_pdf = grid_s = None
     if grid is not None:
       if x_train is not None:
-        raise ValueError("grid must be None for a conditional fit; pdf_grid takes one x row")
+        raise ValueError(
+          "grid must be None for a conditional fit; pdf_grid takes one x row"
+        )
       t0 = time.perf_counter()
       g_t = as_t(grid)
-      grid_pdf = model.pdf_grid(g_t, g_t).detach().cpu().numpy().astype(np.float64)
+      grid_pdf = (
+        model.pdf_grid(g_t, g_t).detach().cpu().numpy().astype(np.float64)
+      )
       _sync(device)
       grid_s = time.perf_counter() - t0
     if spot is not None:

@@ -121,8 +121,9 @@ def main() -> None:
   timer = ProjectionTimer(projection)
 
   def bicop(family: str, theta: float):  # noqa: ANN202 - a pv.Bicop
-    return pv.Bicop(family=getattr(pv.BicopFamily, family),
-                    parameters=np.asarray([[theta]]))
+    return pv.Bicop(
+      family=getattr(pv.BicopFamily, family), parameters=np.asarray([[theta]])
+    )
 
   def draw(c_idx: int, low, high, seed: int, split: int, n: int) -> np.ndarray:  # noqa: ANN001
     indep = pv.Bicop()
@@ -135,8 +136,12 @@ def main() -> None:
   # --- the fitted methods: VDC's calls and the Table 1 runner's settings ---
   def fit_vdc(uv: np.ndarray):  # noqa: ANN202 - an HFuncLookup
     with torch.no_grad():
-      grid = np.asarray(estimate_pair_density_from_samples(
-        bundle, uv, m=64, projection_iters=30), dtype=float)
+      grid = np.asarray(
+        estimate_pair_density_from_samples(
+          bundle, uv, m=64, projection_iters=30
+        ),
+        dtype=float,
+      )
     grid /= grid.mean()
     return HFuncLookup(grid, use_spline=False)
 
@@ -144,14 +149,21 @@ def main() -> None:
     return np.log(np.maximum(cop.pdf(uv[:, 0], uv[:, 1]), common.LOG_FLOOR))
 
   def fit_pv(uv: np.ndarray, mode: str):  # noqa: ANN202 - a BicopFitResult
-    return fit_bicop(uv, mode=mode, num_threads=1, selection_criterion="bic",
-                     allow_rotations=True)
+    return fit_bicop(
+      uv,
+      mode=mode,
+      num_threads=1,
+      selection_criterion="bic",
+      allow_rotations=True,
+    )
 
   def pv_logpdf(fitted, uv: np.ndarray) -> np.ndarray:  # noqa: ANN001
     return np.log(np.maximum(fitted.pdf(uv), common.LOG_FLOOR))
 
   def fit_gauss(uv: np.ndarray):  # noqa: ANN202 - a pv.Bicop
-    controls = pv.FitControlsBicop(family_set=[pv.BicopFamily.gaussian], num_threads=1)
+    controls = pv.FitControlsBicop(
+      family_set=[pv.BicopFamily.gaussian], num_threads=1
+    )
     return pv.Bicop.from_data(uv, controls=controls)
 
   def bicop_logpdf(model, uv: np.ndarray) -> np.ndarray:  # noqa: ANN001
@@ -167,8 +179,16 @@ def main() -> None:
   methods = {
     "vdc": (fit_vdc, vdc_logpdf, lambda m: "pooled grid"),
     "tll": (fit_tll_plain, bicop_logpdf, describe),
-    "tll_runner_bic": (lambda uv: fit_pv(uv, "nonparametric"), pv_logpdf, lambda m: describe(m.model)),
-    "parametric": (lambda uv: fit_pv(uv, "parametric"), pv_logpdf, lambda m: describe(m.model)),
+    "tll_runner_bic": (
+      lambda uv: fit_pv(uv, "nonparametric"),
+      pv_logpdf,
+      lambda m: describe(m.model),
+    ),
+    "parametric": (
+      lambda uv: fit_pv(uv, "parametric"),
+      pv_logpdf,
+      lambda m: describe(m.model),
+    ),
   }
   regime_methods = {
     "regime_gaussian": (fit_gauss, bicop_logpdf, describe),
@@ -180,15 +200,27 @@ def main() -> None:
   # Warm-up, untimed: VDC's protocol excludes it.
   with torch.no_grad():
     estimate_pair_density_from_samples(
-      bundle, np.random.default_rng(0).uniform(size=(N_TRAIN, 2)), m=64, projection_iters=30)
+      bundle,
+      np.random.default_rng(0).uniform(size=(N_TRAIN, 2)),
+      m=64,
+      projection_iters=30,
+    )
   timer.take()
 
   rows: list[dict] = []
   diagnostics: list[dict] = []
-  arrays = {"train": [], "test": [], "logtrue": [], "log_pooled_oracle": [],
-            "case": [], "seed": []}
+  arrays = {
+    "train": [],
+    "test": [],
+    "logtrue": [],
+    "log_pooled_oracle": [],
+    "case": [],
+    "seed": [],
+  }
   started = time.perf_counter()
-  for c_idx, (case, ((f_low, t_low), (f_high, t_high))) in enumerate(CASES.items()):
+  for c_idx, (case, ((f_low, t_low), (f_high, t_high))) in enumerate(
+    CASES.items()
+  ):
     low, high = bicop(f_low, t_low), bicop(f_high, t_high)
     for seed in SEEDS:
       tr = draw(c_idx, low, high, seed, 1, N_TRAIN)
@@ -196,39 +228,82 @@ def main() -> None:
       lo_tr, lo_te = tr[:, 0] < SPLIT, te[:, 0] < SPLIT
       uv_tr, uv_te = tr[:, 1:], te[:, 1:]
       c_low, c_high = low.pdf(uv_te), high.pdf(uv_te)
-      logtrue = np.log(np.maximum(np.where(lo_te, c_low, c_high), common.LOG_FLOOR))
+      logtrue = np.log(
+        np.maximum(np.where(lo_te, c_low, c_high), common.LOG_FLOOR)
+      )
       logpool = np.log(np.maximum(0.5 * c_low + 0.5 * c_high, common.LOG_FLOOR))
       oracle_nll = -float(np.mean(logtrue))
 
       base = {
-        "experiment": "E3b", "case": case, "seed": seed,
-        "low_copula": f"{f_low}({t_low:g})", "high_copula": f"{f_high}({t_high:g})",
-        "split": SPLIT, "n_train": N_TRAIN, "n_test": N_TEST,
-        "n_train_low": int(lo_tr.sum()), "n_test_low": int(lo_te.sum()),
+        "experiment": "E3b",
+        "case": case,
+        "seed": seed,
+        "low_copula": f"{f_low}({t_low:g})",
+        "high_copula": f"{f_high}({t_high:g})",
+        "split": SPLIT,
+        "n_train": N_TRAIN,
+        "n_test": N_TEST,
+        "n_train_low": int(lo_tr.sum()),
+        "n_test_low": int(lo_te.sum()),
         "oracle_nll": oracle_nll,
       }
 
-      def row(method: str, group: str, role: str, uses_u1: str, logc: np.ndarray, *,  # noqa: PLR0913
-              fit_s=None, projection_s=None, inference_s=None, note=None,  # noqa: ANN001
-              load_before=None) -> dict:  # noqa: ANN001
+      def row(
+        method: str,
+        group: str,
+        role: str,
+        uses_u1: str,
+        logc: np.ndarray,
+        *,  # noqa: PLR0913
+        fit_s=None,
+        projection_s=None,
+        inference_s=None,
+        note=None,  # noqa: ANN001
+        load_before=None,
+      ) -> dict:  # noqa: ANN001
         ratio = logtrue - logc
         return {
-          **base, "method": method, "method_group": group, "role": role,
-          "conditions_on_u1": uses_u1, "env": "vdc",
-          "backend": None, "transform": None, "model_version": None,
+          **base,
+          "method": method,
+          "method_group": group,
+          "role": role,
+          "conditions_on_u1": uses_u1,
+          "env": "vdc",
+          "backend": None,
+          "transform": None,
+          "model_version": None,
           "test_nll": -float(np.mean(logc)),
           "excess_nll": float(np.mean(ratio)),
-          "excess_nll_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
+          "excess_nll_mc_se": float(
+            np.std(ratio, ddof=1) / np.sqrt(ratio.size)
+          ),
           "n_floored": int(np.sum(logc <= np.log(common.LOG_FLOOR))),
           "min_logpdf": float(np.min(logc)),
-          "fit_s": fit_s, "projection_s": projection_s, "inference_s": inference_s,
-          "torch_threads": torch.get_num_threads(), "pyvinecopulib_threads": 1,
-          "note": note, "load_avg_1m": load_before, **prov,
+          "fit_s": fit_s,
+          "projection_s": projection_s,
+          "inference_s": inference_s,
+          "torch_threads": torch.get_num_threads(),
+          "pyvinecopulib_threads": 1,
+          "note": note,
+          "load_avg_1m": load_before,
+          **prov,
         }
 
-      rows.append(row("oracle", "oracle", "oracle", "yes", logtrue, note="true conditional"))
-      rows.append(row("pooled_oracle", "oracle", "reference", "no", logpool,
-                      note="true pooled density (best possible without U1)"))
+      rows.append(
+        row(
+          "oracle", "oracle", "oracle", "yes", logtrue, note="true conditional"
+        )
+      )
+      rows.append(
+        row(
+          "pooled_oracle",
+          "oracle",
+          "reference",
+          "no",
+          logpool,
+          note="true pooled density (best possible without U1)",
+        )
+      )
 
       for name, (fit, logpdf, note) in methods.items():
         load_before = common.load_average()
@@ -241,10 +316,20 @@ def main() -> None:
         logc = logpdf(model, uv_te)
         inference_s = time.perf_counter() - t0
         excluded = name == "tll_runner_bic"
-        rows.append(row(name, "not_an_arm_bic_selection" if excluded else "simplified_pooled",
-                        "excluded" if excluded else "arm", "no", logc, fit_s=fit_s,
-                        projection_s=projection_s, inference_s=inference_s,
-                        note=note(model), load_before=load_before))
+        rows.append(
+          row(
+            name,
+            "not_an_arm_bic_selection" if excluded else "simplified_pooled",
+            "excluded" if excluded else "arm",
+            "no",
+            logc,
+            fit_s=fit_s,
+            projection_s=projection_s,
+            inference_s=inference_s,
+            note=note(model),
+            load_before=load_before,
+          )
+        )
 
       for name, (fit, logpdf, note) in regime_methods.items():
         load_before = common.load_average()
@@ -261,21 +346,43 @@ def main() -> None:
           inference_s += time.perf_counter() - t0
           notes.append(note(model))
         projection_s = timer.take() if name == "vdc_regime" else None
-        rows.append(row(name, "split_known", "reference", "split known", logc, fit_s=fit_s,
-                        projection_s=projection_s, inference_s=inference_s,
-                        note=" / ".join(notes), load_before=load_before))
+        rows.append(
+          row(
+            name,
+            "split_known",
+            "reference",
+            "split known",
+            logc,
+            fit_s=fit_s,
+            projection_s=projection_s,
+            inference_s=inference_s,
+            note=" / ".join(notes),
+            load_before=load_before,
+          )
+        )
 
       tau = lambda m: float(st.kendalltau(uv_tr[m, 0], uv_tr[m, 1])[0])  # noqa: E731
-      diagnostics.append({
-        "case": case, "seed": seed,
-        "tau_low_train": tau(lo_tr), "tau_high_train": tau(~lo_tr),
-        "tau_pooled_train": tau(np.ones(N_TRAIN, dtype=bool)),
-        "tau_low_true": float(low.parameters_to_tau(low.parameters)),
-        "tau_high_true": float(high.parameters_to_tau(high.parameters)),
-        "oracle_nll": oracle_nll, "pooled_oracle_nll": -float(np.mean(logpool)),
-      })
-      for key, value in (("train", tr), ("test", te), ("logtrue", logtrue),
-                         ("log_pooled_oracle", logpool), ("case", case), ("seed", seed)):
+      diagnostics.append(
+        {
+          "case": case,
+          "seed": seed,
+          "tau_low_train": tau(lo_tr),
+          "tau_high_train": tau(~lo_tr),
+          "tau_pooled_train": tau(np.ones(N_TRAIN, dtype=bool)),
+          "tau_low_true": float(low.parameters_to_tau(low.parameters)),
+          "tau_high_true": float(high.parameters_to_tau(high.parameters)),
+          "oracle_nll": oracle_nll,
+          "pooled_oracle_nll": -float(np.mean(logpool)),
+        }
+      )
+      for key, value in (
+        ("train", tr),
+        ("test", te),
+        ("logtrue", logtrue),
+        ("log_pooled_oracle", logpool),
+        ("case", case),
+        ("seed", seed),
+      ):
         arrays[key].append(value)
       print(f"done {case} seed {seed}", flush=True)
 
@@ -284,33 +391,71 @@ def main() -> None:
   common.write_csv(rows, a.out / "vdc_side.csv")
   summary = {}
   for case in CASES:
-    for method in dict.fromkeys(r["method"] for r in rows if r["role"] != "excluded"):
-      vals = [r["excess_nll"] for r in rows if r["case"] == case and r["method"] == method]
+    for method in dict.fromkeys(
+      r["method"] for r in rows if r["role"] != "excluded"
+    ):
+      vals = [
+        r["excess_nll"]
+        for r in rows
+        if r["case"] == case and r["method"] == method
+      ]
       summary[f"{case}/{method}"] = {
-        "mean": float(np.mean(vals)), "se": float(np.std(vals, ddof=1) / np.sqrt(len(vals)))}
-  common.write_json({
-    "experiment": "E3b",
-    "description": "non-simplified stress test: data and VDC-env methods",
-    "provenance": prov,
-    "design": {"cases": {k: {"low": list(v[0]), "high": list(v[1])} for k, v in CASES.items()},
-               "split": SPLIT, "u1": "U(0,1), first column of pv.Bicop().simulate",
-               "seeds": SEEDS, "seed_vector": "[seed, case_index, split(1=train,2=test), stream]",
-               "n_train": N_TRAIN, "n_test": N_TEST, "sample_clip": [1e-10, 1 - 1e-10]},
-    "generator_note": "VDC's e18 generator is not released (paper workspace); rebuilt from its saved config and appendix.",
-    "published_seed0_excess_nll": {
-      "gaussian_sign_flip": {"vdc": 0.2793, "parametric": 0.2906, "tll": 0.2970, "regime_gaussian": 0.0018},
-      "clayton_gumbel_tail_switch": {"vdc": 0.0759, "parametric": 0.0883, "tll": 0.0895, "regime_gaussian": 0.1173}},
-    "vdc_settings": {"m": 64, "projection_iters": 30, "lookup": "HFuncLookup(use_spline=False).pdf",
-                     "torch_threads": 1, "dtype": "float32"},
-    "tll_settings": "e3a_vdc_side.TLL_SETTINGS with TLL as the only family (TLL itself, no selection)",
-    "excluded_rows": {"tll_runner_bic": "the runner's BIC choice between independence and TLL; "
-                      "kept in vdc_side.csv for the record, not an arm, not summarized"},
-    "log_floor": common.LOG_FLOOR,
-    "wall_s": time.perf_counter() - started,
-    "summary_excess_nll": summary,
-    "diagnostics": diagnostics,
-    "samples_npz": samples.name, "samples_sha256": common.sha256_file(samples),
-  }, a.out / "vdc_side.json")
+        "mean": float(np.mean(vals)),
+        "se": float(np.std(vals, ddof=1) / np.sqrt(len(vals))),
+      }
+  common.write_json(
+    {
+      "experiment": "E3b",
+      "description": "non-simplified stress test: data and VDC-env methods",
+      "provenance": prov,
+      "design": {
+        "cases": {
+          k: {"low": list(v[0]), "high": list(v[1])} for k, v in CASES.items()
+        },
+        "split": SPLIT,
+        "u1": "U(0,1), first column of pv.Bicop().simulate",
+        "seeds": SEEDS,
+        "seed_vector": "[seed, case_index, split(1=train,2=test), stream]",
+        "n_train": N_TRAIN,
+        "n_test": N_TEST,
+        "sample_clip": [1e-10, 1 - 1e-10],
+      },
+      "generator_note": "VDC's e18 generator is not released (paper workspace); rebuilt from its saved config and appendix.",
+      "published_seed0_excess_nll": {
+        "gaussian_sign_flip": {
+          "vdc": 0.2793,
+          "parametric": 0.2906,
+          "tll": 0.2970,
+          "regime_gaussian": 0.0018,
+        },
+        "clayton_gumbel_tail_switch": {
+          "vdc": 0.0759,
+          "parametric": 0.0883,
+          "tll": 0.0895,
+          "regime_gaussian": 0.1173,
+        },
+      },
+      "vdc_settings": {
+        "m": 64,
+        "projection_iters": 30,
+        "lookup": "HFuncLookup(use_spline=False).pdf",
+        "torch_threads": 1,
+        "dtype": "float32",
+      },
+      "tll_settings": "e3a_vdc_side.TLL_SETTINGS with TLL as the only family (TLL itself, no selection)",
+      "excluded_rows": {
+        "tll_runner_bic": "the runner's BIC choice between independence and TLL; "
+        "kept in vdc_side.csv for the record, not an arm, not summarized"
+      },
+      "log_floor": common.LOG_FLOOR,
+      "wall_s": time.perf_counter() - started,
+      "summary_excess_nll": summary,
+      "diagnostics": diagnostics,
+      "samples_npz": samples.name,
+      "samples_sha256": common.sha256_file(samples),
+    },
+    a.out / "vdc_side.json",
+  )
   print(json.dumps(summary, indent=1))
 
 
