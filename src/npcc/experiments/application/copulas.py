@@ -14,7 +14,7 @@ covariates are passed as they are.
   which ignores the covariates;
 - ``boostcopula-<scope>``, boostCopula's boosted conditional R-vine, its
   structure, families and calibration selected and fitted in R by
-  :data:`BOOSTCOPULA_SCRIPT` at the package's defaults, for five variables;
+  :data:`BOOSTCOPULA_SCRIPT` at the package's defaults, for d >= 2 variables;
 - ``npcc-random-<backend>-<scope>``, a
   :class:`~npcc.core.vinecop.RosenblattVinecop` in the non-simplified context
   on one uniformly random R-vine structure per station, the same for every
@@ -87,7 +87,7 @@ import logging
 import subprocess
 import tempfile
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from typing import cast
@@ -102,6 +102,7 @@ from npcc.core.controls import FitControlsRosenblattVinecop
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.experiments import _external, _external_vine
 from npcc.experiments._study import derive_seed, release_gpu
+from npcc.experiments.application.derived import derive
 from npcc.experiments.application.joint_scores import (
   energy_score,
   inverse_margins,
@@ -148,8 +149,8 @@ COPULA_ARMS: tuple[str, ...] = (
 #: absolute.
 BOOSTCOPULA_SCRIPT: str = "r_methods/fit_boostcopula_vine.R"
 
-#: The number of variables the boostCopula script's initial matrix fixes.
-BOOSTCOPULA_DIMENSION: int = 5
+#: The fewest variables the boostCopula script fits.
+BOOSTCOPULA_MIN_DIMENSION: int = 2
 
 #: E1's grid setting, which sizes the Sinkhorn projection that E1's controls
 #: leave off; passed only because building the controls needs it.
@@ -183,6 +184,12 @@ class CopulaResult:
   info : dict of str to object
       What was fitted, as JSON-ready values: structures, seeds, settings and
       versions.
+  sample_crps : dict of str to numpy.ndarray
+      With derived responses only: every response's CRPS of each test case,
+      modeled and derived, estimated from the draws in its own units.
+  clipped_share : numpy.ndarray or None
+      With derived responses only: each test case's share of draws whose
+      dew point exceeded the temperature and was clipped at it.
   """
 
   arm: str
@@ -192,6 +199,8 @@ class CopulaResult:
   variogram: np.ndarray
   timings: dict[str, float]
   info: dict[str, object]
+  sample_crps: dict[str, np.ndarray] = field(default_factory=dict)
+  clipped_share: np.ndarray | None = None
 
 
 class CopulaFailure(ValueError):
@@ -235,6 +244,7 @@ class _Inputs:
   u_train: np.ndarray
   u_test: np.ndarray
   scale: np.ndarray
+  derived_scale: np.ndarray
   n_draws: int
   seed: int
 
@@ -484,11 +494,21 @@ def _inputs(ms: MarginalSet, *, n_draws: int, seed: int) -> _Inputs:
       f"sample scores; got standard deviations {scale.tolist()} for station "
       f"{ms.station}, {ms.model}"
     )
+  derived_scale = np.std(ms.y_derived_train, axis=0)
+  if (
+    ms.derived and not (np.isfinite(derived_scale) & (derived_scale > 0)).all()
+  ):
+    raise ValueError(
+      f"MarginalSet.y_derived_train must vary in every variable to "
+      f"standardize the sample scores; got standard deviations "
+      f"{derived_scale.tolist()} for station {ms.station}, {ms.model}"
+    )
   return _Inputs(
     ms=ms,
     u_train=np.clip(ms.pit_train, PIT_CLIP, 1 - PIT_CLIP),
     u_test=np.clip(ms.pit_test, PIT_CLIP, 1 - PIT_CLIP),
     scale=scale,
+    derived_scale=derived_scale,
     n_draws=n_draws,
     seed=seed,
   )
@@ -521,11 +541,37 @@ def _score(
   draws = inverse_margins(uniforms, ms.levels, ms.quantiles_test)
   timings["inverse_margins"] = perf_counter() - t0
 
+  sample_crps: dict[str, np.ndarray] = {}
+  clipped_share = None
+  clipped_draws = 0.0
+  observed_raw, scale = ms.y_test, inputs.scale
+  if ms.derived:
+    t0 = perf_counter()
+    extra, clipped = derive(draws, ms.variables, ms.derived)
+    draws = np.concatenate([draws, extra], axis=2)
+    observed_raw = np.concatenate([ms.y_test, ms.y_derived_test], axis=1)
+    scale = np.concatenate([inputs.scale, inputs.derived_scale])
+    clipped_share = clipped.mean(axis=1)
+    clipped_draws = float(clipped.mean())
+    timings["derived_responses"] = perf_counter() - t0
+    bad = np.flatnonzero(~np.isfinite(extra).all(axis=(1, 2)))
+    if bad.size:
+      raise CopulaFailure(
+        f"{name}'s derived responses must be finite; got others at "
+        f"{bad.size} test cases",
+        bad,
+      )
+
   t0 = perf_counter()
-  standardized = draws / inputs.scale
-  observed = ms.y_test / inputs.scale
+  standardized = draws / scale
+  observed = observed_raw / scale
   energy = energy_score(standardized, observed)
   variogram = variogram_score(standardized, observed, p=0.5)
+  if ms.derived:
+    for j, variable in enumerate((*ms.variables, *ms.derived)):
+      sample_crps[variable] = energy_score(
+        draws[:, :, j : j + 1], observed_raw[:, j : j + 1]
+      )
   nll = joint_nll(logcop, ms.logpdf_test)
   bad = np.flatnonzero(~np.isfinite(nll))
   if bad.size:
@@ -542,6 +588,13 @@ def _score(
       bad,
     )
   timings["scoring"] = perf_counter() - t0
+  if ms.derived:
+    info = {
+      **info,
+      "modeled": list(ms.variables),
+      "derived": list(ms.derived),
+      "clipped_draws_share": clipped_draws,
+    }
   return CopulaResult(
     arm=name,
     logcop_test=logcop,
@@ -550,6 +603,8 @@ def _score(
     variogram=variogram,
     timings=timings,
     info=info,
+    sample_crps=sample_crps,
+    clipped_share=clipped_share,
   )
 
 
@@ -838,10 +893,10 @@ def _boostcopula(
   ms = inputs.ms
   d = len(ms.variables)
   name = arm.name
-  if d != BOOSTCOPULA_DIMENSION:
+  if d < BOOSTCOPULA_MIN_DIMENSION:
     raise ValueError(
-      f"{name} must be fitted to {BOOSTCOPULA_DIMENSION} variables, its "
-      f"initial matrix's; got {d}"
+      f"{name} must be fitted to at least {BOOSTCOPULA_MIN_DIMENSION} "
+      f"variables; got {d}"
     )
   script = BOOSTCOPULA_SCRIPT
   if not Path(script).is_file():

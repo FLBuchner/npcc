@@ -265,14 +265,10 @@ def test_output_that_breaks_the_exchange_stops_the_run(
     _run("boostcopula-all", gaussian_set(d=5))
 
 
-def test_a_dimension_other_than_five_is_refused(stand_in: Path) -> None:
-  """The script's initial matrix fixes five variables; another d must stop.
-
-  R would refuse it too, but only after starting; the check names the
-  reason before anything runs.
-  """
-  with pytest.raises(ValueError, match="5 variables"):
-    _run("boostcopula-all", gaussian_set(d=4))
+def test_a_single_variable_is_refused(stand_in: Path) -> None:
+  """A vine needs two variables; one must stop before R starts."""
+  with pytest.raises(ValueError, match="at least 2 variables"):
+    _run("boostcopula-all", gaussian_set(d=1))
   assert not stand_in.with_suffix(".calls").exists()
 
 

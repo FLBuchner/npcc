@@ -154,9 +154,12 @@ def test_the_fits_reproduce_his_on_a_fixed_sample() -> None:
     rtol=1e-6,
   )
 
+  # The beta CRPS is flat at its minimum and its gradient a finite
+  # difference, so the stopping point moves by about 1e-5 with BLAS's thread
+  # count while the objective agrees to 1e-9.
   beta = BetaEMOS().fit(yh, x=xh)
   assert beta.parameters["training_crps"] == pytest.approx(
-    0.046093573905725126, rel=1e-10
+    0.046093573905725126, rel=1e-8
   )
   np.testing.assert_allclose(
     [*beta.theta, beta.precision],
@@ -167,7 +170,7 @@ def test_the_fits_reproduce_his_on_a_fixed_sample() -> None:
       0.23168369117644602,
       27.332886211172678,
     ],
-    rtol=1e-6,
+    rtol=1e-3,
   )
 
 
@@ -199,9 +202,11 @@ def test_the_predictions_reproduce_his() -> None:
   }
   for name, (model, x, y) in models.items():
     cdf, logpdf, icdf = expected[name]
-    np.testing.assert_allclose(model.cdf(y[:3], x=x[:3]), cdf, rtol=1e-6)
-    np.testing.assert_allclose(model.logpdf(y[:3], x=x[:3]), logpdf, rtol=1e-6)
-    np.testing.assert_allclose(model.icdf(p, x=x[:3]), icdf, rtol=1e-6)
+    # The beta's fit moves with BLAS's thread count; see the test above.
+    rtol = 1e-3 if name == "beta" else 1e-6
+    np.testing.assert_allclose(model.cdf(y[:3], x=x[:3]), cdf, rtol=rtol)
+    np.testing.assert_allclose(model.logpdf(y[:3], x=x[:3]), logpdf, rtol=rtol)
+    np.testing.assert_allclose(model.icdf(p, x=x[:3]), icdf, rtol=rtol)
 
 
 def test_each_family_is_the_scipy_distribution_it_names() -> None:

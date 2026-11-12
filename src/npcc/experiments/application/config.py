@@ -36,6 +36,11 @@ from npcc.experiments.application.data import (
   DEFAULT_DATA_DIR,
   CaseSelection,
 )
+from npcc.experiments.application.derived import (
+  DERIVATIONS,
+  DEW_POINT,
+  TEMPERATURE,
+)
 from npcc.experiments.config import EstimatorSpec, _parse_estimator
 
 #: The seasonal EMOS baseline's model name.
@@ -197,6 +202,17 @@ class ApplicationConfig:
       Whether to refuse input files that are not the published ones, by
       their SHA-256; off only for files of another source, such as
       synthetic ones.
+  modeled_responses : tuple of str or None
+      The responses the margins and copulas are fitted to; ``None`` for
+      every response (see :attr:`modeled`).
+  derived_responses : tuple of str
+      The responses computed from each copula draw of the modeled ones
+      (:mod:`~npcc.experiments.application.derived`) and scored with them;
+      none by default.
+  saturation_nudge : float
+      RH points: a case whose dew point equals its temperature has its dew
+      point moved to where the Magnus RH is ``100 - saturation_nudge``,
+      before its margins see it. 0, the default, moves none.
   devices : mapping of str to str
       The device of each backend named; an unnamed one picks its own.
   n_levels : int
@@ -222,6 +238,9 @@ class ApplicationConfig:
   copula_arms: tuple[str, ...]
   copula_margins: tuple[str, ...] | None = None
   verify_data: bool = True
+  modeled_responses: tuple[str, ...] | None = None
+  derived_responses: tuple[str, ...] = ()
+  saturation_nudge: float = 0.0
   devices: Mapping[str, str] = field(default_factory=dict)
   n_levels: int = 199
   n_draws: int = 200
@@ -265,6 +284,7 @@ class ApplicationConfig:
           f"{list(self.models)}; got {unknown}"
         )
     self._check_devices()
+    self._check_modeled()
     for name, low in (
       ("n_levels", 2),
       ("n_draws", 2),
@@ -311,6 +331,90 @@ class ApplicationConfig:
         raise ValueError(
           f"devices.{backend} must be a torch device; got {device!r}"
         ) from exc
+
+  def _check_modeled(self) -> None:
+    """Refuse a modeled subset or a derivation the data cannot support."""
+    names = self.variables
+    if self.modeled_responses is not None:
+      _unique("modeled", self.modeled_responses)
+      unknown = sorted(set(self.modeled_responses) - set(names))
+      if not self.modeled_responses or unknown:
+        raise ValueError(
+          f"modeled must be a non-empty subset of the responses {list(names)}; "
+          f"got {list(self.modeled_responses)}"
+        )
+    _unique("derived", self.derived_responses)
+    for name in self.derived_responses:
+      if name not in DERIVATIONS or name not in names:
+        raise ValueError(
+          f"derived must be drawn from {sorted(set(DERIVATIONS) & set(names))}, "
+          f"the responses with a formula; got {name!r}"
+        )
+      if name in self.modeled:
+        raise ValueError(f"{name} must be either modeled or derived, not both")
+      missing = [v for v in DERIVATIONS[name] if v not in self.modeled]
+      if missing:
+        raise ValueError(
+          f"{name} must be derived from modeled responses; its inputs "
+          f"{missing} are not modeled"
+        )
+    left = [v for v in names if v not in self.modeled and v not in self.derived]
+    if left:
+      raise ValueError(
+        f"every response must be modeled or derived; got neither for {left}"
+      )
+    if not 0.0 <= self.saturation_nudge < 100.0:
+      raise ValueError(
+        f"saturation_nudge must lie in [0, 100) RH points; got "
+        f"{self.saturation_nudge}"
+      )
+    if self.saturation_nudge > 0.0 and not {TEMPERATURE, DEW_POINT} <= set(
+      self.modeled
+    ):
+      raise ValueError(
+        f"saturation_nudge must be 0 unless {TEMPERATURE} and {DEW_POINT} "
+        f"are both modeled; got modeled {list(self.modeled)}"
+      )
+
+  @property
+  def variables(self) -> tuple[str, ...]:
+    """Every response, sorted as the data sorts them."""
+    return tuple(sorted(self.responses))
+
+  @property
+  def modeled(self) -> tuple[str, ...]:
+    """The modeled responses, sorted as the data sorts them."""
+    if self.modeled_responses is None:
+      return self.variables
+    return tuple(v for v in self.variables if v in self.modeled_responses)
+
+  @property
+  def derived(self) -> tuple[str, ...]:
+    """The derived responses, sorted as the data sorts them."""
+    return tuple(v for v in self.variables if v in self.derived_responses)
+
+  @property
+  def is_default_design(self) -> bool:
+    """Whether every response is modeled and nothing is nudged."""
+    return (
+      self.modeled == self.variables
+      and not self.derived
+      and self.saturation_nudge == 0.0
+    )
+
+  def _design(self) -> dict[str, object]:
+    """The modeled subset's settings, recorded only off the default design.
+
+    The default's signature and echo predate the option, so a run folder
+    the default started still resumes.
+    """
+    if self.is_default_design:
+      return {}
+    return {
+      "modeled": list(self.modeled),
+      "derived": list(self.derived),
+      "saturation_nudge": self.saturation_nudge,
+    }
 
   @property
   def copula_models(self) -> tuple[str, ...]:
@@ -397,6 +501,7 @@ class ApplicationConfig:
       "sample_batch_size": self.sample_batch_size,
       "mixture_k": self.mixture_k,
       "base_seed": self.base_seed,
+      **self._design(),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
@@ -431,6 +536,7 @@ class ApplicationConfig:
       "mixture_k": self.mixture_k,
       "base_seed": self.base_seed,
       "batch_size": self.batch_size,
+      **self._design(),
       "signature": self.signature(),
     }
 
@@ -473,6 +579,8 @@ _TABLES: dict[str, tuple[str, ...]] = {
     "mixture_k",
   ),
 }
+#: The keys of ``[responses]`` that are settings rather than a response.
+_DESIGN_KEYS = ("modeled", "derived", "saturation_nudge")
 _TOP_LEVEL = (*_TABLES, "responses", "devices", "estimators", "base_seed")
 
 
@@ -624,6 +732,22 @@ def load_config(path: str | Path) -> ApplicationConfig:
     options["verify_data"] = data["verify"]
   if "margins" in copulas:
     options["copula_margins"] = _strings(copulas["margins"], "copulas.margins")
+  tables = {k: v for k, v in responses.items() if k not in _DESIGN_KEYS}
+  if "modeled" in responses:
+    options["modeled_responses"] = _strings(
+      responses["modeled"], "responses.modeled"
+    )
+  if "derived" in responses:
+    options["derived_responses"] = _strings(
+      responses["derived"], "responses.derived"
+    )
+  if "saturation_nudge" in responses:
+    nudge = responses["saturation_nudge"]
+    if isinstance(nudge, bool) or not isinstance(nudge, int | float):
+      raise TypeError(
+        f"responses.saturation_nudge must be a number; got {nudge!r}"
+      )
+    options["saturation_nudge"] = float(nudge)
   for key, value in devices.items():
     if not isinstance(value, str):
       raise TypeError(f"devices.{key} must be a string; got {value!r}")
@@ -632,7 +756,7 @@ def load_config(path: str | Path) -> ApplicationConfig:
     stations=_stations(data.get("stations", "all")),
     selection=selection,
     models=_strings(_required(margins, "margins", "models"), "margins.models"),
-    responses={k: _response(k, v) for k, v in responses.items()},
+    responses={k: _response(k, v) for k, v in tables.items()},
     estimators=tuple(
       _parse_estimator(cast("Mapping[str, object]", e)) for e in raw_estimators
     ),

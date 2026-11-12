@@ -41,6 +41,11 @@ from npcc.experiments.application.config import (
   ResponseSpec,
 )
 from npcc.experiments.application.data import StationData, feature_columns
+from npcc.experiments.application.derived import (
+  DEW_POINT,
+  TEMPERATURE,
+  nudge_saturated,
+)
 from npcc.experiments.application.emos import EMOS, emos_for
 from npcc.experiments.application.scores import marginal_case_scores
 from npcc.experiments.application.store import quantile_columns
@@ -323,8 +328,18 @@ def fit_margin(
   columns = feature_columns(data.feature_names, model.scope, variable)
   names = [data.feature_names[c] for c in columns]
   x_train, x_test = data.x_train[:, columns], data.x_test[:, columns]
-  y_train = response.to_model(data.y_train[:, j], variable)
-  y_test = response.to_model(data.y_test[:, j], variable)
+  observed_train, observed_test = data.y_train[:, j], data.y_test[:, j]
+  saturated: dict[str, int] = {}
+  if variable == DEW_POINT and config.saturation_nudge > 0.0:
+    t = data.column(TEMPERATURE)
+    observed_train, saturated["saturated_train"] = nudge_saturated(
+      data.y_train[:, t], observed_train, config.saturation_nudge
+    )
+    observed_test, saturated["saturated_test"] = nudge_saturated(
+      data.y_test[:, t], observed_test, config.saturation_nudge
+    )
+  y_train = response.to_model(observed_train, variable)
+  y_test = response.to_model(observed_test, variable)
   seed = derive_seed(
     config.base_seed, "margin", data.station, model.name, variable
   )
@@ -361,6 +376,7 @@ def fit_margin(
       "scale": response.scale,
       "boundary_nudge": response.boundary_nudge,
     },
+    **saturated,
   }
   if isinstance(predictor, EMOS):
     info["emos"] = {"class": type(predictor).__name__, **predictor.parameters}
@@ -438,7 +454,8 @@ def fit_station(
   q_columns = quantile_columns(len(levels))
   predictions, scores, timings = [], [], []
   details: dict[str, object] = {}
-  for variable in data.variables:
+  modeled = data.variables if config.is_default_design else config.modeled
+  for variable in modeled:
     logger.info(
       "station %d: fitting %s to %s", data.station, model.name, variable
     )
@@ -501,5 +518,13 @@ def fit_station(
     predictions=pd.concat(predictions, ignore_index=True),
     scores=pd.concat(scores, ignore_index=True),
     timings=pd.DataFrame(timings),
-    info={"levels": levels.tolist(), "variables": details},
+    info={
+      "levels": levels.tolist(),
+      "variables": details,
+      **(
+        {}
+        if config.is_default_design
+        else {"modeled": list(config.modeled), "derived": list(config.derived)}
+      ),
+    },
   )

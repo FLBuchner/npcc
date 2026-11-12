@@ -48,6 +48,22 @@ def coverage_column(nominal: float) -> str:
   return f"coverage_{round(100 * nominal)}"
 
 
+def sample_crps_column(variable: str) -> str:
+  """The column of a response's CRPS from copula draws, e.g. ``crps_air_temperature``.
+
+  Parameters
+  ----------
+  variable : str
+      The response, as named in ``y.nc``.
+
+  Returns
+  -------
+  str
+      ``crps_`` and the name without its ``obs:`` prefix.
+  """
+  return "crps_" + variable.removeprefix("obs:")
+
+
 def crps_from_quantiles(
   y: np.ndarray, quantiles: np.ndarray, levels: np.ndarray
 ) -> np.ndarray:
@@ -346,6 +362,28 @@ def marginal_tables(
   }
 
 
+def copula_score_columns(cases: pd.DataFrame) -> tuple[str, list[str]]:
+  """The copula scores present: the log score's column, then every score.
+
+  Parameters
+  ----------
+  cases : pandas.DataFrame
+      Per-case copula scores.
+
+  Returns
+  -------
+  nll : str
+      ``joint_nll``, or ``joint_nll_modeled`` where responses are derived and
+      the log score covers the modeled ones only.
+  scores : list of str
+      ``nll``, ``energy``, ``variogram``, then each response's CRPS from the
+      draws (``crps_<name>``) where present.
+  """
+  nll = "joint_nll_modeled" if "joint_nll_modeled" in cases else "joint_nll"
+  crps = [c for c in cases.columns if c.startswith("crps_")]
+  return nll, [nll, "energy", "variogram", *crps]
+
+
 def copula_tables(
   cases: pd.DataFrame,
   *,
@@ -358,8 +396,9 @@ def copula_tables(
   ----------
   cases : pandas.DataFrame
       One row per ``(station, model, arm, row)``, ``model`` being the
-      marginal model, with the columns :data:`COPULA_SCORES`. Within a
-      marginal model, every arm must cover the same cases.
+      marginal model, with the columns of :func:`copula_score_columns` and,
+      where responses are derived, ``clipped_share``. Within a marginal
+      model, every arm must cover the same cases.
   reference : str, default="independence"
       The reference arm; skills are ``nan`` without it.
   seed : int, default=42
@@ -369,17 +408,21 @@ def copula_tables(
   -------
   dict of str to pandas.DataFrame
       ``by_station``, ``pooled`` and ``station_mean`` as for
-      :func:`marginal_tables`, with ``joint_nll_gain`` (the additive
-      improvement on the reference) and ``energy_skill`` and
-      ``variogram_skill`` (ratios of means); and ``cases``, the input with
-      each case's ``joint_nll_gain`` and its ``energy_gain`` and
-      ``variogram_gain`` over the reference's pooled mean.
+      :func:`marginal_tables`: each score's mean, the log score's gain
+      (``joint_nll_gain``, the additive improvement on the reference) and
+      every other score's skill (``energy_skill``, ``variogram_skill``, a
+      ratio of means), and ``clipped_share``'s mean where present; and
+      ``cases``, the input with each case's log-score gain and its
+      ``energy_gain`` and ``variogram_gain`` over the reference's pooled
+      mean.
   """
   _check_paired(cases, "arm", ["station", "row"], ["model"])
-  scores = list(COPULA_SCORES)
+  nll, scores = copula_score_columns(cases)
+  skilled = scores[1:]
+  means = [*scores, *(["clipped_share"] if "clipped_share" in cases else [])]
   by_station = (
     cases.groupby(["station", "model", "arm"], sort=True)
-    .agg(n_cases=("row", "size"), **{m: (m, "mean") for m in scores})
+    .agg(n_cases=("row", "size"), **{m: (m, "mean") for m in means})
     .reset_index()
   )
   pooled = (
@@ -387,7 +430,7 @@ def copula_tables(
     .agg(
       n_cases=("row", "size"),
       n_stations=("station", "nunique"),
-      **{m: (m, "mean") for m in scores},
+      **{m: (m, "mean") for m in means},
     )
     .reset_index()
   )
@@ -397,7 +440,7 @@ def copula_tables(
   wide = cases.merge(
     ref_cases, on=["station", "model", "row"], how="left", validate="m:1"
   )
-  wide["joint_nll_gain"] = wide["ref_joint_nll"] - wide["joint_nll"]
+  wide[f"{nll}_gain"] = wide[f"ref_{nll}"] - wide[nll]
   for metric in ("energy", "variogram"):
     pooled_ref = ref_cases.groupby("model")[f"ref_{metric}"].mean()
     denominator = wide["model"].map(pooled_ref)
@@ -416,10 +459,8 @@ def copula_tables(
       how="left",
       validate="m:1",
     )
-    table["joint_nll_gain"] = (
-      merged["ref_joint_nll"] - merged["joint_nll"]
-    ).to_numpy()
-    for metric in ("energy", "variogram"):
+    table[f"{nll}_gain"] = (merged[f"ref_{nll}"] - merged[nll]).to_numpy()
+    for metric in skilled:
       ref_mean = merged[f"ref_{metric}"]
       table[f"{metric}_skill"] = (
         1.0 - merged[metric] / ref_mean.where(ref_mean > 0)
@@ -427,7 +468,7 @@ def copula_tables(
   station_mean = _equal_station(
     by_station,
     ["model", "arm"],
-    [*scores, "joint_nll_gain", "energy_skill", "variogram_skill"],
+    [*means, f"{nll}_gain", *(f"{m}_skill" for m in skilled)],
     seed,
   )
   return {

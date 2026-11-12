@@ -27,9 +27,15 @@
 # **Model.** boostRVineStructureSelect at the package's defaults: Dissmann's
 # algorithm with Kendall's tau as the tree criterion, each pair's family
 # selected by AIC from the default set, its parameter a boosted function of
-# every covariate. The initial matrix below supplies the formulas only, one
-# `~ .` per pair; the structure and families are selected. It is 5 x 5, so the
-# script fits five variables and refuses any other number.
+# every covariate. The initial matrix supplies the formulas only, one `~ .`
+# per pair; the structure and families are selected from it.
+#
+# **Initial matrix.** FLBuchner's 5 x 5 matrix (npcc-paper PR #4), and for any
+# other d >= 2 the matrix of the same pattern, `initial_matrix(d)`: diagonal
+# d, 2, 3, ..., d - 1, 1; below it, column 1 holds 2, ..., d - 2, then 1, then
+# d - 1, and column j >= 2 holds j + 1, ..., d - 1, then 1. Its first tree
+# pairs each of 2, ..., d - 1 with 1, and d with d - 1, a D-vine for d <= 4.
+# At d = 5 it is his matrix entry for entry.
 #
 # **Draws.** The seed is set once, before the fit. After the density, each
 # test row in turn takes n_draws x d uniforms, `matrix(runif(n_draws * d),
@@ -42,12 +48,23 @@
 # the harness or the machine, which stops the run. Any other nonzero status is
 # the method failing on its sample.
 
-# The initial matrix, whose formula rows the selection reads.
-INITIAL <- matrix(c(5, 0, 0, 0, 0,
-                    2, 2, 0, 0, 0,
-                    3, 3, 3, 0, 0,
-                    1, 4, 4, 4, 0,
-                    4, 1, 1, 1, 1), 5, 5, byrow = TRUE)
+# The initial matrix, whose formula rows the selection reads; see above.
+initial_matrix <- function(d) {
+  if (d == 2) {
+    return(matrix(c(2, 0, 1, 1), 2, 2, byrow = TRUE))
+  }
+  m <- matrix(0, d, d)
+  diag(m) <- c(d, if (d > 2) 2:(d - 1), 1)[seq_len(d)]
+  m[d, d] <- 1
+  if (d > 3) m[2:(d - 2), 1] <- 2:(d - 2)
+  m[d - 1, 1] <- 1
+  m[d, 1] <- d - 1
+  for (j in seq_len(d - 2) + 1) {
+    if (j + 1 <= d - 1) m[(j + 1):(d - 1), j] <- (j + 1):(d - 1)
+    m[d, j] <- 1
+  }
+  m
+}
 PACKAGES <- c("boostCopula", "VineCopula", "Rfast")
 
 refuse <- function(...) {
@@ -151,10 +168,10 @@ if (!identical(train$u, test$u) || !identical(train$x, test$x)) {
          paste(c(test$u, test$x), collapse = ", "))
 }
 d <- length(train$u)
-if (d != nrow(INITIAL)) {
-  refuse("the data must have ", nrow(INITIAL), " variables, the initial ",
-         "matrix's; got ", d)
+if (d < 2) {
+  refuse("the data must have at least 2 variables; got ", d)
 }
+INITIAL <- initial_matrix(d)
 U <- unname(as.matrix(train$df[train$u]))
 X <- train$df[train$x]
 U_test <- unname(as.matrix(test$df[test$u]))

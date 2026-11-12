@@ -42,6 +42,7 @@ from npcc.experiments._study import code_provenance
 from npcc.experiments.application.config import ApplicationConfig
 from npcc.experiments.application.data import StationData, data_sha256
 from npcc.experiments.application.marginal_set import MarginalSet
+from npcc.experiments.application.scores import sample_crps_column
 
 _SPLITS = ("train", "test")
 
@@ -82,6 +83,16 @@ class CopulaResultLike(Protocol):
   @property
   def info(self) -> Mapping[str, object]:
     """JSON-able details of the fit."""
+    ...
+
+  @property
+  def sample_crps(self) -> Mapping[str, np.ndarray]:
+    """Each response's CRPS from the draws, when responses are derived."""
+    ...
+
+  @property
+  def clipped_share(self) -> np.ndarray | None:
+    """Each test case's share of draws whose dew point was clipped."""
     ...
 
 
@@ -491,15 +502,20 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
       "copula reads them; run `margins` for them first"
     )
   data = read_station_data(out, station)
-  levels = np.asarray(
-    json.loads((unit / "info.json").read_text())["levels"], dtype=np.float64
-  )
+  info = json.loads((unit / "info.json").read_text())
+  levels = np.asarray(info["levels"], dtype=np.float64)
+  # A unit of the default design records neither list: it models every
+  # response and derives none.
+  modeled = tuple(info.get("modeled", data.variables))
+  derived = tuple(info.get("derived", ()))
+  modeled_columns = [data.column(v) for v in modeled]
+  derived_columns = [data.column(v) for v in derived]
   predictions = pd.read_parquet(unit / "predictions.parquet")
   columns = quantile_columns(len(levels))
   per_split: dict[str, list[np.ndarray]] = {"pit_train": [], "pit_test": []}
   logpdf: list[np.ndarray] = []
   quantiles: list[np.ndarray] = []
-  for variable in data.variables:
+  for variable in modeled:
     rows = predictions.loc[predictions["variable"] == variable]
     for split in _SPLITS:
       part = rows.loc[rows["split"] == split]
@@ -517,12 +533,12 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
   return MarginalSet(
     station=int(station),
     model=model,
-    variables=data.variables,
+    variables=modeled,
     feature_names=data.feature_names,
     x_train=data.x_train,
     x_test=data.x_test,
-    y_train=data.y_train,
-    y_test=data.y_test,
+    y_train=data.y_train[:, modeled_columns],
+    y_test=data.y_test[:, modeled_columns],
     time_train=data.time_train,
     time_test=data.time_test,
     pit_train=np.column_stack(per_split["pit_train"]),
@@ -530,6 +546,9 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
     logpdf_test=np.column_stack(logpdf),
     levels=levels,
     quantiles_test=np.stack(quantiles, axis=2),
+    derived=derived,
+    y_derived_train=data.y_train[:, derived_columns],
+    y_derived_test=data.y_test[:, derived_columns],
   )
 
 
@@ -681,13 +700,22 @@ def write_copula(
     raise ValueError(
       f"{arm} must return results with distinct arm names; got {names}"
     )
+  # With derived responses, the log score covers the modeled ones only and
+  # is named so, apart from a log score of every response.
+  nll = "joint_nll_modeled" if ms.derived else "joint_nll"
   for result in results:
     columns = {
       "logcop": result.logcop_test,
-      "joint_nll": result.joint_nll,
+      nll: result.joint_nll,
       "energy": result.energy,
       "variogram": result.variogram,
+      **{
+        sample_crps_column(v): values
+        for v, values in result.sample_crps.items()
+      },
     }
+    if result.clipped_share is not None:
+      columns["clipped_share"] = result.clipped_share
     for name, values in columns.items():
       values = np.asarray(values)
       if values.shape != (n_test,) or not np.isfinite(values).all():
@@ -725,6 +753,11 @@ def write_copula(
     "arm": arm,
     "seed": seed,
     "wall_seconds": wall_seconds,
+    **(
+      {"modeled": list(ms.variables), "derived": list(ms.derived)}
+      if ms.derived
+      else {}
+    ),
     "results": {
       r.arm: {"timings": dict(r.timings), "info": dict(r.info)} for r in results
     },

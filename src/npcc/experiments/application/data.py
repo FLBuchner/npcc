@@ -39,6 +39,8 @@ from urllib.request import urlopen
 import numpy as np
 import xarray as xr
 
+from npcc.experiments.application.derived import mixing_ratio, relative_humidity
+
 #: The day-of-year terms: the ``time`` scope, and part of the ``emos`` one.
 TIME_FEATURES: tuple[str, ...] = ("time:sin_dayofyear", "time:cos_dayofyear")
 #: Covariates no model sees: the lead is constant within a station's cases,
@@ -588,6 +590,7 @@ def write_synthetic(
   end: dt.date = dt.date(2022, 1, 31),
   step_days: int = 1,
   seed: int = 0,
+  saturated_share: float = 0.0,
 ) -> None:
   """Write a synthetic ``x.nc`` and ``y.nc`` in the application's layout.
 
@@ -614,6 +617,12 @@ def write_synthetic(
       Days between initializations.
   seed : int, default=0
       Seed of the draws.
+  saturated_share : float, default=0.0
+      Above 0, the responses obey the identities the real data obeys
+      (:mod:`~npcc.experiments.application.derived`): the dew point equals
+      the temperature in about this share of rows, and relative humidity and
+      the mixing ratio are computed from temperature, dew point and pressure.
+      At 0, they are drawn with noise of their own.
   """
   if n_stations < 1 or step_days < 1:
     raise ValueError(
@@ -680,6 +689,16 @@ def write_synthetic(
   humidity = responses["relative_humidity"]
   humidity[np.arange(n) % 11 == 0] = 100.0
   humidity[np.arange(n) % 17 == 1] = 0.0
+  if saturated_share > 0.0:
+    t = responses["air_temperature"]
+    td = np.minimum(responses["dew_point_temperature"], t)
+    saturated = rng.random(n) < saturated_share
+    td[saturated] = t[saturated]
+    responses["dew_point_temperature"] = td
+    responses["relative_humidity"] = relative_humidity(t, td)
+    responses["water_vapor_mixing_ratio"] = mixing_ratio(
+      t, td, responses["surface_air_pressure"]
+    )
   covariates["coe:leadtime"] = lead.astype(float)
   covariates["time:sin_dayofyear"] = np.sin(annual)
   covariates["time:cos_dayofyear"] = np.cos(annual)

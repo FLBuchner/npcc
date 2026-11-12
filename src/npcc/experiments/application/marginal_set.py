@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -43,6 +43,12 @@ class MarginalSet:
   quantiles_test : numpy.ndarray, shape (n_test, L, d)
       The marginal quantiles at ``levels`` for each test case, on the
       original scale, nondecreasing along the level axis.
+  derived : tuple of str
+      The ``k`` responses a copula's draws derive from the modeled ones
+      (:mod:`~npcc.experiments.application.derived`); empty when every
+      response is modeled.
+  y_derived_train, y_derived_test : numpy.ndarray, shape (n_train, k) and (n_test, k)
+      Their observations, which the joint forecast is scored against.
   """
 
   station: int
@@ -60,6 +66,9 @@ class MarginalSet:
   logpdf_test: np.ndarray
   levels: np.ndarray
   quantiles_test: np.ndarray
+  derived: tuple[str, ...] = ()
+  y_derived_train: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))
+  y_derived_test: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))
 
   def __post_init__(self) -> None:
     """Refuse arrays that do not line up."""
@@ -80,6 +89,10 @@ class MarginalSet:
         (n_test, len(self.levels), d),
       ),
     }
+    if self.derived:
+      k = len(self.derived)
+      shapes["y_derived_train"] = (self.y_derived_train.shape, (n_train, k))
+      shapes["y_derived_test"] = (self.y_derived_test.shape, (n_test, k))
     for name, (got, want) in shapes.items():
       if got != want:
         raise ValueError(

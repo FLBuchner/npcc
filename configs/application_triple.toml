@@ -1,0 +1,90 @@
+# The weather application on the non-redundant triple (T, Td, p): margins and
+# copulas (d = 3) are fitted to temperature, dew point and pressure, and
+# relative humidity and the mixing ratio are derived from every draw. In the
+# data both are functions of the triple (scripts/paper/application/README.md),
+# so the five responses have no joint density and a five-variable log score
+# is not defined; this design scores the triple's log score and every
+# response's energy, variogram and sample CRPS.
+#   npcc-application margins  --config configs/application_triple.toml --out results/application_triple
+#   npcc-application copulas  --config configs/application_triple.toml --out results/application_triple
+#   npcc-application evaluate --config configs/application_triple.toml --out results/application_triple
+# configs/application.toml, the five-response design, stays the default.
+
+base_seed = 317
+
+[data]
+dir = "~/npcc-data/meteoswiss_zanetta2023"
+verify = true
+stations = "all"
+lead_hours = 24
+init_hour = 0
+train = [2017-01-01, 2020-12-31]
+test = [2021-01-01, 2021-12-31]
+min_cases = 20
+
+[margins]
+# The seasonal EMOS baseline, against which the CRPSS is read, and TabPFN on
+# all the covariates.
+models = ["emos-seasonal", "tabpfn-quantiles-all"]
+n_levels = 199
+
+# The modeled triple. Relative humidity and the mixing ratio are functions of
+# it (npcc.experiments.application.derived): they are computed from every
+# copula draw of (T, Td, p), and scored with it, but no margin or copula is
+# fitted to them, so their scales below are unused. A case whose dew point
+# equals its temperature has it moved to where the Magnus RH is
+# 100 - saturation_nudge, as an RH of exactly 100 is moved to 99.95.
+[responses]
+modeled = ["obs:air_temperature", "obs:dew_point_temperature", "obs:surface_air_pressure"]
+derived = ["obs:relative_humidity", "obs:water_vapor_mixing_ratio"]
+saturation_nudge = 0.05
+"obs:air_temperature" = { transform = "identity" }
+"obs:dew_point_temperature" = { transform = "identity" }
+"obs:relative_humidity" = { transform = "logit", scale = 100.0, boundary_nudge = 0.05 }
+"obs:surface_air_pressure" = { transform = "identity" }
+"obs:water_vapor_mixing_ratio" = { transform = "log" }
+
+[copulas]
+margins = ["emos-seasonal", "tabpfn-quantiles-all"]
+arms = [
+  "independence",
+  "gaussian",
+  "boostcopula-all",
+  "boostcopula-time",
+  "npcc-random-tabpfn-quantiles-all",
+  "npcc-random-tabpfn-quantiles-time",
+  "npcc-mixture-tabpfn-quantiles-all",
+  "npcc-mixture-tabpfn-quantiles-time",
+]
+n_draws = 200
+sample_batch_size = 5000
+mixture_k = 5
+
+# `--device` overrides every entry. A backend left out picks its own: CUDA
+# where there is one.
+[devices]
+lightgbm = "cpu"
+tabpfn-quantiles = "cuda"
+tabicl = "cuda"
+
+# E1's entries, copied verbatim from configs/study.toml, so a label means the
+# same backend configuration in both; tests/experiments/
+# test_application_config.py pins their estimator_id to E1's. A margin uses
+# an entry's backend and backend_kwargs on its response's transform; a copula
+# uses the entry whole.
+
+[[estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[estimators]]
+label = "tabicl-probit"
+backend = "tabicl"
+transform = "probit"
+
+[[estimators]]
+label = "lightgbm-probit"
+backend = "lightgbm"
+transform = "probit"

@@ -19,6 +19,7 @@ are increasing, so every process agrees on the split.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -441,6 +442,30 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
         release_gpu()
 
 
+def _saturation(
+  out: Path, stations: Sequence[int], models: Sequence[str]
+) -> pd.DataFrame:
+  """The cases each margin unit moved off saturation, where any recorded it."""
+  rows = []
+  for station in stations:
+    for model in models:
+      info = json.loads(
+        (margin_dir(out, station, model) / "info.json").read_text()
+      )
+      for variable, detail in info["variables"].items():
+        if "saturated_train" in detail:
+          rows.append(
+            {
+              "station": station,
+              "model": model,
+              "variable": variable,
+              "saturated_train": detail["saturated_train"],
+              "saturated_test": detail["saturated_test"],
+            }
+          )
+  return pd.DataFrame(rows)
+
+
 def _write_csv(tables: Mapping[str, pd.DataFrame], directory: Path) -> None:
   directory.mkdir(parents=True, exist_ok=True)
   for name, frame in tables.items():
@@ -490,6 +515,9 @@ def evaluate(config: ApplicationConfig, options: RunOptions) -> list[str]:
       ["station", "model", "stage"], as_index=False
     )["seconds"].sum(),
   }
+  saturation = _saturation(out, stations, models)
+  if not saturation.empty:
+    tables["saturation_by_station"] = saturation
   copula_models = [m for m in config.copula_models if m in models]
   ran = any(
     (station_dir(out, s) / "copulas" / m).is_dir()
