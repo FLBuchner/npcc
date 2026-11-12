@@ -1,0 +1,963 @@
+"""The copula arms, each fitted to one station's margins and scored jointly.
+
+Every arm reads one :class:`~npcc.experiments.application.marginal_set.
+MarginalSet`, one station's margins from one marginal model, and nothing
+else. It is fitted to the training probability integral transforms and
+evaluated at the test ones, each clipped into ``[PIT_CLIP, 1 - PIT_CLIP]``:
+a saved CDF can reach 0 or 1 exactly, which no copula argument may be. The
+covariates are passed as they are.
+
+**Arms.** :data:`COPULA_ARMS` lists every name :func:`run_copula_arm` takes:
+
+- ``independence``, whose log-density is 0;
+- ``gaussian``, the Gaussian copula with the normal scores' correlation,
+  which ignores the covariates;
+- ``boostcopula-<scope>``, boostCopula's boosted conditional R-vine, its
+  structure, families and calibration selected and fitted in R by
+  :data:`BOOSTCOPULA_SCRIPT` at the package's defaults, for five variables;
+- ``npcc-random-<backend>-<scope>``, a
+  :class:`~npcc.core.vinecop.RosenblattVinecop` in the non-simplified context
+  on one uniformly random R-vine structure per station, the same for every
+  marginal model and backend;
+- ``npcc-mixture-<backend>-<scope>``, E10's mixture
+  (:mod:`~npcc.experiments.vine_runner`): ``mixture_k`` non-simplified vines
+  on the same margins, the first on the structure
+  :func:`~npcc.experiments.vine_runner.select_structure` selects from the
+  training transforms, each other on weighted random spanning trees
+  (:func:`~npcc.experiments.vine_runner.weighted_random_structure`). Its
+  copula density is the members' mean. Each member is also returned and
+  scored as ``<arm>-m<k>``, so the selected structure's vine is ``-m1``.
+
+An npcc arm is fitted with its backend's E1 estimator whole -- backend,
+transform and backend keyword arguments -- taken from the ``estimators``
+mapping by the backend's name in the arm.
+
+**Scopes.** ``all`` conditions on every covariate of the marginal set,
+``time`` on :data:`TIME_FEATURES` alone.
+
+**Scores.** Per test case (:mod:`~npcc.experiments.application.
+joint_scores`): the joint negative log-likelihood, the copula's
+log-density plus the margins'; and the energy score and the variogram score
+of order 1/2 of ``n_draws`` draws from the joint forecast, each variable
+divided by its training standard deviation. A draw is the copula's,
+mapped to the response scale through the case's quantile table.
+
+**Mixture draws.** Every member draws ``n_draws`` per case, which its own
+scores need. The mixture's draw ``s`` of case ``i`` is draw ``s`` of case
+``i`` of a member picked uniformly at random, independently for every
+``(i, s)`` (:func:`mixture_draws`).
+
+**Seeds.** Every seed derives from the run's ``seed`` with
+:func:`~npcc.experiments._study.derive_seed`: the random structure from
+``(seed, "random-structure", station)``, mixture member ``k``'s structure
+from ``(seed, "mixture-structure", station, k)``, and the rest from
+``(seed, station, model, result)``, with ``result`` the arm or member
+name: the torch seed set before a vine is fitted (salted ``"fit"``),
+each sampling chunk's (``"sample"`` and the chunk's index), the NumPy
+generator of independence's and the Gaussian's draws (``"draws"``), the
+mixture's member choice (``"choice"``), and R's seed (unsalted). An npcc
+vine samples ``n_draws`` rows per case in chunks of at most
+``sample_batch_size`` rows over the flattened cases and draws, so its
+draws are reproducible for a fixed chunk size and case order.
+
+**Timings.** Seconds per stage, each separate from the others, so a
+result's total is their sum: ``fit``; ``structure_selection`` for a mixture
+and its members; ``copula_prediction``, the copula's log-density and
+draws; ``inverse_margins``; ``scoring``; and for boostCopula
+``bridge_overhead``, the R process's start-up and the file exchange, while
+its ``fit`` and ``copula_prediction`` are the seconds R reports for its own
+steps. A mixture's ``fit``, ``structure_selection`` and
+``copula_prediction`` sum its members', the last plus the mixing. Work on a
+GPU is synchronized at every stage boundary.
+
+**Failures.** An arm that cannot be scored on every test case raises
+:class:`CopulaFailure`: invalid draws, a non-finite or nonpositive
+boostCopula density, a non-finite joint log-likelihood or sample score, a
+Gaussian copula without a correlation to fit, or boostCopula's script
+exiting with an error. Anything else, a malformed input, a missing
+interpreter or package, or output that breaks the R exchange, is a defect
+and raises something else, which must stop the run.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import subprocess
+import tempfile
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from time import perf_counter
+from typing import cast
+
+import numpy as np
+import pandas as pd
+import pyvinecopulib as pv
+import torch
+from pyvinecopulib.core.extend import to_numpy
+
+from npcc.core.controls import FitControlsRosenblattVinecop
+from npcc.core.vinecop import RosenblattVinecop
+from npcc.experiments import _external, _external_vine
+from npcc.experiments._study import derive_seed, release_gpu
+from npcc.experiments.application.joint_scores import (
+  energy_score,
+  inverse_margins,
+  joint_nll,
+  variogram_score,
+)
+from npcc.experiments.application.marginal_set import MarginalSet
+from npcc.experiments.config import EstimatorSpec
+from npcc.experiments.vine_runner import (
+  mixture_log_density,
+  select_structure,
+  weighted_random_structure,
+)
+
+logger = logging.getLogger(__name__)
+
+#: Where every probability integral transform is clipped before a copula
+#: sees it, the npcc controls' ``eps``.
+PIT_CLIP: float = 1e-6
+
+#: The npcc arms' backends, as the arms name them.
+BACKENDS: tuple[str, ...] = ("lightgbm", "tabpfn-quantiles", "tabicl")
+
+#: The covariate scopes of a conditional arm.
+SCOPES: tuple[str, ...] = ("all", "time")
+
+#: The ``time`` scope's covariates, by name.
+TIME_FEATURES: tuple[str, ...] = ("time:sin_dayofyear", "time:cos_dayofyear")
+
+#: Every arm :func:`run_copula_arm` takes.
+COPULA_ARMS: tuple[str, ...] = (
+  "independence",
+  "gaussian",
+  *(f"boostcopula-{scope}" for scope in SCOPES),
+  *(
+    f"npcc-{kind}-{backend}-{scope}"
+    for kind in ("random", "mixture")
+    for backend in BACKENDS
+    for scope in SCOPES
+  ),
+)
+
+#: The boostCopula arms' script, relative to the working directory unless
+#: absolute.
+BOOSTCOPULA_SCRIPT: str = "r_methods/fit_boostcopula_vine.R"
+
+#: The number of variables the boostCopula script's initial matrix fixes.
+BOOSTCOPULA_DIMENSION: int = 5
+
+#: E1's grid setting, which sizes the Sinkhorn projection that E1's controls
+#: leave off; passed only because building the controls needs it.
+PROJECTION_GRID_SIZE: int = 30
+
+#: Below this standard deviation, a normal score holds no correlation.
+_CONSTANT_SD: float = 1e-12
+
+#: The floor on the normal scores' correlation's eigenvalues.
+_EIGEN_FLOOR: float = 1e-8
+
+
+@dataclass(frozen=True)
+class CopulaResult:
+  """One copula's scores on one marginal set's test cases.
+
+  Attributes
+  ----------
+  arm : str
+      The arm, or for a mixture member ``<arm>-m<k>``.
+  logcop_test : numpy.ndarray, shape (n_test,)
+      The copula log-density at each test case's clipped transforms.
+  joint_nll : numpy.ndarray, shape (n_test,)
+      The joint negative log-likelihood of each test case.
+  energy : numpy.ndarray, shape (n_test,)
+      The energy score of each test case.
+  variogram : numpy.ndarray, shape (n_test,)
+      The variogram score of order 1/2 of each test case.
+  timings : dict of str to float
+      Seconds per stage; the stages are listed in this module's docstring.
+  info : dict of str to object
+      What was fitted, as JSON-ready values: structures, seeds, settings and
+      versions.
+  """
+
+  arm: str
+  logcop_test: np.ndarray
+  joint_nll: np.ndarray
+  energy: np.ndarray
+  variogram: np.ndarray
+  timings: dict[str, float]
+  info: dict[str, object]
+
+
+class CopulaFailure(ValueError):
+  """An arm that cannot be scored on every test case of its marginal set.
+
+  The arm's outcome on that marginal set, which a run records and continues
+  past, rather than a defect of the run.
+
+  Parameters
+  ----------
+  message : str
+      What failed.
+  indices : iterable of int, default ()
+      The test cases concerned, as positions in the marginal set's test
+      arrays, when they are known.
+
+  Attributes
+  ----------
+  indices : tuple of int
+      The test cases concerned, sorted, each once; empty when unknown.
+  """
+
+  def __init__(self, message: str, indices: Iterable[int] = ()) -> None:
+    super().__init__(message)
+    self.indices: tuple[int, ...] = tuple(sorted({int(i) for i in indices}))
+
+
+@dataclass(frozen=True)
+class _Arm:
+  name: str
+  kind: str
+  backend: str | None
+  scope: str | None
+
+
+@dataclass(frozen=True)
+class _Inputs:
+  """What every arm reads, checked and clipped once."""
+
+  ms: MarginalSet
+  u_train: np.ndarray
+  u_test: np.ndarray
+  scale: np.ndarray
+  n_draws: int
+  seed: int
+
+  @property
+  def draws_shape(self) -> tuple[int, int, int]:
+    """``(n_test, n_draws, d)``, the shape of a copula's draws."""
+    return (len(self.ms.y_test), self.n_draws, len(self.ms.variables))
+
+  def salt(self, result: str) -> tuple[object, ...]:
+    return (self.seed, self.ms.station, self.ms.model, result)
+
+
+def _parse(arm: str) -> _Arm:
+  if arm not in COPULA_ARMS:
+    raise ValueError(f"arm must be one of {list(COPULA_ARMS)}; got {arm!r}")
+  if arm in ("independence", "gaussian"):
+    return _Arm(arm, arm, None, None)
+  head, scope = arm.rsplit("-", 1)
+  if head == "boostcopula":
+    return _Arm(arm, head, None, scope)
+  kind, backend = head.split("-", 2)[1:]
+  return _Arm(arm, f"npcc-{kind}", backend, scope)
+
+
+def scope_columns(feature_names: tuple[str, ...], scope: str) -> list[int]:
+  """The columns of a marginal set's covariates that ``scope`` conditions on.
+
+  Parameters
+  ----------
+  feature_names : tuple of str
+      The marginal set's covariate names.
+  scope : str
+      One of :data:`SCOPES`.
+
+  Returns
+  -------
+  list of int
+      Every column for ``all``; those of :data:`TIME_FEATURES`, in that
+      order, for ``time``.
+
+  Raises
+  ------
+  ValueError
+      If ``scope`` is unknown, or a covariate it names is missing.
+  """
+  if scope == "all":
+    return list(range(len(feature_names)))
+  if scope != "time":
+    raise ValueError(f"scope must be one of {list(SCOPES)}; got {scope!r}")
+  missing = [f for f in TIME_FEATURES if f not in feature_names]
+  if missing:
+    raise ValueError(
+      f"feature_names must hold {list(TIME_FEATURES)} for the time scope; "
+      f"got no {missing}"
+    )
+  return [feature_names.index(f) for f in TIME_FEATURES]
+
+
+def mixture_draws(
+  member_draws: np.ndarray, generator: np.random.Generator
+) -> np.ndarray:
+  """Draws from the members' equal-weight mixture, one member's per slot.
+
+  Parameters
+  ----------
+  member_draws : numpy.ndarray, shape (k, n, m, d)
+      Each member's ``m`` draws for each of ``n`` cases, independent across
+      members.
+  generator : numpy.random.Generator
+      Picks the members.
+
+  Returns
+  -------
+  numpy.ndarray, shape (n, m, d)
+      Draw ``s`` of case ``i`` is ``member_draws[c, i, s]``, with ``c``
+      uniform on the ``k`` members and drawn independently for every
+      ``(i, s)``.
+  """
+  k, n, m = member_draws.shape[:3]
+  choice = generator.integers(k, size=(n, m))
+  return member_draws[choice, np.arange(n)[:, None], np.arange(m)[None, :]]
+
+
+def check_boostcopula(script: str | None = None) -> str:
+  """Stop unless R can run the boostCopula arms; return its versions.
+
+  Runs the script's ``--check``, which loads its packages without fitting.
+
+  Parameters
+  ----------
+  script : str, optional
+      The script; :data:`BOOSTCOPULA_SCRIPT` when omitted.
+
+  Returns
+  -------
+  str
+      R's version and each package's, as the script prints them.
+
+  Raises
+  ------
+  RuntimeError
+      If the script, the interpreter or a package is missing.
+  """
+  path = BOOSTCOPULA_SCRIPT if script is None else script
+  if not Path(path).is_file():
+    raise RuntimeError(
+      f"the boostCopula script must exist; got {path!r}, resolved against "
+      f"{Path.cwd()}"
+    )
+  try:
+    done = subprocess.run(
+      [_external.RSCRIPT, path, "--check"],
+      capture_output=True,
+      text=True,
+      check=False,
+    )
+  except FileNotFoundError as exc:
+    raise RuntimeError(
+      f"{_external.RSCRIPT} must be on PATH to run {path}; it was not found"
+    ) from exc
+  if done.returncode != 0:
+    raise RuntimeError(
+      f"{path} --check must exit with status 0; got {done.returncode}, with "
+      f"stderr:\n{done.stderr.strip()}"
+    )
+  return done.stdout.strip()
+
+
+def run_copula_arm(
+  arm: str,
+  ms: MarginalSet,
+  *,
+  estimators: Mapping[str, EstimatorSpec],
+  n_draws: int,
+  sample_batch_size: int,
+  mixture_k: int,
+  seed: int,
+  device: str | None,
+) -> list[CopulaResult]:
+  """Fit one copula arm to a marginal set and score it on its test cases.
+
+  Parameters
+  ----------
+  arm : str
+      One of :data:`COPULA_ARMS`.
+  ms : MarginalSet
+      One station's margins from one marginal model.
+  estimators : mapping of str to EstimatorSpec
+      Each npcc backend's E1 estimator, by the backend's name in the arm;
+      read only by an npcc arm, for its own backend.
+  n_draws : int
+      Draws per test case for the sample scores, at least 2.
+  sample_batch_size : int
+      The most rows an npcc vine samples in one call.
+  mixture_k : int
+      A mixture's number of members.
+  seed : int
+      The run's seed, from which every seed of the arm derives.
+  device : str or None
+      Where an npcc vine fits and evaluates; ``None`` picks CUDA when it is
+      available.
+
+  Returns
+  -------
+  list of CopulaResult
+      The arm's result; for a mixture, the mixture's followed by each
+      member's, ``<arm>-m1`` to ``<arm>-m<mixture_k>``.
+
+  Raises
+  ------
+  CopulaFailure
+      If the arm cannot be scored on every test case.
+  ValueError
+      If the arm is unknown, its backend has no estimator, or the marginal
+      set or a setting is invalid.
+  """
+  parsed = _parse(arm)
+  if n_draws < 2:
+    raise ValueError(f"n_draws must be at least 2; got {n_draws}")
+  if sample_batch_size < 1:
+    raise ValueError(
+      f"sample_batch_size must be positive; got {sample_batch_size}"
+    )
+  if mixture_k < 1:
+    raise ValueError(f"mixture_k must be positive; got {mixture_k}")
+  inputs = _inputs(ms, n_draws=n_draws, seed=seed)
+  logger.info("station %d, %s: fitting %s", ms.station, ms.model, arm)
+  if parsed.kind == "independence":
+    results = [_independence(arm, inputs)]
+  elif parsed.kind == "gaussian":
+    results = [_gaussian(arm, inputs)]
+  else:
+    assert parsed.scope is not None
+    columns = scope_columns(ms.feature_names, parsed.scope)
+    if parsed.kind == "boostcopula":
+      results = [_boostcopula(parsed, inputs, columns)]
+    else:
+      assert parsed.backend is not None
+      spec = estimators.get(parsed.backend)
+      if spec is None:
+        raise ValueError(
+          f"estimators must map the backend {parsed.backend!r} of {arm!r} to "
+          f"its estimator; got {sorted(estimators)}"
+        )
+      controls = spec.controls(
+        FitControlsRosenblattVinecop,
+        device=device,
+        projection_grid_size=PROJECTION_GRID_SIZE,
+        batch_size=None,
+      )
+      vines = _Vines(
+        inputs,
+        columns,
+        controls,
+        device=device,
+        sample_batch_size=sample_batch_size,
+        info=_npcc_info(spec, parsed, ms, columns, sample_batch_size),
+      )
+      if parsed.kind == "npcc-random":
+        results = [vines.random(arm)]
+      else:
+        results = vines.mixture(arm, mixture_k)
+  for result in results:
+    logger.info(
+      "station %d, %s, %s: %s",
+      ms.station,
+      ms.model,
+      result.arm,
+      ", ".join(f"{k} {v:.2f}s" for k, v in result.timings.items()),
+    )
+  return results
+
+
+def _inputs(ms: MarginalSet, *, n_draws: int, seed: int) -> _Inputs:
+  """Refuse a marginal set no arm can be scored on; clip its transforms."""
+  for name in ("pit_train", "pit_test"):
+    values = getattr(ms, name)
+    if not (np.isfinite(values) & (values >= 0) & (values <= 1)).all():
+      raise ValueError(
+        f"MarginalSet.{name} must hold finite values in [0, 1]; got others "
+        f"for station {ms.station}, {ms.model}"
+      )
+  scale = np.std(ms.y_train, axis=0)
+  if not (np.isfinite(scale) & (scale > 0)).all():
+    raise ValueError(
+      f"MarginalSet.y_train must vary in every variable to standardize the "
+      f"sample scores; got standard deviations {scale.tolist()} for station "
+      f"{ms.station}, {ms.model}"
+    )
+  return _Inputs(
+    ms=ms,
+    u_train=np.clip(ms.pit_train, PIT_CLIP, 1 - PIT_CLIP),
+    u_test=np.clip(ms.pit_test, PIT_CLIP, 1 - PIT_CLIP),
+    scale=scale,
+    n_draws=n_draws,
+    seed=seed,
+  )
+
+
+def _score(
+  name: str,
+  inputs: _Inputs,
+  logcop: np.ndarray,
+  uniforms: np.ndarray,
+  timings: dict[str, float],
+  info: dict[str, object],
+) -> CopulaResult:
+  """Check a copula's draws, map them to responses and score the cases."""
+  ms = inputs.ms
+  shape = inputs.draws_shape
+  if uniforms.shape != shape:
+    raise CopulaFailure(
+      f"{name}'s draws must have shape {shape}; got {uniforms.shape}"
+    )
+  valid = np.isfinite(uniforms) & (uniforms >= 0) & (uniforms <= 1)
+  bad = np.flatnonzero(~valid.all(axis=(1, 2)))
+  if bad.size:
+    raise CopulaFailure(
+      f"{name}'s draws must be finite and in [0, 1]; got others at "
+      f"{bad.size} test cases",
+      bad,
+    )
+  t0 = perf_counter()
+  draws = inverse_margins(uniforms, ms.levels, ms.quantiles_test)
+  timings["inverse_margins"] = perf_counter() - t0
+
+  t0 = perf_counter()
+  standardized = draws / inputs.scale
+  observed = ms.y_test / inputs.scale
+  energy = energy_score(standardized, observed)
+  variogram = variogram_score(standardized, observed, p=0.5)
+  nll = joint_nll(logcop, ms.logpdf_test)
+  bad = np.flatnonzero(~np.isfinite(nll))
+  if bad.size:
+    raise CopulaFailure(
+      f"{name}'s joint log-likelihood must be finite; got non-finite values "
+      f"at {bad.size} test cases",
+      bad,
+    )
+  bad = np.flatnonzero(~(np.isfinite(energy) & np.isfinite(variogram)))
+  if bad.size:
+    raise CopulaFailure(
+      f"{name}'s energy and variogram scores must be finite; got non-finite "
+      f"values at {bad.size} test cases",
+      bad,
+    )
+  timings["scoring"] = perf_counter() - t0
+  return CopulaResult(
+    arm=name,
+    logcop_test=logcop,
+    joint_nll=nll,
+    energy=energy,
+    variogram=variogram,
+    timings=timings,
+    info=info,
+  )
+
+
+def _independence(name: str, inputs: _Inputs) -> CopulaResult:
+  t0 = perf_counter()
+  draws_seed = derive_seed(*inputs.salt(name), "draws")
+  logcop = np.zeros(len(inputs.ms.y_test))
+  uniforms = np.random.default_rng(draws_seed).random(inputs.draws_shape)
+  timings = {"fit": 0.0, "copula_prediction": perf_counter() - t0}
+  info: dict[str, object] = {"draws_seed": draws_seed}
+  return _score(name, inputs, logcop, uniforms, timings, info)
+
+
+def _normal_scores(u: np.ndarray) -> np.ndarray:
+  return to_numpy(torch.special.ndtri(torch.from_numpy(u)), dtype=np.float64)
+
+
+def _gaussian(name: str, inputs: _Inputs) -> CopulaResult:
+  """The Gaussian copula with the training normal scores' correlation.
+
+  The sample correlation is projected onto the positive definite matrices,
+  its eigenvalues floored at ``_EIGEN_FLOOR``, and rescaled to a unit
+  diagonal.
+  """
+  t0 = perf_counter()
+  z = _normal_scores(inputs.u_train)
+  sd = np.std(z, axis=0)
+  if (sd < _CONSTANT_SD).any():
+    raise CopulaFailure(
+      f"{name} must have varying training transforms to fit a correlation; "
+      f"got normal-score standard deviations {sd.tolist()}"
+    )
+  sample = np.corrcoef(z, rowvar=False)
+  values, vectors = np.linalg.eigh(sample)
+  floored = (vectors * np.maximum(values, _EIGEN_FLOOR)) @ vectors.T
+  unit = np.sqrt(np.diag(floored))
+  correlation = floored / unit[:, None] / unit[None, :]
+  timings = {"fit": perf_counter() - t0}
+
+  t0 = perf_counter()
+  z_test = _normal_scores(inputs.u_test)
+  precision = np.linalg.inv(correlation) - np.eye(len(correlation))
+  logcop = -0.5 * np.linalg.slogdet(correlation)[1] - 0.5 * np.einsum(
+    "ni,ij,nj->n", z_test, precision, z_test
+  )
+  draws_seed = derive_seed(*inputs.salt(name), "draws")
+  normal = np.random.default_rng(draws_seed).standard_normal(inputs.draws_shape)
+  correlated = normal @ np.linalg.cholesky(correlation).T
+  uniforms = to_numpy(
+    torch.special.ndtr(torch.from_numpy(correlated)), dtype=np.float64
+  )
+  timings["copula_prediction"] = perf_counter() - t0
+  info: dict[str, object] = {
+    "correlation": correlation.tolist(),
+    "draws_seed": draws_seed,
+  }
+  return _score(name, inputs, logcop, uniforms, timings, info)
+
+
+def _synchronize() -> None:
+  """Wait for queued GPU work, so a stage's seconds include it."""
+  if torch.cuda.is_available() and torch.cuda.is_initialized():
+    torch.cuda.synchronize()
+
+
+def _matrix(structure: pv.RVineStructure) -> list[list[int]]:
+  # pyvinecopulib's compiled `RVineStructure` is untyped here.
+  return cast("list[list[int]]", np.asarray(structure.matrix).tolist())
+
+
+def _npcc_info(
+  spec: EstimatorSpec,
+  parsed: _Arm,
+  ms: MarginalSet,
+  columns: list[int],
+  sample_batch_size: int,
+) -> dict[str, object]:
+  # Through JSON, so nested keyword arguments are plain values.
+  kwargs = json.loads(json.dumps(dict(spec.backend_kwargs)))
+  return {
+    "estimator_label": spec.label,
+    "estimator_id": spec.estimator_id,
+    "backend": spec.backend,
+    "transform": spec.transform,
+    "feature_transform": spec.feature_transform,
+    "backend_kwargs": kwargs,
+    "scope": parsed.scope,
+    "covariates": [ms.feature_names[c] for c in columns],
+    "context": "non-simplified",
+    "sample_batch_size": sample_batch_size,
+  }
+
+
+class _Vines:
+  """The npcc arms' vines on one marginal set, fitted one at a time."""
+
+  def __init__(
+    self,
+    inputs: _Inputs,
+    columns: list[int],
+    controls: FitControlsRosenblattVinecop,
+    *,
+    device: str | None,
+    sample_batch_size: int,
+    info: dict[str, object],
+  ) -> None:
+    ms = inputs.ms
+    self.inputs = inputs
+    self.controls = controls
+    self.device = device
+    self.sample_batch_size = sample_batch_size
+    self.info = info
+    self.u_train = torch.from_numpy(inputs.u_train)
+    self.u_test = torch.from_numpy(inputs.u_test)
+    self.x_train = torch.as_tensor(ms.x_train[:, columns], dtype=torch.float64)
+    self.x_test = torch.as_tensor(ms.x_test[:, columns], dtype=torch.float64)
+
+  def fit(
+    self, name: str, structure: pv.RVineStructure
+  ) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+    """Fit one vine; return its test log-density, its draws and timings.
+
+    The vine is released before this returns, so only one vine's pair
+    copulas occupy the device at a time. The torch seed is set before the
+    fit, as E1's runner sets it, for a backend that draws from torch's
+    generator.
+    """
+    salt = self.inputs.salt(name)
+    torch.manual_seed(derive_seed(*salt, "fit"))
+    _synchronize()
+    t0 = perf_counter()
+    vine = RosenblattVinecop(None, structure, device=self.device)
+    vine.fit(self.u_train, self.controls, x=self.x_train)
+    _synchronize()
+    timings = {"fit": perf_counter() - t0}
+
+    t0 = perf_counter()
+    with torch.inference_mode():
+      logcop = to_numpy(
+        vine.logpdf(self.u_test, x=self.x_test), dtype=np.float64
+      )
+      uniforms = self._sample(vine, salt)
+    _synchronize()
+    timings["copula_prediction"] = perf_counter() - t0
+    del vine
+    release_gpu()
+    return logcop, uniforms, timings
+
+  def _sample(
+    self, vine: RosenblattVinecop, salt: tuple[object, ...]
+  ) -> np.ndarray:
+    """``n_draws`` draws per test case, sampled in bounded chunks."""
+    n, d = self.u_test.shape
+    n_draws = self.inputs.n_draws
+    total = n * n_draws
+    out = np.empty((total, d), dtype=np.float64)
+    for chunk, start in enumerate(range(0, total, self.sample_batch_size)):
+      stop = min(start + self.sample_batch_size, total)
+      rows = torch.arange(start, stop) // n_draws
+      draws = vine.sample(
+        stop - start,
+        seeds=[derive_seed(*salt, "sample", chunk)],
+        x=self.x_test[rows],
+      )
+      out[start:stop] = to_numpy(draws, dtype=np.float64)
+    return out.reshape(n, n_draws, d)
+
+  def random(self, arm: str) -> CopulaResult:
+    """The vine on the station's uniformly random structure."""
+    ms = self.inputs.ms
+    structure_seed = derive_seed(
+      self.inputs.seed, "random-structure", ms.station
+    )
+    structure = pv.RVineStructure.sample(
+      len(ms.variables), seeds=[structure_seed]
+    )
+    logcop, uniforms, timings = self.fit(arm, structure)
+    info = {
+      **self.info,
+      "structure": _matrix(structure),
+      "structure_seed": structure_seed,
+      "fit_seed": derive_seed(*self.inputs.salt(arm), "fit"),
+    }
+    return _score(arm, self.inputs, logcop, uniforms, timings, info)
+
+  def mixture(self, arm: str, k: int) -> list[CopulaResult]:
+    """The mixture of ``k`` vines, then each member on its own."""
+    ms = self.inputs.ms
+    members: list[CopulaResult] = []
+    members_info: list[dict[str, object]] = []
+    logs: list[np.ndarray] = []
+    draws: list[np.ndarray] = []
+    structures: list[pv.RVineStructure] = []
+    for j in range(1, k + 1):
+      name = f"{arm}-m{j}"
+      t0 = perf_counter()
+      if j == 1:
+        structure_seed = None
+        method = "dissmann-tll"
+        structure = select_structure(self.u_train)
+      else:
+        structure_seed = derive_seed(
+          self.inputs.seed, "mixture-structure", ms.station, j
+        )
+        method = "weighted-random"
+        structure = weighted_random_structure(self.u_train, structure_seed)
+      selection = perf_counter() - t0
+      logcop, uniforms, timings = self.fit(name, structure)
+      member_info: dict[str, object] = {
+        "member": j,
+        "arm": name,
+        "structure": _matrix(structure),
+        "structure_seed": structure_seed,
+        "structure_method": method,
+        "fit_seed": derive_seed(*self.inputs.salt(name), "fit"),
+      }
+      members_info.append(member_info)
+      members.append(
+        _score(
+          name,
+          self.inputs,
+          logcop,
+          uniforms,
+          {"structure_selection": selection, **timings},
+          {**self.info, **member_info},
+        )
+      )
+      logs.append(logcop)
+      draws.append(uniforms)
+      structures.append(structure)
+
+    t0 = perf_counter()
+    logcop = to_numpy(
+      mixture_log_density(torch.from_numpy(np.stack(logs))), dtype=np.float64
+    )
+    choice_seed = derive_seed(*self.inputs.salt(arm), "choice")
+    uniforms = mixture_draws(
+      np.stack(draws), np.random.default_rng(choice_seed)
+    )
+    mixing = perf_counter() - t0
+    timings = {
+      stage: sum(m.timings[stage] for m in members)
+      for stage in ("structure_selection", "fit", "copula_prediction")
+    }
+    timings["copula_prediction"] += mixing
+    distinct = {frozenset(_external_vine.edges(s)) for s in structures}
+    info = {
+      **self.info,
+      "mixture_k": k,
+      "members": members_info,
+      "n_distinct_structures": len(distinct),
+      "choice_seed": choice_seed,
+    }
+    mixture = _score(arm, self.inputs, logcop, uniforms, timings, info)
+    return [mixture, *members]
+
+
+def _cases(u: np.ndarray, x: np.ndarray) -> pd.DataFrame:
+  return pd.DataFrame(
+    {
+      **{f"u{j + 1}": u[:, j] for j in range(u.shape[1])},
+      **{f"x{k + 1}": x[:, k] for k in range(x.shape[1])},
+    }
+  )
+
+
+def _written(path: Path, *, script: str) -> Path:
+  if not path.is_file():
+    raise _external.ExchangeError(
+      f"{script} must write {path.name}; got no such file"
+    )
+  return path
+
+
+def _read_numbers(path: Path, *, script: str) -> pd.DataFrame:
+  # The default parser is not exact for float64.
+  return pd.read_csv(
+    _written(path, script=script), float_precision="round_trip"
+  )
+
+
+def _boostcopula(
+  arm: _Arm, inputs: _Inputs, columns: list[int]
+) -> CopulaResult:
+  """Fit and evaluate boostCopula's vine with one run of its script."""
+  ms = inputs.ms
+  d = len(ms.variables)
+  name = arm.name
+  if d != BOOSTCOPULA_DIMENSION:
+    raise ValueError(
+      f"{name} must be fitted to {BOOSTCOPULA_DIMENSION} variables, its "
+      f"initial matrix's; got {d}"
+    )
+  script = BOOSTCOPULA_SCRIPT
+  if not Path(script).is_file():
+    raise RuntimeError(
+      f"the boostCopula script must exist; got {script!r}, resolved against "
+      f"{Path.cwd()}"
+    )
+  r_seed = derive_seed(*inputs.salt(name))
+  train = _cases(inputs.u_train, ms.x_train[:, columns])
+  test = _cases(inputs.u_test, ms.x_test[:, columns])
+  u_columns = [f"u{j + 1}" for j in range(d)]
+  label = f"{name} on station {ms.station}, {ms.model}"
+  with tempfile.TemporaryDirectory(prefix="npcc-boostcopula-") as tmp:
+    root = Path(tmp)
+    train.to_csv(root / "train.csv", index=False, float_format="%.17g")
+    test.to_csv(root / "test.csv", index=False, float_format="%.17g")
+    t0 = perf_counter()
+    try:
+      _external._run(
+        [
+          _external.RSCRIPT,
+          script,
+          str(root),
+          str(r_seed),
+          str(inputs.n_draws),
+        ],
+        name=label,
+        refused_status=_external.REFUSED_STATUS,
+      )
+    except _external.ScriptFailedError as exc:
+      raise CopulaFailure(f"{label} failed: {exc}") from exc
+    wall = perf_counter() - t0
+    density = _read_numbers(root / "density.csv", script=script)
+    draws = _read_numbers(root / "draws.csv", script=script)
+    fitted, families = (
+      np.loadtxt(_written(root / f, script=script), delimiter=",", ndmin=2)
+      for f in ("fitted.csv", "families.csv")
+    )
+    r_info = pd.read_csv(
+      _written(root / "info.csv", script=script),
+      dtype=str,
+      keep_default_na=False,
+    )
+
+  if list(density.columns) != [*u_columns, "pdf"] or len(density) != len(test):
+    raise _external.ExchangeError(
+      f"{script} must write density.csv with the columns {u_columns} and pdf, "
+      f"one row per test case; got {list(density.columns)} and "
+      f"{len(density)} rows for {len(test)} cases"
+    )
+  echoed = np.isclose(
+    density[u_columns].to_numpy(dtype=np.float64),
+    test[u_columns].to_numpy(),
+    rtol=0.0,
+    atol=1e-12,
+  ).all(axis=1)
+  if not echoed.all():
+    raise _external.ExchangeError(
+      f"{script} must echo the test cases in their order in density.csv; got "
+      f"a different case at row {int(np.argmin(echoed))}"
+    )
+  cases = np.repeat(np.arange(1, len(test) + 1), inputs.n_draws)
+  if list(draws.columns) != ["case", *u_columns] or not np.array_equal(
+    draws["case"].to_numpy(), cases
+  ):
+    raise _external.ExchangeError(
+      f"{script} must write draws.csv with the columns case and {u_columns}, "
+      f"{inputs.n_draws} rows per test case in their order; got "
+      f"{list(draws.columns)} and {len(draws)} rows"
+    )
+  try:
+    r_values = dict(zip(r_info["key"], r_info["value"], strict=True))
+    r_seconds = {
+      step: float(r_values[step])
+      for step in ("fit_time", "pdf_time", "sim_time")
+    }
+    structure = _external_vine.from_vinecopula(fitted)
+  except (KeyError, ValueError, RuntimeError) as exc:
+    raise _external.ExchangeError(
+      f"{script} must write its timings to info.csv and a valid R-vine "
+      f"matrix to fitted.csv; got {r_info.to_dict('records')} and "
+      f"{fitted.tolist()}"
+    ) from exc
+
+  pdf = density["pdf"].to_numpy(dtype=np.float64)
+  bad = np.flatnonzero(~(np.isfinite(pdf) & (pdf > 0)))
+  if bad.size:
+    raise CopulaFailure(
+      f"{label}'s density must be finite and positive; got others at "
+      f"{bad.size} test cases",
+      bad,
+    )
+  uniforms = draws[u_columns].to_numpy(dtype=np.float64)
+  prediction = r_seconds["pdf_time"] + r_seconds["sim_time"]
+  timings = {
+    "fit": r_seconds["fit_time"],
+    "copula_prediction": prediction,
+    "bridge_overhead": max(0.0, wall - r_seconds["fit_time"] - prediction),
+  }
+  info: dict[str, object] = {
+    "scope": arm.scope,
+    "covariates": [ms.feature_names[c] for c in columns],
+    "structure": _matrix(structure),
+    "structure_vinecopula": fitted.astype(np.int64).tolist(),
+    "families_vinecopula": families.astype(np.int64).tolist(),
+    "r_seed": r_seed,
+    "r_version": r_values.get("r_version", ""),
+    "r_packages": r_values.get("packages", ""),
+    "script": script,
+    "script_sha256": hashlib.sha256(Path(script).read_bytes()).hexdigest(),
+  }
+  return _score(
+    name,
+    inputs,
+    np.log(pdf),
+    uniforms.reshape(len(test), inputs.n_draws, d),
+    timings,
+    info,
+  )
