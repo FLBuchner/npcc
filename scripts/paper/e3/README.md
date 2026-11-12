@@ -352,9 +352,10 @@ Where each part runs:
   ten seeds on each design, and this machine reproduces it bit for bit
   (E10's member 1 below is that fit), so E3e runs the other three variants.
 - **d = 10, on gpu053, all four variants**, one design at a time, as a whole
-  experiment of that machine. The same d = 10 fit there and here differs by
-  up to about 4e-3 in excess NLL, the size of some of the effects, so a 2 x 2
-  takes no cell from the other machine. E3d's own d = 10 `tll-ns` (ten
+  experiment of that machine. The same d = 10 fit there and here differs per
+  seed by up to about 4e-3 in excess NLL on `decay` and 0.07 on `strong`,
+  the size of some of the effects, so a 2 x 2 takes no cell from the other
+  machine. E3d's own d = 10 `tll-ns` (ten
   seeds on `decay`, five on `strong`) is not used.
 
 ```bash
@@ -396,6 +397,9 @@ uv run --no-sync python $R results/e3d_unknown_structure results/e3e_simplificat
 # The folder held the decay design only when this ran, hence the name.
 uv run --no-sync python $R results/e3e_simplification_2x2_gpu053 \
     --dims 10 --out results/e3e_simplification_2x2_gpu053/analysis_d10_decay
+# Both designs, once strong had run.
+uv run --no-sync python $R results/e3e_simplification_2x2_gpu053 \
+    --dims 10 --out results/e3e_simplification_2x2_gpu053/analysis_d10
 ```
 
 **Ran.**
@@ -411,8 +415,21 @@ uv run --no-sync python $R results/e3e_simplification_2x2_gpu053 \
   and its log. `e3e_report.py` on `decay` alone wrote `analysis_d10_decay/`
   there. Its `tll-ns` differs from E3d's, fitted here, by -0.0026 to
   +0.0042 per seed, -4e-5 on average.
-- d = 10 `strong`, on gpu053 under the same checkout, is queued behind
-  E10's conditional run there (`gpu053_queue_v3.sh`).
+- d = 10 `strong`, on gpu053 under the same checkout, by its queue's
+  version 3 (`gpu053_queue_v3.sh`, slurm job 14323938), 19:58 to 23:14 on
+  2026-11-12, in the same two batches, about 23 to 27 min per variant and
+  batch. Copied back into `results/e3e_simplification_2x2_gpu053`, adding
+  files only: every `decay` file and CSV row was unchanged, and all 177
+  files had the same SHA-256 on both machines afterwards (its `README.txt`).
+  `e3e_report.py` on both designs wrote `analysis_d10/`, from a clean
+  worktree at 44b29ed (`provenance.txt` there); its `decay` rows equal
+  `analysis_d10_decay/`'s. On `strong`, mean excess NLL `tll-ns` 4.455,
+  `tll-s` 8.053, `true-ns` 2.501, `true-s` 3.869, and in every seed
+  simplifying costs (+3.598 on TLL's structure, +1.368 on the true one) and
+  so does TLL's structure (+1.953 non-simplified, +4.184 simplified). Its
+  `tll-ns` differs from this machine's refit of it (E10's member 1, equal to
+  E3d's `tll-ns` on the five seeds E3d has) by -0.044 to +0.069 per seed,
+  +0.002 on average (sd 0.032).
 
 **Check (CPU, CatBoost, `decay`, d = 5, seed 101).** Run into a scratch
 folder, `tll-ns` and `true-s` reproduced E3d's CatBoost cells bit for bit
@@ -498,8 +515,8 @@ On gpu053, `E3_NPCC_REPO` names the checkout there, whose
 `results/e3d_unknown_structure/` holds a copy of E3d's `samples.npz` and
 `truths.json` (or pass `--folder`). That copy of `$O` comes back whole as
 `results/e10_e3d_gpu053_2026-11-11`, which keeps gpu053's TabPFN cells apart
-from this machine's: the same fit on the two machines differs by about 1e-3
-at d = 10 (E3e above). Its `summary.csv` already has every method at d = 10
+from this machine's: the same fit on the two machines differs at d = 10
+(E3e above). Its `summary.csv` already has every method at d = 10
 on `decay`.
 
 `scripts/paper/e10/compare_e3d.py` scores the TabPFN mixture against every
@@ -653,8 +670,9 @@ paired by cell on the test points both have finite, with
   holds it (`--e3e`).
 
 Each is named by the folder it came from. At d = 10, two machines' TabPFN
-vines differ by up to 4e-3 in excess NLL per seed, so pass the E10 and E3e
-folders fitted on the chain's machine and read their references:
+vines differ per seed by up to 4e-3 in excess NLL on `decay` and 0.07 on
+`strong`, so pass the E10 and E3e folders fitted on the chain's machine and
+read their references:
 
 ```bash
 uv run --no-sync python scripts/paper/e11/compare_e3d_chain.py --chain $O \
@@ -684,8 +702,16 @@ how many seeds the chain is lower.
     from gpu053;
   - `analysis_d10_strong/`, against E3d and E10 on E3d
     (`e10_e3d_2026-11-11`), both from this machine, so the chain's
-    comparisons there cross machines (up to about 4e-3 per seed). E3e had
-    no `strong` d = 10 cell yet, so `--e3e` held none.
+    comparisons there cross machines. E3e had no `strong` d = 10 cell yet,
+    so `--e3e` held none. Kept as it was;
+  - `analysis_d10_strong_e3e/`, the same command once E3e's `strong` had
+    run, from a clean worktree at 44b29ed: it adds the four E3e references
+    from gpu053, the chain's machine, and leaves the six others unchanged.
+    The chain's mean excess NLL, 2.470, is 0.031 below `true-ns` (SE
+    0.064, lower in 6 of 10 seeds), and 1.984 below `tll-ns`, 1.399 below
+    `true-s` and 5.583 below `tll-s` (10 of 10 each). Its `provenance.txt`
+    also has the per-seed check of gpu053's `tll-ns` against this
+    machine's.
 
   Each folder's `provenance.txt` has the command and says which machine made
   each reference.

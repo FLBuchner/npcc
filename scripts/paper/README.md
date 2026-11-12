@@ -37,7 +37,7 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | `fig:misspecified` (§3.2), `tab:misspecified-by-n` (supp.) | E1c | `study_misspec_2026-11-10`, with `study_misspec_2026-11-10_r` | `e1/analyze.py`, `e1/paired.py` | b7702e1 | main: 2 GPU shards; R on 8 CPU shards |
 | `tab:covariates` (§3.3); `tab:covariates-iae`, `-clayton`, `-gaussian` and the timings (supp.) | E9, E9c | `study_covariates_2026-11-11{,_r,_v35}`, `study_covariates_n10000_2026-11-11{,_r}` | `e9/analyze.py` | b74aee4; v3.5 run and analysis f8878a7; E9c dd605f2 | main |
 | `tab:unconditional-pairs` (§3.4); `tab:non-simplified-pair`, `tab:vines-true-structure` (supp.) | E3a, E3b, E3c | `e3_vdc` | `e3/e3_collect.py` | npcc rows b7702e1; competitors c2f0cb7, d10182b, d18480b, per row | main: CPU, one core a fit; vGPU |
-| `tab:unknown-structure` (§3.4); `tab:unknown-structure-catboost` (supp.) | E3d, E3e, E10 | `e3d_unknown_structure`, `e3e_simplification_2x2{,_gpu053}`, `e10_e3d{,_gpu053}_2026-11-11` | `e3/e3_collect.py`, `e3/e3e_report.py`, `e10/compare_e3d.py` | E3d's npcc rows b7702e1, competitors 2b319b7 and 4b83733; E3e and E10's TabPFN d9dc80e; E10's CPU arms as each row records | main; gpu053 for TabPFN at d = 10 `decay` |
+| `tab:unknown-structure` (§3.4); `tab:unknown-structure-catboost` (supp.) | E3d, E3e, E10 | `e3d_unknown_structure`, `e3e_simplification_2x2{,_gpu053}`, `e10_e3d{,_gpu053}_2026-11-11` | `e3/e3_collect.py`, `e3/e3e_report.py`, `e10/compare_e3d.py` | E3d's npcc rows b7702e1, competitors 2b319b7 and 4b83733; E3e and E10's TabPFN d9dc80e; E10's CPU arms as each row records | main; gpu053 for TabPFN at d = 10 `decay`, and for E3e at d = 10 on both designs |
 | `tab:vine-results` (§3.5); `tab:vine-paired`, `tab:vine-copula`, `fig:vine-kl-by-x`, `fig:vine-kl-by-x-d10` (supp.): oracle, random, selected, kde-tll | E2, E2d | `vine_2026-11-10`, `vine_2026-11-11_selected`, `vine_n2000_2026-11-11`; at d = 10, `vine_d10_2026-11-11` and `vine_d10_n2000_2026-11-11` | `e2/analyze.py`, `e2/tree1_diagnostic.py` | b7702e1, f8878a7, b0523c5; at d = 10, b6cb9af and b0523c5, analyzed at 9b26ffa and 2f300e9 | main; gpu053 for d = 10 |
 | the same tables: the mixture | E10 | `vine_study_mixture_2026-11-11`; `vine_study_mixture_d10_2026-11-11` (n = 500, 1000, 2000) | `e10/analyze_mixture.py`, `e10/analyze_mixture_gamvine.py` | d9dc80e; d = 10's `analysis_gamvine/` 0ddf585 | main; gpu053 for d = 10 |
 | the same tables: the GAM vines; `app:gamvine` (supp.) | E2b | `vine_study_gamvine{,_d10,_n2000,_d10_n2000}_2026-11-11b`; the pilot `e2b_pilot_2026-11-11` | `e2/analyze.py` with `--with` | c6a876a; pilot cd312e2 | main: CPU, 6 single-threaded shards |
@@ -53,8 +53,8 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | A.2, Nori (supp.) | E7a′ | `nori_probe_probit_2026-11-11` | `qt_ab/nori_probe.py` | ca4e52c | main GPU |
 | "Reusing quantile tables" (supp.) | E10 | `e10_table_reuse{,_e3d,_gpu053}_2026-11-11` | `e10/check_table_reuse.py` | a49337f; d9dc80e | main; gpu053 |
 | §2.3 and the vine tables: the chain rule (not yet cited) | E11 | `vine_study_chain_2026-11-12` (d = 5, n = 1000; to be superseded by a rerun under the distinct-order rule, queued); at d = 10, `vine_study_chain_d10_2026-11-12` (n = 1000) and `vine_study_chain_d10_n500_n2000_2026-11-12` | `e11/analyze_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
-| the same, on E3d's truths (not yet cited) | E11 | `e11_e3d_2026-11-12` (d = 5; to be superseded as above); at d = 10, `e11_e3d_d10_2026-11-12` (`analysis_d10_decay/`, `analysis_d10_strong/`) | `e11/compare_e3d_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
-| §3.4, the comparisons with VDC renormalized by the vines' mass; `tab:vine-mass` (supp., "Total mass of the fitted vine densities"); cited at the paper's 7dfc69e | E12 | `e12_vine_mass_2026-11-12` | `e12/mass_e3.py`, `e12/mass_e3ac.py`, `e12/summarize.py`, `e12/final_tables.py`, `e12/paired.py`, `e12/vdc_pairs.py`; the refits `e12/refit_mass.py` | cells f4cec42, tables 156f3bb; refits with b7702e1's code | main: CPU |
+| the same, on E3d's truths (not yet cited) | E11 | `e11_e3d_2026-11-12` (d = 5; to be superseded as above); at d = 10, `e11_e3d_d10_2026-11-12` (`analysis_d10_decay/`, `analysis_d10_strong/`, `analysis_d10_strong_e3e/`) | `e11/compare_e3d_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
+| §3.4, the comparisons with VDC renormalized by the vines' mass; `tab:vine-mass` (supp., "Total mass of the fitted vine densities"); cited at the paper's 7dfc69e | E12 | `e12_vine_mass_2026-11-12`; rerun with `strong` d = 10 complete, `e12_vine_mass_rerun_2026-11-12` (not yet cited) | `e12/mass_e3.py`, `e12/mass_e3ac.py`, `e12/summarize.py`, `e12/final_tables.py`, `e12/paired.py`, `e12/vdc_pairs.py`; the refits `e12/refit_mass.py` | cells f4cec42, tables 156f3bb; refits with b7702e1's code | main: CPU |
 | the discussion: why selection misses the true structure (not yet cited) | E13 | `e13_structure_recovery_2026-11-12` (with `large_n/`), `e13b_heldout_likelihood_2026-11-12` (with `large_n/`) | `e13/structure_recovery.py`, `e13/heldout_likelihood.py`, on the `e13-structure-recovery` branch | 15e768c, `large_n/` edaa555; E13b 22c9d67 | main: CPU |
 
 `results/qt_ab_2026-11` is a copy, made on 2026-11-12, of the E7a worktree's
@@ -1370,6 +1370,19 @@ renormalizes the comparisons with VDC.
       then -0.021 (on all 10, -0.021);
     - E10's TabPFN mixture against `vdc_true`: +0.022; on 9 of 10 cells
       +0.018, then +0.043 (on all 10, +0.059).
+- **Rerun**, once, after E3e's `strong` d = 10 had run on gpu053 and E10's
+  TabPFN arm there had all ten cells: the importance sampling and table
+  stages (not the refits, whose inputs did not change), from a clean
+  worktree at c09323f, on the CPU (cores 10 and 11) at 23:18 on 2026-11-12,
+  into `results/e12_vine_mass_rerun_2026-11-12` (`COMMIT`, `env.txt`,
+  `logs/` with `provenance.txt` and the launcher `v3_post.sh`, and a
+  `README.txt`). The first run's folder, which the paper cites, is kept as
+  it was. Every row the two share outside `strong` d = 10 is identical, and
+  `final_table_e3a.csv`, `final_table_e3c.csv` and the E3a and E3c cells
+  are identical files. At `strong` d = 10, 40 E3e cells (gpu053) and 6 E10
+  cells are new. No cell of any arm there passes the ESS rule (median ESS
+  share 0.00 to 0.01), so the setting stays not estimable and only its
+  excess NLL columns fill in.
 
 ## E13 — how far selection is from the true structure
 
