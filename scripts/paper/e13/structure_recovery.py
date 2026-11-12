@@ -66,6 +66,18 @@ structure's, against the selected structure's recovery:
   ``decay`` on gpu053, both E3e's), with ``E3d-tll-ns``'s recovery. d = 10
   ``strong`` has no ``true-ns`` yet.
 
+**Large samples** (``--large-n N``, a separate pass with its own
+``--out``). Recovery flat in ``n`` says the criterion, not the sample size,
+is what misses. This pass reselects on a sample of ``N`` from each truth:
+E3d's test sample (20000, independent of the training one) and, in the
+conditional study, a draw of ``vine_runner.training_sample`` for the cell
+``(d, N, rep)``, a seed no run used. It writes ``large_n_cells.csv`` and
+``table5_large_n.csv``: Dissmann with ``tau`` (``recomputed``), and the
+first tree's maximum spanning tree on pooled ``|tau|`` and, in the
+conditional study, on binned ``|tau|`` (``tree1``). Near the population,
+pooled ``|tau|``'s tree recovers the truth's first tree only if it is the
+maximum spanning tree of the pairs' dependence.
+
 **Outputs** (under ``--out``, which must not exist): ``cells.csv`` (one row
 per cell, source and structure), ``gap_cells.csv``,
 ``table1_baseline.csv``, ``table2_criteria.csv``,
@@ -395,6 +407,82 @@ def run_cell_star(args: tuple[dict[str, Any], str, int]) -> list[dict]:
   return run_cell(*args)
 
 
+def large_n_jobs(results: Path) -> list[dict[str, Any]]:
+  """One job per truth: the conditional study's (d, rep), then E3d's cells."""
+  seen: set[tuple[int, int]] = set()
+  jobs: list[dict[str, Any]] = []
+  for job in conditional_cells(results):
+    if (job["d"], job["rep"]) not in seen:
+      seen.add((job["d"], job["rep"]))
+      jobs.append({**job, "n": "large", "stored": {}})
+  for job in e3d_cells(results):
+    jobs.append({**job, "n": "large", "stored": {}})
+  return jobs
+
+
+def run_large(
+  job: dict[str, Any], results: str, bins: int, n: int
+) -> list[dict]:
+  """Dissmann's ``tau`` selection and the first-tree MSTs on a large sample."""
+  torch.set_num_threads(1)
+  t0 = time.perf_counter()
+  if job["study"] == "conditional":
+    d, rep, base_seed = int(job["d"]), int(job["rep"]), int(job["base_seed"])
+    truth_matrix = np.asarray(
+      vine_runner.truth_for(base_seed, d, rep).structure.matrix, dtype=int
+    )
+    if truth_matrix.tolist() != job["truth_stored"]:
+      raise SystemExit(f"d={d} rep={rep}: the truth must match truths.json")
+    _, u_t, x_t = vine_runner.training_sample(base_seed, VineCell(d, n, rep))
+    u, x = u_t.numpy(), x_t.numpy().ravel()
+  else:
+    design, d, seed = str(job["design"]), int(job["d"]), int(job["rep"])
+    with np.load(Path(results) / E3D / "samples.npz") as z:
+      key_ = f"{design}_d{d}_s{seed}"
+      truth_matrix = np.asarray(z[f"{key_}_true_matrix"], dtype=int)
+      u = np.ascontiguousarray(z[f"{key_}_test"], dtype=np.float64)
+    x = None
+  data_seconds = time.perf_counter() - t0
+  truth = tree_edges(truth_matrix)
+  key = {k: job[k] for k in ("study", "design", "d", "rep")}
+  key["n"] = u.shape[0]
+  rows: list[dict[str, Any]] = []
+  t0 = time.perf_counter()
+  rec = recovery_row(select(u, "tau"), truth)
+  rows.append(
+    {
+      **key,
+      "source": "recomputed",
+      "structure": "tau",
+      **rec,
+      "seconds": time.perf_counter() - t0,
+    }
+  )
+  weights = {"pooled-tau": lambda: abs_tau(u)}
+  if x is not None:
+    weights["binned-tau"] = lambda: binned_abs_tau(u, x, bins)
+  for name, weight in weights.items():
+    t0 = time.perf_counter()
+    rec = tree1_row(max_spanning_tree(weight()), truth)
+    rows.append(
+      {
+        **key,
+        "source": "tree1",
+        "structure": name,
+        **rec,
+        "seconds": time.perf_counter() - t0,
+      }
+    )
+  for row in rows:
+    row["data_seconds"] = data_seconds
+  return rows
+
+
+def run_large_star(args: tuple[dict[str, Any], str, int, int]) -> list[dict]:
+  """:func:`run_large` on one tuple, for :meth:`ProcessPoolExecutor.map`."""
+  return run_large(*args)
+
+
 # ----------------------------------------------------------------- the gaps
 
 
@@ -669,6 +757,29 @@ def checks(cells: pd.DataFrame) -> dict[str, object]:
   return out
 
 
+def large_n_pass(args: argparse.Namespace) -> None:
+  """The ``--large-n`` pass: reselect on a large sample from every truth."""
+  jobs = large_n_jobs(args.results)
+  if args.limit is not None:
+    jobs = jobs[: args.limit]
+  jobs = sorted(jobs, key=lambda j: -int(j["d"]))
+  t0 = time.perf_counter()
+  rows: list[dict] = []
+  work = [(j, str(args.results), args.bins, args.large_n) for j in jobs]
+  with ProcessPoolExecutor(max_workers=args.workers) as pool:
+    for i, out in enumerate(pool.map(run_large_star, work)):
+      rows += out
+      if (i + 1) % 10 == 0 or i + 1 == len(jobs):
+        elapsed = time.perf_counter() - t0
+        print(f"{i + 1}/{len(jobs)} truths, {elapsed:.0f} s", flush=True)
+  cells = pd.DataFrame(rows)
+  args.out.mkdir(parents=True)
+  cells.to_csv(args.out / "large_n_cells.csv", index=False)
+  by = ["study", "design", "d", "n", "source", "structure"]
+  recovery_table(cells, by).to_csv(args.out / "table5_large_n.csv", index=False)
+  print(f"done in {time.perf_counter() - t0:.0f} s: {args.out}")
+
+
 def main() -> None:
   """Reselect, read the stored structures, and write the tables."""
   p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -686,10 +797,19 @@ def main() -> None:
     default=None,
     help="only the first LIMIT cells of each study (a smoke run)",
   )
+  p.add_argument(
+    "--large-n",
+    type=int,
+    default=None,
+    help="only the large-sample pass, on N draws per truth (E3d: its test set)",
+  )
   args = p.parse_args()
   if args.out.exists():
     raise SystemExit(f"--out must not exist; got {args.out}")
   e3d_structure.self_check(pv)
+  if args.large_n is not None:
+    large_n_pass(args)
+    return
 
   jobs = conditional_cells(args.results)
   label = str(jobs[0]["label"])
