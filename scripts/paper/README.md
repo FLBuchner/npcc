@@ -2,10 +2,12 @@
 
 Every result in the paper and its supplement comes from committed code and
 configs in this repository. This file lists, per experiment, what to run and
-where the output goes, and the run the paper cites. It covers E1 to E4 and E6
-to E13, with E1b, E1c, E2b, E2d, E3a to E3e, E7a, E7a′ and E9c; E5, the
-application, is not here. The experiment plan itself lives with the paper
-(`paper/jcgs/experiments.md` in the paper repository).
+where the output goes, and the run the paper cites. It covers E1 to E13,
+with E1b, E1c, E2b, E2d, E3a to E3e, E7a, E7a′ and E9c. E5, the application,
+has its code and its full record on the `application` branch (unpushed,
+unmerged), in `scripts/paper/application/README.md` there; the map and a
+section below name what the paper cites. The experiment plan itself lives
+with the paper (`paper/jcgs/experiments.md` in the paper repository).
 
 All commands run from the repository root, with the environment synced as
 
@@ -56,6 +58,7 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | the same, on E3d's truths (not yet cited) | E11 | `e11_e3d_2026-11-12` (d = 5; to be superseded as above); at d = 10, `e11_e3d_d10_2026-11-12` (`analysis_d10_decay/`, `analysis_d10_strong/`, `analysis_d10_strong_e3e/`) | `e11/compare_e3d_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
 | §3.4, the comparisons with VDC renormalized by the vines' mass; `tab:vine-mass` (supp., "Total mass of the fitted vine densities"); cited at the paper's 7dfc69e | E12 | `e12_vine_mass_2026-11-12`; rerun with `strong` d = 10 complete, `e12_vine_mass_rerun_2026-11-12` (named by the supplement's source comment at the paper's 3fee304; no number changed) | `e12/mass_e3.py`, `e12/mass_e3ac.py`, `e12/summarize.py`, `e12/final_tables.py`, `e12/paired.py`, `e12/vdc_pairs.py`; the refits `e12/refit_mass.py` | cells f4cec42, tables 156f3bb; refits with b7702e1's code; rerun c09323f | main: CPU |
 | the discussion: why selection misses the true structure (not yet cited) | E13 | `e13_structure_recovery_2026-11-12` (with `large_n/`), `e13b_heldout_likelihood_2026-11-12` (with `large_n/`) | `e13/structure_recovery.py`, `e13/heldout_likelihood.py`, on the `e13-structure-recovery` branch | 15e768c, `large_n/` edaa555; E13b 22c9d67 | main: CPU |
+| §4, `tab:application`: the weather application; cited at the paper's 7b101a7 | E5 | `application_triple_2026-11-12`: `analysis/` (`paired.csv`, `pooled_means.csv`), `tables/` (`margins_pooled.csv`, `margins_by_station.csv`, `bounds_by_station.csv`, `derivation_residuals.csv`, `copulas_timings.csv`) and `env.txt`; `application_triple_smoke_2026-11-12/checks/order_dependence.csv` | `application/paired_summary.py`; `npcc-application evaluate` writes `tables/`; code on the `application` branch (unpushed, unmerged) | dc09eaf; the smoke 781314c | main: GPU, the classical arms on 6 CPU shards |
 
 `results/qt_ab_2026-11` is a copy, made on 2026-11-12, of the E7a worktree's
 `~/npcc-e7a/results/qt_ab_2026-11` (`COPIED_FROM.txt`); the two `exact_*.csv`
@@ -1453,6 +1456,36 @@ and fit nothing on a GPU.
   - A wrong structure costs a simplified vine 0.1 to 5.9 nats per
     observation. E3e puts the cost to the non-simplified fit at 0.02 to
     0.14.
+
+## E5 — the weather application (§4)
+
+Station-wise postprocessing of MeteoSwiss forecasts at 131 stations: margins
+per station and response, then copulas on their PITs, scored jointly on the
+measured triple (T, RH, p), with Td and w derived from it. The code is
+`npcc.experiments.application` and `scripts/paper/application/`, on the
+`application` branch (unpushed, unmerged); its
+`scripts/paper/application/README.md` holds the design, the data's source
+and the run record.
+
+- **Ran** on 2026-11-12 to 13, here, at dc09eaf
+  (`configs/application_triple.toml`): margins and the npcc mixtures on the
+  GPU, the classical arms on six CPU shards; finished 2026-11-13 02:51.
+  `paired_summary.py`, whose summaries were fixed before the run, wrote
+  `analysis/` from the same commit. Commands are in the folder's
+  `logs/provenance.txt`.
+- **Cited** at the paper's 7b101a7, and frozen:
+  `results/application_triple_2026-11-12` (`analysis/paired.csv`,
+  `analysis/pooled_means.csv`; `tables/margins_pooled.csv`,
+  `margins_by_station.csv`, `bounds_by_station.csv`,
+  `derivation_residuals.csv`, `copulas_timings.csv`; `env.txt`), and
+  `results/application_triple_smoke_2026-11-12/checks/order_dependence.csv`
+  from the station-0 smoke at 781314c.
+- `checks/pressure_shift.csv` in the full run's folder (b27acaa, on the same
+  branch) dates station 106's pressure step, which the robustness check
+  leaves out: -5.09 hPa on 2020-08-20, late in the training period.
+- The order-averaged chain rule on the same margins is queued (the
+  `application-chain` branch); it writes `analysis_with_chain/` beside
+  `analysis/`, which stays as it is.
 
 ## E3 — comparison with VDC (§3.4)
 
