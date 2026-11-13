@@ -201,11 +201,15 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   `analysis/pooled_means.csv`, `tables/margins_pooled.csv`,
   `margins_by_station.csv`, `bounds_by_station.csv`,
   `derivation_residuals.csv` and `copulas_timings.csv`, and `env.txt`.
-  `checks/` is `pressure_shift.py`'s, added at b27acaa (its
-  `provenance.txt`), and not cited.
+  `checks/pressure_shift.csv` is `pressure_shift.py`'s, added at b27acaa
+  (its `provenance.txt`), and cited at the paper's 5e9e545.
 - `results/application_triple_smoke_2026-11-12`: its station-0 smoke run,
   at 781314c. `checks/order_dependence.csv` (CRPS of T 0.981 against 1.304)
   is cited at the paper's 7b101a7; `checks/README.txt` says how each check
   was made.
 
-Each is frozen: a later analysis writes to a new folder.
+Each is frozen: a later analysis writes to a new folder. Neither `copulas
+--resume` nor `evaluate` runs into the full run's folder again, since
+`evaluate` rewrites `tables/`: the chain arms (the `application-chain`
+branch) run in a copy of it checked file by file,
+`results/application_triple_chain_2026-11-13`.
