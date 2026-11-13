@@ -2,10 +2,13 @@
 
 Every result in the paper and its supplement comes from committed code and
 configs in this repository. This file lists, per experiment, what to run and
-where the output goes, and the run the paper cites. It covers E1 to E4 and E6
-to E11, with E1b, E1c, E2b, E2d, E3a to E3e, E7a, E7a′ and E9c; E5, the
-application, is not here. The experiment plan itself lives with the paper
-(`paper/jcgs/experiments.md` in the paper repository).
+where the output goes, and the run the paper cites. It covers E1 to E13,
+with E1b, E1c, E2b, E2d, E3a to E3e, E7a, E7a′ and E9c. E5, the application,
+has its code and its full record on the `application` branch (unpushed,
+unmerged), in `scripts/paper/application/README.md` there, and its chain
+arms on `application-chain`; the map and a section below name what the
+paper cites. The experiment plan itself lives
+with the paper (`paper/jcgs/experiments.md` in the paper repository).
 
 All commands run from the repository root, with the environment synced as
 
@@ -37,11 +40,11 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | `fig:misspecified` (§3.2), `tab:misspecified-by-n` (supp.) | E1c | `study_misspec_2026-11-10`, with `study_misspec_2026-11-10_r` | `e1/analyze.py`, `e1/paired.py` | b7702e1 | main: 2 GPU shards; R on 8 CPU shards |
 | `tab:covariates` (§3.3); `tab:covariates-iae`, `-clayton`, `-gaussian` and the timings (supp.) | E9, E9c | `study_covariates_2026-11-11{,_r,_v35}`, `study_covariates_n10000_2026-11-11{,_r}` | `e9/analyze.py` | b74aee4; v3.5 run and analysis f8878a7; E9c dd605f2 | main |
 | `tab:unconditional-pairs` (§3.4); `tab:non-simplified-pair`, `tab:vines-true-structure` (supp.) | E3a, E3b, E3c | `e3_vdc` | `e3/e3_collect.py` | npcc rows b7702e1; competitors c2f0cb7, d10182b, d18480b, per row | main: CPU, one core a fit; vGPU |
-| `tab:unknown-structure` (§3.4); `tab:unknown-structure-catboost` (supp.) | E3d, E3e, E10 | `e3d_unknown_structure`, `e3e_simplification_2x2{,_gpu053}`, `e10_e3d{,_gpu053}_2026-11-11` | `e3/e3_collect.py`, `e3/e3e_report.py`, `e10/compare_e3d.py` | E3d's npcc rows b7702e1, competitors 2b319b7 and 4b83733; E3e and E10's TabPFN d9dc80e; E10's CPU arms as each row records | main; gpu053 for TabPFN at d = 10 `decay` |
+| `tab:unknown-structure` (§3.4); `tab:unknown-structure-catboost` (supp.) | E3d, E3e, E10 | `e3d_unknown_structure`, `e3e_simplification_2x2{,_gpu053}` (`analysis_d5/`, `analysis_d10_decay/`, and `analysis_d10/` for d = 10 full, cited at the paper's 3fee304), `e10_e3d{,_gpu053}_2026-11-11` | `e3/e3_collect.py`, `e3/e3e_report.py`, `e10/compare_e3d.py` | E3d's npcc rows b7702e1, competitors 2b319b7 and 4b83733; E3e and E10's TabPFN d9dc80e, E3e's `analysis_d10/` 44b29ed; E10's CPU arms as each row records | main; gpu053 for TabPFN at d = 10 `decay`, and for E3e at d = 10 on both designs |
 | `tab:vine-results` (§3.5); `tab:vine-paired`, `tab:vine-copula`, `fig:vine-kl-by-x`, `fig:vine-kl-by-x-d10` (supp.): oracle, random, selected, kde-tll | E2, E2d | `vine_2026-11-10`, `vine_2026-11-11_selected`, `vine_n2000_2026-11-11`; at d = 10, `vine_d10_2026-11-11` and `vine_d10_n2000_2026-11-11` | `e2/analyze.py`, `e2/tree1_diagnostic.py` | b7702e1, f8878a7, b0523c5; at d = 10, b6cb9af and b0523c5, analyzed at 9b26ffa and 2f300e9 | main; gpu053 for d = 10 |
-| the same tables: the mixture | E10 | `vine_study_mixture_2026-11-11`; `vine_study_mixture_d10_2026-11-11` (n = 1000 so far) | `e10/analyze_mixture.py`, `e10/analyze_mixture_gamvine.py` | d9dc80e | main; gpu053 for d = 10 |
+| the same tables: the mixture | E10 | `vine_study_mixture_2026-11-11`; `vine_study_mixture_d10_2026-11-11` (n = 500, 1000, 2000) | `e10/analyze_mixture.py`, `e10/analyze_mixture_gamvine.py` | d9dc80e; d = 10's `analysis_gamvine/` 0ddf585 | main; gpu053 for d = 10 |
 | the same tables: the GAM vines; `app:gamvine` (supp.) | E2b | `vine_study_gamvine{,_d10,_n2000,_d10_n2000}_2026-11-11b`; the pilot `e2b_pilot_2026-11-11` | `e2/analyze.py` with `--with` | c6a876a; pilot cd312e2 | main: CPU, 6 single-threaded shards |
-| `tab:cost` (§3.6) | E6; E2, E10 and E2b at d = 10 | `e6_timing` (`timings_summary.csv`, sections bivariate, e3a, e3d and vine); at d = 10, the `runtime_summary.parquet` of `vine_d10{,_n2000}_2026-11-11`, `vine_study_mixture_d10_2026-11-11` and `vine_study_gamvine_d10{,_n2000}_2026-11-11b` | `e6/consolidate.py` | b7702e1, the R rows 725ac8c (reused from `e6_timing_stopped_2026-11-06`); at d = 10, each run's | main, idle; at d = 10, gpu053, and main's CPU for the GAM vines |
+| `tab:cost` (§3.6) | E6; E2, E10, E2b and E11 at d = 10 | `e6_timing` (`timings_summary.csv`, sections bivariate, e3a, e3d and vine); at d = 10, the `runtime_summary.parquet` of `vine_d10{,_n2000}_2026-11-11`, `vine_study_mixture_d10_2026-11-11`, `vine_study_gamvine_d10{,_n2000}_2026-11-11b` and, for the chain rule (E11, cited at the paper's 91e047e), `vine_study_chain_d10{,_n500_n2000}_2026-11-12` | `e6/consolidate.py` | b7702e1, the R rows 725ac8c (reused from `e6_timing_stopped_2026-11-06`); at d = 10, each run's | main, idle; at d = 10, gpu053, and main's CPU for the GAM vines |
 | §3.7; `tab:coherence-directions`, `tab:coherence-projection` (supp.) | E4, E6 | `e4_coherence`; the projection's cost from `e6_timing` (section projection) | `e4/summarize.py`, `e6/consolidate.py` | b7702e1 | main: boosters on CPU, TabPFN on the vGPU; E6 idle |
 | the finer projection grid (supp., "Coherence diagnostics") | E4 | `e4_projection_grid_converge` | `e4/summarize.py` | b7702e1 | main |
 | `fig:density-recovery-icl`, `-gb` (supp.) | E1 | `study_2026-11-10/analysis/slices` | `e1/density_slices.py` | b7702e1 | main GPU |
@@ -52,8 +55,11 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | A.2, the interior and the read-out's bias (supp.) | E7a | `qt_ab_2026-11` (`exact_*.csv`) | `qt_ab/exact_*.py` | cb04041 | main CPU |
 | A.2, Nori (supp.) | E7a′ | `nori_probe_probit_2026-11-11` | `qt_ab/nori_probe.py` | ca4e52c | main GPU |
 | "Reusing quantile tables" (supp.) | E10 | `e10_table_reuse{,_e3d,_gpu053}_2026-11-11` | `e10/check_table_reuse.py` | a49337f; d9dc80e | main; gpu053 |
-| §2.3 and the vine tables: the chain rule (not yet cited at 80ebb89) | E11 | `vine_study_chain_2026-11-12`; at d = 10, `vine_study_chain_d10_2026-11-12` (running) | `e11/analyze_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
-| the same, on E3d's truths (not yet cited at 80ebb89) | E11 | `e11_e3d_2026-11-12`; at d = 10, `e11_e3d_d10_2026-11-12` (running, gpu053) | `e11/compare_e3d_chain.py` | fa7aee3 | main; gpu053 for d = 10 |
+| §2.3 (the estimator, #56, in a source comment), §3.5 and `tab:vine-results`'s chain column: the chain rule; cited at the paper's 91e047e | E11 | `analysis/chain.csv` of `vine_study_chain_d3_d5_2026-11-13` (d = 3 and 5, n = 500, 1000 and 2000, under the distinct-order rule; it supersedes `vine_study_chain_2026-11-12`, which is not cited); at d = 10, of `vine_study_chain_d10_2026-11-12` (n = 1000) and `vine_study_chain_d10_n500_n2000_2026-11-12` | `e11/analyze_chain.py` | d = 3 and 5 a33a773; d = 10 fa7aee3 | main; gpu053 for d = 10 |
+| `tab:unknown-structure`'s chain rows and §3.4: the chain rule on E3d's truths; cited at the paper's 91e047e | E11 | `e11_e3d_d5_distinct_2026-11-13` (d = 5: `analysis_d5/compare.csv` and `chain_tabpfn-quantiles-v3-probit.csv`; it supersedes `e11_e3d_2026-11-12`, which is not cited); at d = 10, `e11_e3d_d10_2026-11-12` (`analysis_d10_decay/compare.csv`, `analysis_d10_strong_e3e/compare.csv` and the same row CSV; `analysis_d10_strong/` is not cited) | `e11/compare_e3d_chain.py` | d = 5 a33a773; d = 10 fa7aee3 | main; gpu053 for d = 10 |
+| §3.4, the comparisons with VDC renormalized by the vines' mass; `tab:vine-mass` (supp., "Total mass of the fitted vine densities"); cited at the paper's 7dfc69e | E12 | `e12_vine_mass_2026-11-12`; rerun with `strong` d = 10 complete, `e12_vine_mass_rerun_2026-11-12` (named by the supplement's source comment at the paper's 3fee304; no number changed) | `e12/mass_e3.py`, `e12/mass_e3ac.py`, `e12/summarize.py`, `e12/final_tables.py`, `e12/paired.py`, `e12/vdc_pairs.py`; the refits `e12/refit_mass.py` | cells f4cec42, tables 156f3bb; refits with b7702e1's code; rerun c09323f | main: CPU |
+| the discussion (a source comment): why selection misses the true structure; cited at the paper's 91e047e | E13 | `e13_structure_recovery_2026-11-12` (with `large_n/`), `e13b_heldout_likelihood_2026-11-12` (with `large_n/`) | `e13/structure_recovery.py`, `e13/heldout_likelihood.py`, on the `e13-structure-recovery` branch | 15e768c, `large_n/` edaa555; E13b 22c9d67 | main: CPU |
+| §4, `tab:application`: the weather application; cited at the paper's 7b101a7, `checks/` at 5e9e545, the chain arms at cee5f50 | E5 | `application_triple_2026-11-12`: `analysis/` (`paired.csv`, `pooled_means.csv`), `tables/` (`margins_pooled.csv`, `margins_by_station.csv`, `bounds_by_station.csv`, `derivation_residuals.csv`, `copulas_timings.csv`), `checks/pressure_shift.csv` and `env.txt`; `application_triple_smoke_2026-11-12/checks/order_dependence.csv`; the chain arms, in `application_triple_chain_2026-11-13`: `analysis_with_chain/` (`paired.csv`, `pooled_means.csv`) and `tables/copulas_timings.csv` | `application/paired_summary.py`, `application/pressure_shift.py`; `npcc-application evaluate` writes `tables/`; code on the `application` branch, the chain arms on `application-chain` (both unpushed, unmerged) | dc09eaf; `checks/` b27acaa; the smoke 781314c; the chain arms f6c1173 (dc09eaf with #56 merged in) | main: GPU, the classical arms on 6 CPU shards; the chain arms on the GPU |
 
 `results/qt_ab_2026-11` is a copy, made on 2026-11-12, of the E7a worktree's
 `~/npcc-e7a/results/qt_ab_2026-11` (`COPIED_FROM.txt`); the two `exact_*.csv`
@@ -1045,6 +1051,27 @@ Monte-Carlo KL point by point.
   2026-11-12. The run's `logs/` holds the queue (`gpu053_queue_v2.sh`),
   its log, and `provenance.txt`, and `env_gpu053.txt` records the machine.
   The folder is copied unchanged into `results/`.
+  - n = 2000 ran from 09:21 to 13:56 and n = 500 from 13:57 to 17:18. Each
+    pass rewrote the run's tables from its own n's cells, so the analyses
+    after n = 2000 and after n = 500 were refused for want of shared cells
+    (`logs/analysis_n2000.log`, `logs/analysis_n500.log`), and
+    `analysis_after_n1000_2000/` is empty.
+  - `gpu053_mixture_final.sh` (in `logs/`) then checked that all 60 cells
+    were done, kept the last pass's `config.json` as
+    `logs/config_after_n500_pass.json`, rebuilt the tables with the full
+    config and `--resume` on the CPU, refitting no cell
+    (`logs/aggregate_all_n.log`, 17:27 to 17:35), and wrote `analysis/`
+    against both of gpu053's E2 runs at d = 10 (`logs/analysis_final.log`).
+    Jensen's bound holds in every cell (`joint_jensen_max` -0.41, -0.25 and
+    -0.18 at n = 500, 1000 and 2000), and member 1 equals the selected arm
+    bit for bit.
+  - Copied here at 17:39 (`logs/COPIED_FROM.txt`: every file outside
+    `cells/` has the same SHA-256 here as there). `analysis_gamvine/` was
+    written here, from 0ddf585, against E2b's GAM vines
+    (`analysis_gamvine/provenance.txt`).
+  - **Cited.** The paper cites `analysis/` and `analysis_gamvine/` (its
+    b6d8a59), so both are frozen: a new analysis of this run goes into a
+    folder of its own.
 
 ## E11 — the chain-rule baseline
 
@@ -1069,10 +1096,22 @@ and E10 on E3d (unconditional).
   Jacobian included. At d = 2 an order is one direction of the pair
   copula, to rounding (`tests/experiments/test_chain.py`).
 - **The arm.** `chain` in the vine study (`vine_runner.py`), with
-  `chain_k = 5` orders:
-  - The orders are drawn uniformly, order k from a NumPy generator seeded
-    `derive_seed(base_seed, "chain", d, rep, k)`, so they depend on
-    (d, rep) alone.
+  K = min(5, d!) distinct orders drawn uniformly at random (`chain_k = 5`):
+  - Order k is drawn from a NumPy generator seeded
+    `derive_seed(base_seed, "chain", d, rep, k)`, so the orders depend on
+    (d, rep) alone. Where order k's draw repeats an earlier order, the same
+    generator draws again until it is new (`chain.draw_orders`), as the
+    mixture's structures are distinct. Five draws from the six orders at
+    d = 3 repeat one with probability 0.91, which would weigh it twice.
+  - The orders were not always distinct: the runs from fa7aee3 drew each
+    order once and kept repeats. Every d = 10 cell of those runs has five
+    distinct orders, so its orders are this rule's bitwise; at d = 5, two
+    conditional repetitions (7 and 9) and one E3d cell (`decay`, seed 202)
+    repeated an order, and those runs are superseded by reruns under this
+    rule (below, and E11 on E3d in `scripts/paper/e3/README.md`), whose
+    other cells are the earlier runs' bitwise. A chain run's resume
+    signature records the rule, so a folder of the earlier draws is not
+    resumed.
   - Factor f of order k has the torch seed
     `derive_seed(cell_seed, "chain", estimator_id, k, f)`.
   - The margins are fitted once, as every NPCC arm fits them, and shared by
@@ -1131,7 +1170,25 @@ and E10 on E3d (unconditional).
   against E3d, E10 on E3d and E3e: see `scripts/paper/e3/README.md`, "E11
   on E3d".
 - **Ran.**
-  - d = 5: here, from the clean detached worktree at fa7aee3 (#54's tip),
+  - d = 3 and 5, n = 500, 1000 and 2000, under the distinct-order rule:
+    here, from the clean detached worktree at a33a773 (#56's tip), one GPU
+    process, 02:51 to 03:49 on 2026-11-13, with `--gpu-mem-fraction 0.9`,
+    into `results/vine_study_chain_d3_d5_2026-11-13` (`local_queue8b.sh` in
+    its `logs/`, with `COMMIT` and `env.txt`). Its config,
+    `config_d3_d5.toml` in the folder, is `configs/vine_study_chain.toml`
+    with `dims = [3, 5]` and `n = [500, 1000, 2000]`
+    (`logs/config_diff.txt`). Every cell has five distinct orders.
+    - At d = 5, n = 1000, the 18 repetitions whose orders were distinct in
+      the first run below are that run's bitwise (KL, copula KL and
+      log-likelihood, 540 rows), and repetitions 7 and 9 differ
+      (`logs/d5_n1000_against_first_run.txt`).
+    - Its analysis, against E2's `vine_2026-11-10`,
+      `vine_2026-11-11_selected` and `vine_n2000_2026-11-11` and E10's
+      `vine_study_mixture_2026-11-11`, all made here, is in its
+      `analysis/`. Every repetition pairs with every reference, and
+      Jensen's bound holds (`joint_jensen_max` -0.003 to -0.018).
+  - d = 5, n = 1000, the first run, superseded by the one above: here, from
+    the clean detached worktree at fa7aee3 (#54's tip),
     one GPU process, 15:33 to 15:45 on 2026-11-12, with
     `--gpu-mem-fraction 0.9`, into `results/vine_study_chain_2026-11-12`
     (`local_queue7.sh` in its `logs/`, with `COMMIT` and `env.txt`). Its
@@ -1141,13 +1198,37 @@ and E10 on E3d (unconditional).
     and Jensen's bound holds (`joint_jensen_max` -0.016). `chain.csv` also
     carries empty rows for the references' other (d, n), where the chain
     run has no cell.
-  - d = 10: on gpu053, from a checkout there at fa7aee3 (shipped as a git
-    bundle), into `vine_study_chain_d10_2026-11-12` there, then copied back.
+  - d = 10, n = 1000: on gpu053, from a clean worktree there at fa7aee3
+    (shipped as a git bundle), by its queue's version 4
+    (`gpu053_queue_v4.sh` in `logs/`): 20 cells in 1376 s, 17:25 to 17:48
+    on 2026-11-12, into `vine_study_chain_d10_2026-11-12` there. Analyzed
+    there against gpu053's E2 at d = 10 (`vine_d10_2026-11-11`) and E10's
+    d = 10 mixture after its tables were rebuilt; Jensen's bound holds
+    (`joint_jensen_max` -0.058). Copied back with every file's SHA-256
+    unchanged (`logs/COPIED_FROM.txt`).
+  - d = 10, n = 500 and 2000: the same, by version 6
+    (`gpu053_queue_v6.sh`), 19:04 to 19:54, as one run on
+    `config_n500_n2000.toml` in its folder (the d = 10 config with
+    `n = [500, 2000]`, `logs/config_diff.txt`), into
+    `vine_study_chain_d10_n500_n2000_2026-11-12`. Analyzed there against
+    `vine_d10_2026-11-11`, `vine_d10_n2000_2026-11-11` and E10's d = 10
+    mixture: all 20 repetitions pair at both n, Jensen's bound holds
+    (-0.059 and -0.043). Copied back the same way.
+  - Every d = 10 cell has five distinct orders, so these runs follow the
+    distinct-order rule as they are.
+- **Cited** at the paper's 91e047e, and frozen: the `analysis/` of
+  `vine_study_chain_d3_d5_2026-11-13`, `vine_study_chain_d10_2026-11-12`
+  and `vine_study_chain_d10_n500_n2000_2026-11-12`, and the
+  `runtime_summary.parquet` of the two d = 10 runs (`tab:cost`). The
+  superseded `vine_study_chain_2026-11-12` is not cited. The methodology
+  names #56 (a33a773) for the distinct-order rule and the d = 2 test.
 - **Cost, per cell, on one machine.** From each run's
   `runtime_summary.parquet` (fit plus density evaluation), at d = 5,
   n = 1000, here: the chain 35.4 s (2.4 + 33.1), E10's mixture 179.9 s
   (20.1 + 159.9), a ratio of 0.20. Both commits reuse a direction's last
-  quantile table (6e1d6a7).
+  quantile table (6e1d6a7). At d = 10, on gpu053: the chain 56.0 s, 64.6 s
+  and 75.3 s at n = 500, 1000 and 2000, E10's mixture 583.4 s, 622.5 s and
+  795.5 s, ratios of 0.10, 0.10 and 0.09.
 
 ## E12 — total mass of the fitted vines
 
@@ -1319,6 +1400,143 @@ renormalizes the comparisons with VDC.
       then -0.021 (on all 10, -0.021);
     - E10's TabPFN mixture against `vdc_true`: +0.022; on 9 of 10 cells
       +0.018, then +0.043 (on all 10, +0.059).
+- **Rerun**, once, after E3e's `strong` d = 10 had run on gpu053 and E10's
+  TabPFN arm there had all ten cells: the importance sampling and table
+  stages (not the refits, whose inputs did not change), from a clean
+  worktree at c09323f, on the CPU (cores 10 and 11) at 23:18 on 2026-11-12,
+  into `results/e12_vine_mass_rerun_2026-11-12` (`COMMIT`, `env.txt`,
+  `logs/` with `provenance.txt` and the launcher `v3_post.sh`, and a
+  `README.txt`). The first run's folder, which the paper cites, is kept as
+  it was. Every row the two share outside `strong` d = 10 is identical, and
+  `final_table_e3a.csv`, `final_table_e3c.csv` and the E3a and E3c cells
+  are identical files. At `strong` d = 10, 40 E3e cells (gpu053) and 6 E10
+  cells are new. No cell of any arm there passes the ESS rule (median ESS
+  share 0.00 to 0.01), so the setting stays not estimable and only its
+  excess NLL columns fill in. The supplement's source comment names this
+  folder at the paper's 3fee304, so it is frozen too.
+
+## E13 — how far selection is from the true structure
+
+The vine on the true structure beats the chain rule wherever both exist,
+and the chain beats E10's mixture, whose first member is the selected
+structure. E13 asks how much of the truth the selected structures recover,
+and whether a cheap criterion recovers more. Both scripts are on the
+`e13-structure-recovery` branch, not yet merged. Both run on the CPU only
+and fit nothing on a GPU. Both runs below, each with its `large_n/`, are
+cited at the paper's 91e047e (a source comment in the discussion), and
+frozen.
+
+- **E13, recovery.** `scripts/paper/e13/structure_recovery.py`. Every cell
+  with a vine mixture is covered: the conditional study at d = 3, 5 and 10,
+  with n = 500, 1000 and 2000, and E3d's `decay` and `strong` designs at
+  d = 5 and 10.
+  - An edge is its conditioned pair and conditioning set
+    (`e3d_structure`). Tree t's recovery is the share of the truth's tree-t
+    edges a structure has.
+  - It reads the structures the runs stored: the mixture's members, E2's
+    `selected` arm, and E3d's and E3e's `tll-ns`.
+  - It reselects with each pyvinecopulib tree criterion (`tau`, `rho`,
+    `hoeffd`, `mcor`, `cxi`, `joe`).
+  - In the conditional study, it adds a first tree built on `|tau|` averaged
+    over five equal-count bins of `x`.
+  - It correlates recovery with the selected-minus-true KL gap.
+  - `--large-n 20000` repeats the selections on 20,000 draws from each
+    truth.
+  - The conditional runs selected on TabPFN's fitted transforms. Reselecting
+    on those would need a GPU refit, so the script reselects on the true
+    ones, and `checks.json` compares the two.
+- **E13b, held-out likelihood.** `scripts/paper/e13/heldout_likelihood.py`,
+  on E3d only, where the truth is simplified on its own structure.
+  - Each cell has 16 candidates: the truth, the mixture's five stored
+    members, and 10 uniform R-vines from recorded seeds.
+  - Each candidate is scored by the held-out mean log-likelihood of a
+    simplified vine. The vine is fitted on a fixed 70% of the cell's sample
+    with TLL pairs (`tll`) or pyvinecopulib's parametric families
+    (`parametric`), and scored on the other 30%.
+  - `--sample test` scores on E3d's 20,000-point test samples instead.
+- **Ran** on 2026-11-12, here, from the clean worktree on that branch.
+  Each run used cores 4 to 11 at nice 15, one thread per worker, beside the
+  application run. Commands are in each folder's `logs/`, and the commits
+  in its `COMMIT`.
+  - `results/e13_structure_recovery_2026-11-12`: 15e768c, 220 cells in
+    116 s. Its `large_n/` is edaa555, 100 truths in 320 s.
+  - An earlier attempt at 0b38e0f stopped before writing anything:
+    pyvinecopulib's `joe` criterion raised "The graph may not contain an
+    edge with negative weight" on two `strong` d = 10 cells. 15e768c
+    records such a cell as `nan` and counts it in `n_failed`.
+  - `results/e13b_heldout_likelihood_2026-11-12`: 22c9d67, both scores on
+    the training samples in 1315 s. Its `large_n/` holds the test samples,
+    TLL only, in 501 s. The parametric score on the test samples would take
+    about a CPU-day and was not run.
+  - Each folder's `README.txt` lists its inputs and caveats.
+- **What it gives.**
+  - The selected structures recover little of the truth. The first tree
+    has 0.28 to 0.31 of the true edges at d = 10 in the conditional study
+    and 0.40 at d = 5, where a uniformly random spanning tree expects 2/d.
+    Over all trees, they recover about 0.08 and 0.20.
+  - No criterion and no binning changes recovery by more than about 0.04.
+    Neither do 20,000 draws: every pair is dependent at a similar strength,
+    so pairwise dependence cannot identify the first tree.
+  - Recovery explains about 10 to 30% of the variance of the KL gap across
+    repetitions.
+  - Offered among the 16 candidates, the truth has the best held-out score
+    in 40 of 40 cells with parametric pairs, 36 of 40 with TLL, and 40 of
+    40 with TLL on the test samples.
+  - A wrong structure costs a simplified vine 0.1 to 5.9 nats per
+    observation. E3e puts the cost to the non-simplified fit at 0.02 to
+    0.14.
+
+## E5 — the weather application (§4)
+
+Station-wise postprocessing of MeteoSwiss forecasts at 131 stations: margins
+per station and response, then copulas on their PITs, scored jointly on the
+measured triple (T, RH, p), with Td and w derived from it. The code is
+`npcc.experiments.application` and `scripts/paper/application/`, on the
+`application` branch (unpushed, unmerged); its
+`scripts/paper/application/README.md` holds the design, the data's source
+and the run record.
+
+- **Ran** on 2026-11-12 to 13, here, at dc09eaf
+  (`configs/application_triple.toml`): margins and the npcc mixtures on the
+  GPU, the classical arms on six CPU shards; finished 2026-11-13 02:51.
+  `paired_summary.py`, whose summaries were fixed before the run, wrote
+  `analysis/` from the same commit. Commands are in the folder's
+  `logs/provenance.txt`.
+- **Cited** at the paper's 7b101a7, and frozen:
+  `results/application_triple_2026-11-12` (`analysis/paired.csv`,
+  `analysis/pooled_means.csv`; `tables/margins_pooled.csv`,
+  `margins_by_station.csv`, `bounds_by_station.csv`,
+  `derivation_residuals.csv`, `copulas_timings.csv`; `env.txt`), and
+  `results/application_triple_smoke_2026-11-12/checks/order_dependence.csv`
+  from the station-0 smoke at 781314c.
+- `checks/pressure_shift.csv` in the full run's folder
+  (`application/pressure_shift.py` at b27acaa, on the same branch; its
+  `provenance.txt`) dates station 106's pressure step, which the robustness
+  check leaves out: -5.09 hPa on 2020-08-20, late in the training period,
+  and split means 4.58 hPa apart. Cited at the paper's 5e9e545, and frozen.
+- **The chain arms** (npcc-chain-tabpfn-quantiles-all and -time, the
+  order-averaged chain rule) ran on 2026-11-13 at f6c1173, on the
+  `application-chain` branch: dc09eaf with PR #56 merged in. They ran on the
+  TabPFN margins the full run stored, read as they are, at all 131 stations,
+  with no failed unit. Since `evaluate` rewrites a folder's `tables/`, which
+  the paper cites, they ran in a copy of the full run's folder,
+  `results/application_triple_chain_2026-11-13`, checked file by file
+  (`logs/copied_from_dc09eaf_run.sha256`). `paired_summary.py` wrote its
+  summaries to `analysis_with_chain/` there. The folder's logs record the
+  checks:
+  - every file of the full run's folder kept its SHA-256 (`queue9.log`);
+  - the dc09eaf arms' rows in the new `tables/` equal the full run's
+    (`against_dc09eaf_tables.txt`);
+  - every row of the cited `analysis/` reappears unchanged in
+    `analysis_with_chain/` (`analysis_against_dc09eaf.txt`).
+
+  `logs/arm_commits.txt` says which commit made which arms, and
+  `logs/provenance.txt` holds every command. The chain's prediction timings
+  and the mixtures' come from separate runs on the same GPU, the mixtures'
+  with the classical arms' CPU shards running beside them. **Cited** at the paper's
+  cee5f50, and frozen: `analysis_with_chain/paired.csv` (on every station and
+  without station 106), `analysis_with_chain/pooled_means.csv` and
+  `tables/copulas_timings.csv`.
 
 ## E3 — comparison with VDC (§3.4)
 
