@@ -5,8 +5,9 @@ configs in this repository. This file lists, per experiment, what to run and
 where the output goes, and the run the paper cites. It covers E1 to E13,
 with E1b, E1c, E2b, E2d, E3a to E3e, E7a, E7a′ and E9c. E5, the application,
 has its code and its full record on the `application` branch (unpushed,
-unmerged), in `scripts/paper/application/README.md` there; the map and a
-section below name what the paper cites. The experiment plan itself lives
+unmerged), in `scripts/paper/application/README.md` there, and its chain
+arms on `application-chain`; the map and a section below name what the
+paper cites. The experiment plan itself lives
 with the paper (`paper/jcgs/experiments.md` in the paper repository).
 
 All commands run from the repository root, with the environment synced as
@@ -58,7 +59,7 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | `tab:unknown-structure`'s chain rows and §3.4: the chain rule on E3d's truths; cited at the paper's 91e047e | E11 | `e11_e3d_d5_distinct_2026-11-13` (d = 5: `analysis_d5/compare.csv` and `chain_tabpfn-quantiles-v3-probit.csv`; it supersedes `e11_e3d_2026-11-12`, which is not cited); at d = 10, `e11_e3d_d10_2026-11-12` (`analysis_d10_decay/compare.csv`, `analysis_d10_strong_e3e/compare.csv` and the same row CSV; `analysis_d10_strong/` is not cited) | `e11/compare_e3d_chain.py` | d = 5 a33a773; d = 10 fa7aee3 | main; gpu053 for d = 10 |
 | §3.4, the comparisons with VDC renormalized by the vines' mass; `tab:vine-mass` (supp., "Total mass of the fitted vine densities"); cited at the paper's 7dfc69e | E12 | `e12_vine_mass_2026-11-12`; rerun with `strong` d = 10 complete, `e12_vine_mass_rerun_2026-11-12` (named by the supplement's source comment at the paper's 3fee304; no number changed) | `e12/mass_e3.py`, `e12/mass_e3ac.py`, `e12/summarize.py`, `e12/final_tables.py`, `e12/paired.py`, `e12/vdc_pairs.py`; the refits `e12/refit_mass.py` | cells f4cec42, tables 156f3bb; refits with b7702e1's code; rerun c09323f | main: CPU |
 | the discussion (a source comment): why selection misses the true structure; cited at the paper's 91e047e | E13 | `e13_structure_recovery_2026-11-12` (with `large_n/`), `e13b_heldout_likelihood_2026-11-12` (with `large_n/`) | `e13/structure_recovery.py`, `e13/heldout_likelihood.py`, on the `e13-structure-recovery` branch | 15e768c, `large_n/` edaa555; E13b 22c9d67 | main: CPU |
-| §4, `tab:application`: the weather application; cited at the paper's 7b101a7, `checks/` at 5e9e545 | E5 | `application_triple_2026-11-12`: `analysis/` (`paired.csv`, `pooled_means.csv`), `tables/` (`margins_pooled.csv`, `margins_by_station.csv`, `bounds_by_station.csv`, `derivation_residuals.csv`, `copulas_timings.csv`), `checks/pressure_shift.csv` and `env.txt`; `application_triple_smoke_2026-11-12/checks/order_dependence.csv` | `application/paired_summary.py`, `application/pressure_shift.py`; `npcc-application evaluate` writes `tables/`; code on the `application` branch (unpushed, unmerged) | dc09eaf; `checks/` b27acaa; the smoke 781314c | main: GPU, the classical arms on 6 CPU shards |
+| §4, `tab:application`: the weather application; cited at the paper's 7b101a7, `checks/` at 5e9e545, the chain arms at cee5f50 | E5 | `application_triple_2026-11-12`: `analysis/` (`paired.csv`, `pooled_means.csv`), `tables/` (`margins_pooled.csv`, `margins_by_station.csv`, `bounds_by_station.csv`, `derivation_residuals.csv`, `copulas_timings.csv`), `checks/pressure_shift.csv` and `env.txt`; `application_triple_smoke_2026-11-12/checks/order_dependence.csv`; the chain arms, in `application_triple_chain_2026-11-13`: `analysis_with_chain/` (`paired.csv`, `pooled_means.csv`) and `tables/copulas_timings.csv` | `application/paired_summary.py`, `application/pressure_shift.py`; `npcc-application evaluate` writes `tables/`; code on the `application` branch, the chain arms on `application-chain` (both unpushed, unmerged) | dc09eaf; `checks/` b27acaa; the smoke 781314c; the chain arms f6c1173 (dc09eaf with #56 merged in) | main: GPU, the classical arms on 6 CPU shards; the chain arms on the GPU |
 
 `results/qt_ab_2026-11` is a copy, made on 2026-11-12, of the E7a worktree's
 `~/npcc-e7a/results/qt_ab_2026-11` (`COPIED_FROM.txt`); the two `exact_*.csv`
@@ -1513,11 +1514,29 @@ and the run record.
   `provenance.txt`) dates station 106's pressure step, which the robustness
   check leaves out: -5.09 hPa on 2020-08-20, late in the training period,
   and split means 4.58 hPa apart. Cited at the paper's 5e9e545, and frozen.
-- The order-averaged chain rule on the same stored margins is queued (the
-  `application-chain` branch). It runs in a SHA-256-checked copy of the run
-  folder, `application_triple_chain_2026-11-13`, and writes its summaries to
-  `analysis_with_chain/` there, since `evaluate` rewrites a folder's
-  `tables/`, which the paper cites.
+- **The chain arms** (npcc-chain-tabpfn-quantiles-all and -time, the
+  order-averaged chain rule) ran on 2026-11-13 at f6c1173, on the
+  `application-chain` branch: dc09eaf with PR #56 merged in. They ran on the
+  TabPFN margins the full run stored, read as they are, at all 131 stations,
+  with no failed unit. Since `evaluate` rewrites a folder's `tables/`, which
+  the paper cites, they ran in a copy of the full run's folder,
+  `results/application_triple_chain_2026-11-13`, checked file by file
+  (`logs/copied_from_dc09eaf_run.sha256`). `paired_summary.py` wrote its
+  summaries to `analysis_with_chain/` there. The folder's logs record the
+  checks:
+  - every file of the full run's folder kept its SHA-256 (`queue9.log`);
+  - the dc09eaf arms' rows in the new `tables/` equal the full run's
+    (`against_dc09eaf_tables.txt`);
+  - every row of the cited `analysis/` reappears unchanged in
+    `analysis_with_chain/` (`analysis_against_dc09eaf.txt`).
+
+  `logs/arm_commits.txt` says which commit made which arms, and
+  `logs/provenance.txt` holds every command. The chain's prediction timings
+  and the mixtures' come from separate runs on the same GPU, the mixtures'
+  with the classical arms' CPU shards running beside them. **Cited** at the paper's
+  cee5f50, and frozen: `analysis_with_chain/paired.csv` (on every station and
+  without station 106), `analysis_with_chain/pooled_means.csv` and
+  `tables/copulas_timings.csv`.
 
 ## E3 — comparison with VDC (§3.4)
 
