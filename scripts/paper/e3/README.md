@@ -689,7 +689,17 @@ reference, the mean difference chain - reference over seeds, its SE, and in
 how many seeds the chain is lower.
 
 **Ran.**
-- d = 5, both designs, here, from the clean detached worktree at fa7aee3
+- d = 5, both designs, under the distinct-order rule: here, from the clean
+  detached worktree at a33a773 (#56's tip), one GPU process per seed, 03:49
+  to 04:13 on 2026-11-13, into `results/e11_e3d_d5_distinct_2026-11-13`
+  (`local_queue8b.sh` in its `logs/`, with `COMMIT` and `env.txt`), with
+  `analysis_d5/` from `compare_e3d_chain.py` against the same three folders
+  as the first run's. It supersedes that run: 19 of its 20 cells are the
+  first run's byte for byte, and `decay` seed 202, which repeated an order
+  there, has five distinct ones. The chain's mean excess NLL on `decay`
+  moves from 0.0615 to 0.0612, and on `strong` nothing changes.
+- d = 5, both designs, the first run, superseded by the one above: here,
+  from the clean detached worktree at fa7aee3
   (#54's tip), one GPU process per seed, 15:45 to 16:12 on 2026-11-12,
   into `results/e11_e3d_2026-11-12` (`local_queue7.sh` in its `logs/`, with
   `COMMIT` and `env.txt`). `compare_e3d_chain.py` against E3d, E10 on E3d
