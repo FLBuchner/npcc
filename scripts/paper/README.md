@@ -1483,9 +1483,11 @@ and the run record.
 - `checks/pressure_shift.csv` in the full run's folder (b27acaa, on the same
   branch) dates station 106's pressure step, which the robustness check
   leaves out: -5.09 hPa on 2020-08-20, late in the training period.
-- The order-averaged chain rule on the same margins is queued (the
-  `application-chain` branch); it writes `analysis_with_chain/` beside
-  `analysis/`, which stays as it is.
+- The order-averaged chain rule on the same stored margins is queued (the
+  `application-chain` branch). It runs in a SHA-256-checked copy of the run
+  folder, `application_triple_chain_2026-11-13`, and writes its summaries to
+  `analysis_with_chain/` there, since `evaluate` rewrites a folder's
+  `tables/`, which the paper cites.
 
 ## E3 — comparison with VDC (§3.4)
 
