@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
   table = build(a.run, out, min_side=a.min_side)
   top = table.reindex(table["shift"].abs().sort_values(ascending=False).index)
   with pd.option_context("display.width", 200):
-    print(top.head(5).round(3).to_string(index=False))
+    print(top.head(5).to_string(index=False, float_format="{:.3f}".format))
   return 0
 
 

@@ -58,9 +58,11 @@ grid: they are computed from the other three,
 In the forward direction, `Td -> RH, w`, the data matches to an RH residual
 SD of 0.008 points (max 0.085) and a `w` residual SD of 0.00046 g/kg (max
 0.0049). The inverse direction, `(T, RH, p) -> Td, w`, which the triple
-uses: Td residual SD *[to fill from the smoke run]*, w residual SD *[to
-fill]*. `npcc-application preflight` prints both per station, and
-`evaluate` writes them to `tables/derivation_residuals.csv`. The constants
+uses, on each station's training cases in the full run: a Td residual SD of
+at most 0.014 C at any station (largest residual 0.16 C) and a `w` residual
+SD below 1e-6 g/kg (largest 6e-6). `npcc-application preflight` prints both
+per station, and `evaluate` writes them, over the training cases only, to
+`tables/derivation_residuals.csv`. The constants
 are in `src/npcc/experiments/application/derived.py`, one `Magnus` object
 per set; `[responses] magnus` names it (Sonntag's 1990 set is the other).
 Since `RH <= 100`, `Td <= T` follows.
@@ -177,6 +179,33 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   covariates on the TabPFN margins: the mean over stations of the
   difference of station means (negative favors the arm), its standard error
   across stations, and the stations where the arm is lower, higher or level;
-  on every station and again without station 106, whose pressure shifts by
-  about 5 hPa across the train/test split. `paired_by_station.csv` holds
-  each station's difference.
+  on every station and again without station 106, whose pressure error
+  steps by about 5 hPa late in its training period (`pressure_shift.py`).
+  `paired_by_station.csv` holds each station's difference;
+- `pressure_shift.py --run <run>`: `<run>/checks/pressure_shift.csv`, per
+  station, the observed surface pressure less the forecast's ensemble mean:
+  its mean on each split, and the largest single step in it over time, dated.
+  In the full run, station 106's error steps from +4.81 to -0.28 hPa on
+  2020-08-20 (-5.09 hPa), so 128 of its 1430 training cases and all 363 test
+  cases follow the step; its split means differ by -4.58 hPa, and no other
+  station's by more than 0.43 hPa.
+
+## Runs
+
+- `results/application_triple_2026-11-12`: the triple's full run
+  (`configs/application_triple.toml`), at dc09eaf, on the main machine's
+  GPU (an NVIDIA GRID A100D-20C, `env.txt`) with the classical arms on six
+  CPU shards; 131 stations, finished 2026-11-13 02:51. Commands are in
+  `logs/provenance.txt`. `analysis/` is `paired_summary.py`'s, at dc09eaf.
+  Cited at the paper's 7b101a7: `analysis/paired.csv`,
+  `analysis/pooled_means.csv`, `tables/margins_pooled.csv`,
+  `margins_by_station.csv`, `bounds_by_station.csv`,
+  `derivation_residuals.csv` and `copulas_timings.csv`, and `env.txt`.
+  `checks/` is `pressure_shift.py`'s, added at b27acaa (its
+  `provenance.txt`), and not cited.
+- `results/application_triple_smoke_2026-11-12`: its station-0 smoke run,
+  at 781314c. `checks/order_dependence.csv` (CRPS of T 0.981 against 1.304)
+  is cited at the paper's 7b101a7; `checks/README.txt` says how each check
+  was made.
+
+Each is frozen: a later analysis writes to a new folder.
