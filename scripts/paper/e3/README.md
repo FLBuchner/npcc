@@ -688,6 +688,13 @@ It writes `compare_cells.csv` and `compare.csv`: per design, d and
 reference, the mean difference chain - reference over seeds, its SE, and in
 how many seeds the chain is lower.
 
+**Cited** at the paper's 91e047e, and frozen (`tab:unknown-structure` and
+§3.4): at d = 5, `e11_e3d_d5_distinct_2026-11-13` (`analysis_d5/compare.csv`
+and `chain_tabpfn-quantiles-v3-probit.csv`); at d = 10,
+`e11_e3d_d10_2026-11-12` (`analysis_d10_decay/compare.csv`,
+`analysis_d10_strong_e3e/compare.csv` and the same row CSV). The superseded
+`e11_e3d_2026-11-12` and `analysis_d10_strong/` are not cited.
+
 **Ran.**
 - d = 5, both designs, under the distinct-order rule: here, from the clean
   detached worktree at a33a773 (#56's tip), one GPU process per seed, 03:49

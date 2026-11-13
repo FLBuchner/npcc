@@ -43,7 +43,7 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | `tab:vine-results` (§3.5); `tab:vine-paired`, `tab:vine-copula`, `fig:vine-kl-by-x`, `fig:vine-kl-by-x-d10` (supp.): oracle, random, selected, kde-tll | E2, E2d | `vine_2026-11-10`, `vine_2026-11-11_selected`, `vine_n2000_2026-11-11`; at d = 10, `vine_d10_2026-11-11` and `vine_d10_n2000_2026-11-11` | `e2/analyze.py`, `e2/tree1_diagnostic.py` | b7702e1, f8878a7, b0523c5; at d = 10, b6cb9af and b0523c5, analyzed at 9b26ffa and 2f300e9 | main; gpu053 for d = 10 |
 | the same tables: the mixture | E10 | `vine_study_mixture_2026-11-11`; `vine_study_mixture_d10_2026-11-11` (n = 500, 1000, 2000) | `e10/analyze_mixture.py`, `e10/analyze_mixture_gamvine.py` | d9dc80e; d = 10's `analysis_gamvine/` 0ddf585 | main; gpu053 for d = 10 |
 | the same tables: the GAM vines; `app:gamvine` (supp.) | E2b | `vine_study_gamvine{,_d10,_n2000,_d10_n2000}_2026-11-11b`; the pilot `e2b_pilot_2026-11-11` | `e2/analyze.py` with `--with` | c6a876a; pilot cd312e2 | main: CPU, 6 single-threaded shards |
-| `tab:cost` (§3.6) | E6; E2, E10 and E2b at d = 10 | `e6_timing` (`timings_summary.csv`, sections bivariate, e3a, e3d and vine); at d = 10, the `runtime_summary.parquet` of `vine_d10{,_n2000}_2026-11-11`, `vine_study_mixture_d10_2026-11-11` and `vine_study_gamvine_d10{,_n2000}_2026-11-11b` | `e6/consolidate.py` | b7702e1, the R rows 725ac8c (reused from `e6_timing_stopped_2026-11-06`); at d = 10, each run's | main, idle; at d = 10, gpu053, and main's CPU for the GAM vines |
+| `tab:cost` (§3.6) | E6; E2, E10, E2b and E11 at d = 10 | `e6_timing` (`timings_summary.csv`, sections bivariate, e3a, e3d and vine); at d = 10, the `runtime_summary.parquet` of `vine_d10{,_n2000}_2026-11-11`, `vine_study_mixture_d10_2026-11-11`, `vine_study_gamvine_d10{,_n2000}_2026-11-11b` and, for the chain rule (E11, cited at the paper's 91e047e), `vine_study_chain_d10{,_n500_n2000}_2026-11-12` | `e6/consolidate.py` | b7702e1, the R rows 725ac8c (reused from `e6_timing_stopped_2026-11-06`); at d = 10, each run's | main, idle; at d = 10, gpu053, and main's CPU for the GAM vines |
 | §3.7; `tab:coherence-directions`, `tab:coherence-projection` (supp.) | E4, E6 | `e4_coherence`; the projection's cost from `e6_timing` (section projection) | `e4/summarize.py`, `e6/consolidate.py` | b7702e1 | main: boosters on CPU, TabPFN on the vGPU; E6 idle |
 | the finer projection grid (supp., "Coherence diagnostics") | E4 | `e4_projection_grid_converge` | `e4/summarize.py` | b7702e1 | main |
 | `fig:density-recovery-icl`, `-gb` (supp.) | E1 | `study_2026-11-10/analysis/slices` | `e1/density_slices.py` | b7702e1 | main GPU |
@@ -54,10 +54,10 @@ GRID A100D-20C vGPU profile with 20 GB); "gpu053" is gpu053.baobab (an A100
 | A.2, the interior and the read-out's bias (supp.) | E7a | `qt_ab_2026-11` (`exact_*.csv`) | `qt_ab/exact_*.py` | cb04041 | main CPU |
 | A.2, Nori (supp.) | E7a′ | `nori_probe_probit_2026-11-11` | `qt_ab/nori_probe.py` | ca4e52c | main GPU |
 | "Reusing quantile tables" (supp.) | E10 | `e10_table_reuse{,_e3d,_gpu053}_2026-11-11` | `e10/check_table_reuse.py` | a49337f; d9dc80e | main; gpu053 |
-| §2.3 and the vine tables: the chain rule (not yet cited) | E11 | `vine_study_chain_d3_d5_2026-11-13` (d = 3 and 5, n = 500, 1000 and 2000, under the distinct-order rule; it supersedes `vine_study_chain_2026-11-12`); at d = 10, `vine_study_chain_d10_2026-11-12` (n = 1000) and `vine_study_chain_d10_n500_n2000_2026-11-12` | `e11/analyze_chain.py` | d = 3 and 5 a33a773; d = 10 fa7aee3 | main; gpu053 for d = 10 |
-| the same, on E3d's truths (not yet cited) | E11 | `e11_e3d_d5_distinct_2026-11-13` (d = 5, `analysis_d5/`; it supersedes `e11_e3d_2026-11-12`); at d = 10, `e11_e3d_d10_2026-11-12` (`analysis_d10_decay/`, `analysis_d10_strong/`, `analysis_d10_strong_e3e/`) | `e11/compare_e3d_chain.py` | d = 5 a33a773; d = 10 fa7aee3 | main; gpu053 for d = 10 |
+| §2.3 (the estimator, #56, in a source comment), §3.5 and `tab:vine-results`'s chain column: the chain rule; cited at the paper's 91e047e | E11 | `analysis/chain.csv` of `vine_study_chain_d3_d5_2026-11-13` (d = 3 and 5, n = 500, 1000 and 2000, under the distinct-order rule; it supersedes `vine_study_chain_2026-11-12`, which is not cited); at d = 10, of `vine_study_chain_d10_2026-11-12` (n = 1000) and `vine_study_chain_d10_n500_n2000_2026-11-12` | `e11/analyze_chain.py` | d = 3 and 5 a33a773; d = 10 fa7aee3 | main; gpu053 for d = 10 |
+| `tab:unknown-structure`'s chain rows and §3.4: the chain rule on E3d's truths; cited at the paper's 91e047e | E11 | `e11_e3d_d5_distinct_2026-11-13` (d = 5: `analysis_d5/compare.csv` and `chain_tabpfn-quantiles-v3-probit.csv`; it supersedes `e11_e3d_2026-11-12`, which is not cited); at d = 10, `e11_e3d_d10_2026-11-12` (`analysis_d10_decay/compare.csv`, `analysis_d10_strong_e3e/compare.csv` and the same row CSV; `analysis_d10_strong/` is not cited) | `e11/compare_e3d_chain.py` | d = 5 a33a773; d = 10 fa7aee3 | main; gpu053 for d = 10 |
 | §3.4, the comparisons with VDC renormalized by the vines' mass; `tab:vine-mass` (supp., "Total mass of the fitted vine densities"); cited at the paper's 7dfc69e | E12 | `e12_vine_mass_2026-11-12`; rerun with `strong` d = 10 complete, `e12_vine_mass_rerun_2026-11-12` (named by the supplement's source comment at the paper's 3fee304; no number changed) | `e12/mass_e3.py`, `e12/mass_e3ac.py`, `e12/summarize.py`, `e12/final_tables.py`, `e12/paired.py`, `e12/vdc_pairs.py`; the refits `e12/refit_mass.py` | cells f4cec42, tables 156f3bb; refits with b7702e1's code; rerun c09323f | main: CPU |
-| the discussion: why selection misses the true structure (not yet cited) | E13 | `e13_structure_recovery_2026-11-12` (with `large_n/`), `e13b_heldout_likelihood_2026-11-12` (with `large_n/`) | `e13/structure_recovery.py`, `e13/heldout_likelihood.py`, on the `e13-structure-recovery` branch | 15e768c, `large_n/` edaa555; E13b 22c9d67 | main: CPU |
+| the discussion (a source comment): why selection misses the true structure; cited at the paper's 91e047e | E13 | `e13_structure_recovery_2026-11-12` (with `large_n/`), `e13b_heldout_likelihood_2026-11-12` (with `large_n/`) | `e13/structure_recovery.py`, `e13/heldout_likelihood.py`, on the `e13-structure-recovery` branch | 15e768c, `large_n/` edaa555; E13b 22c9d67 | main: CPU |
 | §4, `tab:application`: the weather application; cited at the paper's 7b101a7, `checks/` at 5e9e545 | E5 | `application_triple_2026-11-12`: `analysis/` (`paired.csv`, `pooled_means.csv`), `tables/` (`margins_pooled.csv`, `margins_by_station.csv`, `bounds_by_station.csv`, `derivation_residuals.csv`, `copulas_timings.csv`), `checks/pressure_shift.csv` and `env.txt`; `application_triple_smoke_2026-11-12/checks/order_dependence.csv` | `application/paired_summary.py`, `application/pressure_shift.py`; `npcc-application evaluate` writes `tables/`; code on the `application` branch (unpushed, unmerged) | dc09eaf; `checks/` b27acaa; the smoke 781314c | main: GPU, the classical arms on 6 CPU shards |
 
 `results/qt_ab_2026-11` is a copy, made on 2026-11-12, of the E7a worktree's
@@ -1215,6 +1215,12 @@ and E10 on E3d (unconditional).
     (-0.059 and -0.043). Copied back the same way.
   - Every d = 10 cell has five distinct orders, so these runs follow the
     distinct-order rule as they are.
+- **Cited** at the paper's 91e047e, and frozen: the `analysis/` of
+  `vine_study_chain_d3_d5_2026-11-13`, `vine_study_chain_d10_2026-11-12`
+  and `vine_study_chain_d10_n500_n2000_2026-11-12`, and the
+  `runtime_summary.parquet` of the two d = 10 runs (`tab:cost`). The
+  superseded `vine_study_chain_2026-11-12` is not cited. The methodology
+  names #56 (a33a773) for the distinct-order rule and the d = 2 test.
 - **Cost, per cell, on one machine.** From each run's
   `runtime_summary.parquet` (fit plus density evaluation), at d = 5,
   n = 1000, here: the chain 35.4 s (2.4 + 33.1), E10's mixture 179.9 s
@@ -1415,7 +1421,9 @@ and the chain beats E10's mixture, whose first member is the selected
 structure. E13 asks how much of the truth the selected structures recover,
 and whether a cheap criterion recovers more. Both scripts are on the
 `e13-structure-recovery` branch, not yet merged. Both run on the CPU only
-and fit nothing on a GPU.
+and fit nothing on a GPU. Both runs below, each with its `large_n/`, are
+cited at the paper's 91e047e (a source comment in the discussion), and
+frozen.
 
 - **E13, recovery.** `scripts/paper/e13/structure_recovery.py`. Every cell
   with a vine mixture is covered: the conditional study at d = 3, 5 and 10,
