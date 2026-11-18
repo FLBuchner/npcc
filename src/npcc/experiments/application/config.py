@@ -62,6 +62,9 @@ QUANTILE_DTYPES: tuple[str, ...] = ("float64", "float32")
 #: one with it on the responses ``[copulas.designs.<name>]`` names.
 ARM_DESIGN: str = "@"
 _DESIGN_NAME = re.compile(r"[a-z0-9_]+")
+#: The endings a score table gives its derived columns, which a subset's
+#: name may not take, so ``energy_<name>`` reads as a score of its own.
+_RESERVED_SUFFIXES: tuple[str, ...] = ("skill", "gain", "low", "high")
 
 
 def split_arm(arm: str) -> tuple[str, str | None]:
@@ -320,6 +323,20 @@ class ApplicationConfig:
       case its arms of the main design store, over ``stored_draws``; its
       arms of another design keep ``stored_draws`` (see
       :meth:`stored_draws_for`). Empty by default.
+  score_subsets : mapping of str to tuple of str
+      Response subsets, by name, on which every sampled copula result is
+      also scored: ``energy_<name>`` and ``variogram_<name>``, from the same
+      draws, each response divided by the same training standard deviation
+      as in ``energy`` and ``variogram``. Every design draws every response,
+      so a subset compares arms of different designs on the same responses.
+      Empty by default.
+  projected_log_score : bool
+      Whether an independence or Gaussian arm of another design also scores
+      the log density of the main design's modeled responses under its own
+      model, in the main design's log-score column: the projection of those
+      two copulas onto a subset of their responses is exact (a Gaussian's is
+      the Gaussian copula of its correlation's submatrix), so their log
+      scores then compare with the main design's.
   """
 
   data_dir: Path
@@ -350,6 +367,8 @@ class ApplicationConfig:
   quantile_dtype: str = "float64"
   stored_draws: int | None = None
   stored_draws_by_margin: Mapping[str, int] = field(default_factory=dict)
+  score_subsets: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+  projected_log_score: bool = False
 
   def __post_init__(self) -> None:
     """Refuse a configuration no run could honor."""
@@ -372,6 +391,11 @@ class ApplicationConfig:
       ),
     )
     object.__setattr__(self, "devices", MappingProxyType(dict(self.devices)))
+    object.__setattr__(
+      self,
+      "score_subsets",
+      MappingProxyType({k: tuple(v) for k, v in self.score_subsets.items()}),
+    )
     if self.stations is not None:
       if not self.stations or any(s < 0 for s in self.stations):
         raise ValueError(
@@ -405,6 +429,7 @@ class ApplicationConfig:
     self._check_modeled()
     self._check_designs()
     self._check_stored_draws()
+    self._check_score_subsets()
     if self.quantile_dtype not in QUANTILE_DTYPES:
       raise ValueError(
         f"quantile_dtype must be one of {list(QUANTILE_DTYPES)}; got "
@@ -586,6 +611,40 @@ class ApplicationConfig:
         f"marginal models {list(self.copula_models)}; got {unknown}"
       )
 
+  def _check_score_subsets(self) -> None:
+    """Refuse a subset no draw covers, or a projection no design allows."""
+    for name, subset in self.score_subsets.items():
+      where = f"copulas.subsets.{name}"
+      if not _DESIGN_NAME.fullmatch(name) or name.endswith(_RESERVED_SUFFIXES):
+        raise ValueError(
+          f"{where} must be named with lowercase letters, digits and "
+          f"underscores, not ending in {list(_RESERVED_SUFFIXES)}; got "
+          f"{name!r}"
+        )
+      _unique(where, subset)
+      unknown = sorted(set(subset) - set(self.variables))
+      if len(subset) < 2 or unknown:
+        raise ValueError(
+          f"{where} must name at least two of the responses "
+          f"{list(self.variables)}; got {list(subset)}"
+        )
+    if self.projected_log_score:
+      if not self.copula_designs:
+        raise ValueError(
+          "copulas.projected_log_score must come with another design in "
+          "copulas.designs, whose arms it scores; got none"
+        )
+      for name in self.copula_designs:
+        missing = [
+          v for v in self.modeled if v not in self.design(name).modeled
+        ]
+        if missing:
+          raise ValueError(
+            f"copulas.projected_log_score must project every design onto the "
+            f"main design's modeled responses; copulas.designs.{name} does "
+            f"not model {missing}"
+          )
+
   def stored_draws_for(self, model: str, arm: str) -> int:
     """How many of each test case's draws an arm on a margin stores.
 
@@ -719,6 +778,12 @@ class ApplicationConfig:
         }
         for name in sorted(self.copula_designs)
       }
+    if self.score_subsets:
+      out["score_subsets"] = {
+        k: list(v) for k, v in sorted(self.score_subsets.items())
+      }
+    if self.projected_log_score:
+      out["projected_log_score"] = True
     return out
 
   @property
@@ -885,6 +950,8 @@ class ApplicationConfig:
       "margin_responses": list(self.margin_responses),
       "stored_draws": self.stored_draws,
       "stored_draws_by_margin": dict(self.stored_draws_by_margin),
+      "score_subsets": {k: list(v) for k, v in self.score_subsets.items()},
+      "projected_log_score": self.projected_log_score,
       **self._design(),
       "signature": self.signature(),
     }
@@ -937,6 +1004,8 @@ _TABLES: dict[str, tuple[str, ...]] = {
     "designs",
     "stored_draws",
     "stored_draws_by_margin",
+    "subsets",
+    "projected_log_score",
   ),
 }
 #: The keys of ``[responses]`` that are settings rather than a response.
@@ -1153,6 +1222,23 @@ def load_config(path: str | Path) -> ApplicationConfig:
       str(m): _int(k, f"copulas.stored_draws_by_margin.{m}")
       for m, k in by_margin_draws.items()
     }
+  if "subsets" in copulas:
+    subsets = copulas["subsets"]
+    if not isinstance(subsets, dict):
+      raise TypeError(
+        f"copulas.subsets must be a table of response lists by name; got "
+        f"{subsets!r}"
+      )
+    options["score_subsets"] = {
+      str(k): _strings(v, f"copulas.subsets.{k}") for k, v in subsets.items()
+    }
+  if "projected_log_score" in copulas:
+    if not isinstance(copulas["projected_log_score"], bool):
+      raise TypeError(
+        f"copulas.projected_log_score must be true or false; got "
+        f"{copulas['projected_log_score']!r}"
+      )
+    options["projected_log_score"] = copulas["projected_log_score"]
   if "save_draws" in copulas:
     if not isinstance(copulas["save_draws"], bool):
       raise TypeError(

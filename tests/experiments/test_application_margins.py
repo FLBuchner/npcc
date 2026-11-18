@@ -30,6 +30,7 @@ from npcc.experiments.application.margins import (
   fit_margin,
   fit_station,
 )
+from npcc.experiments.application.scores import CLOSED_FORM_CRPS
 from tests.conftest import LinearGaussianBackend
 from tests.experiments._application import write_config, write_data
 
@@ -92,6 +93,8 @@ def test_every_response_is_predicted_in_shape_and_range(
   assert len(predictions) == len(station.variables) * (n_train + n_test)
   assert len(margins.scores) == len(station.variables) * n_test
   stages = set(margins.timings["stage"])
+  # EMOS alone has a closed-form CRPS, and its own stage for it.
+  closed_form = {"crps_closed_form"} if model == "emos-seasonal" else set()
   assert stages == {
     "construction",
     "fit",
@@ -99,9 +102,30 @@ def test_every_response_is_predicted_in_shape_and_range(
     "pit_test",
     "logpdf_test",
     "quantiles_test",
+    *closed_form,
   }
+  assert (CLOSED_FORM_CRPS in margins.scores) == bool(closed_form)
   assert (margins.timings["seconds"] >= 0).all()
   assert margins.info["levels"] == pytest.approx(config.levels.tolist())
+
+
+def test_emos_closed_form_crps_checks_the_quantile_crps_on_its_scale(
+  station: StationData, config: ApplicationConfig
+) -> None:
+  """The closed-form CRPS must be on the response's own scale.
+
+  It exists to check the quantile CRPS's approximation, so one left on the
+  model scale (relative humidity as a fraction) would report a gap of a
+  hundredfold that is a unit error rather than the approximation's.
+  """
+  margins = fit_station(
+    station, config.marginal_model("emos-seasonal"), config=config, device="cpu"
+  )
+  pooled = margins.scores.groupby("variable")[["crps", CLOSED_FORM_CRPS]].mean()
+  assert np.isfinite(margins.scores[CLOSED_FORM_CRPS]).all()
+  assert (margins.scores[CLOSED_FORM_CRPS] > 0).all()
+  # Nineteen levels approximate the integral to a few percent.
+  np.testing.assert_allclose(pooled["crps"], pooled[CLOSED_FORM_CRPS], rtol=0.1)
 
 
 @pytest.mark.parametrize("model", ["emos-seasonal", "linear-gaussian-all"])

@@ -108,8 +108,8 @@ import logging
 import math
 import subprocess
 import tempfile
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import perf_counter
 from typing import cast
@@ -226,6 +226,11 @@ class CopulaResult:
       (:func:`~npcc.experiments.application.derived.physical_violations`),
       how many of each test case's draws break it; empty for a result that
       draws nothing of its own.
+  extra : dict of str to numpy.ndarray
+      Further per-case scores, by their column: each response subset's
+      ``energy_<name>`` and ``variogram_<name>`` for a result with draws of
+      its own, and an independence or Gaussian arm's projected log score
+      where :func:`run_copula_arm` is asked for it.
   """
 
   arm: str
@@ -239,6 +244,7 @@ class CopulaResult:
   sampled: bool = True
   draws: np.ndarray | None = None
   physical: dict[str, np.ndarray] = field(default_factory=dict)
+  extra: dict[str, np.ndarray] = field(default_factory=dict)
 
 
 class CopulaFailure(ValueError):
@@ -286,6 +292,9 @@ class _Inputs:
   n_draws: int
   seed: int
   sample_crps: bool = False
+  subsets: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+  project_onto: tuple[str, ...] | None = None
+  projected_column: str = "joint_nll_modeled"
 
   @property
   def draws_shape(self) -> tuple[int, int, int]:
@@ -506,6 +515,9 @@ def run_copula_arm(
   seed: int,
   device: str | None,
   sample_crps: bool = False,
+  subsets: Mapping[str, Sequence[str]] | None = None,
+  project_onto: Sequence[str] | None = None,
+  projected_column: str = "joint_nll_modeled",
 ) -> list[CopulaResult]:
   """Fit one copula arm to a marginal set and score it on its test cases.
 
@@ -532,7 +544,19 @@ def run_copula_arm(
   sample_crps : bool, default=False
       Whether to estimate every response's CRPS from the draws even when no
       response is derived, as for an arm of another design that models every
-      response; with derived responses it is estimated regardless.
+      response is derived; with derived responses it is estimated regardless.
+  subsets : mapping of str to sequence of str, optional
+      Response subsets by name: every result with draws of its own is also
+      scored on each, as ``energy_<name>`` and ``variogram_<name>``, the
+      responses divided by the same scales as for ``energy``.
+  project_onto : sequence of str, optional
+      For an independence or Gaussian arm, responses of the marginal set
+      whose joint log score under the arm's own model is also returned, in
+      ``projected_column``: the projection of either copula onto a subset
+      is exact. Ignored by every other arm, whose projection is not.
+  projected_column : str, default="joint_nll_modeled"
+      The column of that log score: the main design's, which it compares
+      with.
 
   Returns
   -------
@@ -557,7 +581,15 @@ def run_copula_arm(
     )
   if mixture_k < 1:
     raise ValueError(f"mixture_k must be positive; got {mixture_k}")
-  inputs = _inputs(ms, n_draws=n_draws, seed=seed, sample_crps=sample_crps)
+  inputs = _inputs(
+    ms,
+    n_draws=n_draws,
+    seed=seed,
+    sample_crps=sample_crps,
+    subsets=subsets or {},
+    project_onto=project_onto,
+    projected_column=projected_column,
+  )
   logger.info("station %d, %s: fitting %s", ms.station, ms.model, arm)
   if parsed.kind == "independence":
     results = [_independence(arm, inputs)]
@@ -608,9 +640,31 @@ def run_copula_arm(
 
 
 def _inputs(
-  ms: MarginalSet, *, n_draws: int, seed: int, sample_crps: bool = False
+  ms: MarginalSet,
+  *,
+  n_draws: int,
+  seed: int,
+  sample_crps: bool = False,
+  subsets: Mapping[str, Sequence[str]] | None = None,
+  project_onto: Sequence[str] | None = None,
+  projected_column: str = "joint_nll_modeled",
 ) -> _Inputs:
   """Refuse a marginal set no arm can be scored on; clip its transforms."""
+  drawn = (*ms.variables, *ms.derived)
+  for name, subset in (subsets or {}).items():
+    missing = [v for v in subset if v not in drawn]
+    if missing:
+      raise ValueError(
+        f"subsets.{name} must be drawn from the responses {list(drawn)} of "
+        f"station {ms.station}, {ms.model}; got {missing}"
+      )
+  if project_onto is not None:
+    missing = [v for v in project_onto if v not in ms.variables]
+    if missing:
+      raise ValueError(
+        f"project_onto must name modeled responses {list(ms.variables)} of "
+        f"station {ms.station}, {ms.model}; got {missing}"
+      )
   for name in ("pit_train", "pit_test"):
     values = getattr(ms, name)
     if not (np.isfinite(values) & (values >= 0) & (values <= 1)).all():
@@ -643,6 +697,9 @@ def _inputs(
     n_draws=n_draws,
     seed=seed,
     sample_crps=sample_crps,
+    subsets={k: tuple(v) for k, v in (subsets or {}).items()},
+    project_onto=None if project_onto is None else tuple(project_onto),
+    projected_column=projected_column,
   )
 
 
@@ -695,6 +752,16 @@ def _score(
   observed = observed_raw / scale
   energy = energy_score(standardized, observed)
   variogram = variogram_score(standardized, observed, p=0.5)
+  drawn = (*ms.variables, *ms.derived)
+  extra: dict[str, np.ndarray] = {}
+  for subset_name, subset in inputs.subsets.items():
+    columns = [drawn.index(v) for v in subset]
+    extra[f"energy_{subset_name}"] = energy_score(
+      standardized[:, :, columns], observed[:, columns]
+    )
+    extra[f"variogram_{subset_name}"] = variogram_score(
+      standardized[:, :, columns], observed[:, columns], p=0.5
+    )
   if ms.derived or inputs.sample_crps:
     for j, variable in enumerate((*ms.variables, *ms.derived)):
       sample_crps[variable] = energy_score(
@@ -708,7 +775,10 @@ def _score(
       f"at {bad.size} test cases",
       bad,
     )
-  bad = np.flatnonzero(~(np.isfinite(energy) & np.isfinite(variogram)))
+  finite = np.isfinite(energy) & np.isfinite(variogram)
+  for values in extra.values():
+    finite &= np.isfinite(values)
+  bad = np.flatnonzero(~finite)
   if bad.size:
     raise CopulaFailure(
       f"{name}'s energy and variogram scores must be finite; got non-finite "
@@ -737,7 +807,31 @@ def _score(
     sample_crps=sample_crps,
     draws=draws,
     physical=physical,
+    extra=extra,
   )
+
+
+def _projected(
+  inputs: _Inputs, result: CopulaResult, logcop: np.ndarray | None
+) -> CopulaResult:
+  """Add the arm's exact log score of ``project_onto``, if asked for.
+
+  ``logcop`` is the copula log-density of those responses at the test
+  cases; ``None`` for independence, whose projection is independence.
+  """
+  if inputs.project_onto is None:
+    return result
+  ms = inputs.ms
+  columns = [ms.variables.index(v) for v in inputs.project_onto]
+  sub = np.zeros(len(ms.y_test)) if logcop is None else logcop
+  nll = joint_nll(sub, ms.logpdf_test[:, columns])
+  if not np.isfinite(nll).all():
+    raise CopulaFailure(
+      f"{result.arm}'s projected log-likelihood must be finite; got "
+      f"non-finite values at {int((~np.isfinite(nll)).sum())} test cases",
+      np.flatnonzero(~np.isfinite(nll)),
+    )
+  return replace(result, extra={**result.extra, inputs.projected_column: nll})
 
 
 def _log_score_only(
@@ -786,7 +880,9 @@ def _independence(name: str, inputs: _Inputs) -> CopulaResult:
   uniforms = np.random.default_rng(draws_seed).random(inputs.draws_shape)
   timings = {"fit": 0.0, "copula_prediction": perf_counter() - t0}
   info: dict[str, object] = {"draws_seed": draws_seed}
-  return _score(name, inputs, logcop, uniforms, timings, info)
+  return _projected(
+    inputs, _score(name, inputs, logcop, uniforms, timings, info), None
+  )
 
 
 def _normal_scores(u: np.ndarray) -> np.ndarray:
@@ -832,7 +928,18 @@ def _gaussian(name: str, inputs: _Inputs) -> CopulaResult:
     "correlation": correlation.tolist(),
     "draws_seed": draws_seed,
   }
-  return _score(name, inputs, logcop, uniforms, timings, info)
+  result = _score(name, inputs, logcop, uniforms, timings, info)
+  projected = None
+  if inputs.project_onto is not None:
+    # The Gaussian copula's projection onto a subset is the Gaussian copula
+    # of its correlation's submatrix.
+    keep = [inputs.ms.variables.index(v) for v in inputs.project_onto]
+    sub = correlation[np.ix_(keep, keep)]
+    z_sub = z_test[:, keep]
+    projected = -0.5 * np.linalg.slogdet(sub)[1] - 0.5 * np.einsum(
+      "ni,ij,nj->n", z_sub, np.linalg.inv(sub) - np.eye(len(keep)), z_sub
+    )
+  return _projected(inputs, result, projected)
 
 
 def _synchronize() -> None:

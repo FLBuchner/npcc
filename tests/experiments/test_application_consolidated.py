@@ -17,6 +17,7 @@ from types import ModuleType
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import multivariate_normal, norm
 
 from npcc.experiments.application.cli import main
 from npcc.experiments.application.config import (
@@ -24,6 +25,7 @@ from npcc.experiments.application.config import (
   load_config,
   split_arm,
 )
+from npcc.experiments.application.copulas import PIT_CLIP
 from npcc.experiments.application.data import write_synthetic
 from npcc.experiments.application.derived import (
   DEW_POINT,
@@ -32,11 +34,16 @@ from npcc.experiments.application.derived import (
   RELATIVE_HUMIDITY,
   TEMPERATURE,
 )
+from npcc.experiments.application.joint_scores import (
+  energy_score,
+  variogram_score,
+)
 from npcc.experiments.application.marginal_set import MarginalSet
 from npcc.experiments.application.scores import crps_from_quantiles
 from npcc.experiments.application.store import (
   draws_frame,
   read_marginal_set,
+  read_station_data,
   write_copula,
 )
 from npcc.experiments.config import load_grid
@@ -495,6 +502,140 @@ def test_both_designs_run_on_the_same_margins_and_are_compared(
     row.loc[(0, model, "gaussian@5d"), "energy"]
     - row.loc[(0, model, "gaussian"), "energy"]
   )
+
+
+def test_subsets_and_projected_log_scores_compare_the_designs(
+  tmp_path: Path, register_linear_gaussian_backend: None
+) -> None:
+  """The 5d arms must be comparable with the triple's on the triple's responses.
+
+  A subset's energy and variogram scores are the full scores' estimators on
+  its responses alone, divided by the same scales, so recomputing them from
+  the stored draws gives them back, on either design. The projected log
+  score of ``independence@5d`` and ``gaussian@5d`` is the exact density of
+  the triple's modeled responses under the 5d model, in the triple's
+  column: independence's equals the triple's independence, on the same
+  margins, and the Gaussian's is the Gaussian copula of its correlation's
+  submatrix.
+  """
+  del register_linear_gaussian_backend
+  data = tmp_path / "data"
+  write_synthetic(data, n_stations=2, step_days=7, seed=3, measured=True)
+  copulas = (
+    "subsets = { trhp = " + json.dumps(list(_TRIPLE)) + " }\n"
+    "projected_log_score = true\n"
+  )
+  config = _config(tmp_path, data, copulas=copulas)
+  run = tmp_path / "run"
+  for stage in ("margins", "copulas", "evaluate"):
+    assert main([stage, "--config", str(config), "--out", str(run)]) == 0
+  model = "emos-seasonal"
+  unit = run / "stations" / "000" / "copulas" / model
+  scores = {
+    arm: pd.read_parquet(unit / arm / "scores.parquet").set_index("row")
+    for arm in _ARMS
+  }
+  station = read_station_data(run, 0)
+  # The stored draws are sorted by row, the station's cases by time.
+  order = np.argsort(station.row_test)
+  observed = np.stack(
+    [station.y_test[order, station.column(v)] for v in _TRIPLE], axis=1
+  )
+  for arm in ("gaussian", "gaussian@5d"):
+    info = json.loads((unit / arm / "info.json").read_text())
+    scales = np.array([info["scales"][v] for v in _TRIPLE])
+    stored = pd.read_parquet(unit / arm / "draws.parquet").sort_values(
+      ["row", "draw"]
+    )
+    rows = stored["row"].unique()
+    np.testing.assert_array_equal(rows, station.row_test[order])
+    draws = stored[list(_TRIPLE)].to_numpy(np.float64)
+    draws = draws.reshape(len(rows), -1, len(_TRIPLE))
+    # The draws are stored as float32, the scores were computed before.
+    np.testing.assert_allclose(
+      scores[arm].loc[rows, "energy_trhp"],
+      energy_score(draws / scales, observed / scales),
+      rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+      scores[arm].loc[rows, "variogram_trhp"],
+      variogram_score(draws / scales, observed / scales, p=0.5),
+      rtol=1e-4,
+    )
+
+  np.testing.assert_allclose(
+    scores["independence@5d"]["joint_nll_modeled"],
+    scores["independence"]["joint_nll_modeled"],
+    rtol=1e-12,
+  )
+  ms = read_marginal_set(run, 0, model, train_pits="out_of_fold")
+  keep = [ms.variables.index(v) for v in _TRIPLE]
+  info = json.loads((unit / "gaussian@5d" / "info.json").read_text())
+  correlation = np.asarray(
+    info["results"]["gaussian@5d"]["info"]["correlation"]
+  )
+  sub = correlation[np.ix_(keep, keep)]
+  z = norm.ppf(np.clip(ms.pit_test[:, keep], PIT_CLIP, 1 - PIT_CLIP))
+  logcop = multivariate_normal(cov=sub).logpdf(z) - norm.logpdf(z).sum(axis=1)
+  expected = -(logcop + ms.logpdf_test[:, keep].sum(axis=1))
+  np.testing.assert_allclose(
+    scores["gaussian@5d"].loc[station.row_test, "joint_nll_modeled"],
+    expected,
+    rtol=1e-9,
+  )
+  # The tables carry both, each 5d arm's gain against independence@5d.
+  by_station = pd.read_csv(run / "tables" / "copulas_by_station.csv")
+  row = by_station.set_index(["station", "model", "arm"])
+  assert row.loc[(0, model, "gaussian@5d"), "joint_nll_modeled_gain"] == (
+    pytest.approx(
+      row.loc[(0, model, "independence@5d"), "joint_nll_modeled"]
+      - row.loc[(0, model, "gaussian@5d"), "joint_nll_modeled"]
+    )
+  )
+  assert "energy_trhp_skill" in row.columns
+
+
+@pytest.mark.usefixtures("register_linear_gaussian_backend")
+@pytest.mark.parametrize(
+  ("copulas", "message"),
+  [
+    (
+      'subsets = { trhp_low = ["obs:air_temperature", '
+      '"obs:surface_air_pressure"] }\n',
+      "not ending in",
+    ),
+    ('subsets = { t = ["obs:air_temperature"] }\n', "at least two"),
+    (
+      'subsets = { tx = ["obs:air_temperature", "obs:wind"] }\n',
+      "at least two",
+    ),
+  ],
+)
+def test_a_subset_no_score_could_name_is_refused(
+  tmp_path: Path, copulas: str, message: str
+) -> None:
+  """A subset must name its own score columns and responses every draw has.
+
+  A name ending like a table's derived column would be read as a skill or
+  an interval of another score, and a response the draws lack has no score.
+  """
+  with pytest.raises(ValueError, match=message):
+    load_config(_config(tmp_path, Path("data"), copulas=copulas))
+
+
+@pytest.mark.usefixtures("register_linear_gaussian_backend")
+def test_a_projected_log_score_needs_another_design(tmp_path: Path) -> None:
+  """Without another design there is nothing to project, so it is refused."""
+  with pytest.raises(ValueError, match="another design"):
+    load_config(
+      _config(
+        tmp_path,
+        Path("data"),
+        designs="",
+        arms=("gaussian",),
+        copulas="projected_log_score = true\n",
+      )
+    )
 
 
 def test_a_thinned_arm_stores_the_first_draws_it_was_scored_on(

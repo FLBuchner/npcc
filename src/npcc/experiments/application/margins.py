@@ -48,7 +48,10 @@ from npcc.experiments.application.config import (
 )
 from npcc.experiments.application.data import StationData, feature_columns
 from npcc.experiments.application.emos import EMOS, emos_for
-from npcc.experiments.application.scores import marginal_case_scores
+from npcc.experiments.application.scores import (
+  CLOSED_FORM_CRPS,
+  marginal_case_scores,
+)
 from npcc.experiments.application.store import quantile_columns
 
 logger = logging.getLogger(__name__)
@@ -200,6 +203,9 @@ class MarginFit:
   pit_train_out_of_fold : numpy.ndarray or None, shape (n_train,)
       Each training case's PIT under the model fitted without its
       initialization year; ``None`` unless the configuration asks for it.
+  crps_closed_form_test : numpy.ndarray or None, shape (n_test,)
+      An EMOS margin's CRPS at each test observation in closed form, on the
+      original scale; ``None`` for a margin without one.
   """
 
   variable: str
@@ -210,6 +216,7 @@ class MarginFit:
   timings: dict[str, float] = field(default_factory=dict)
   info: dict[str, object] = field(default_factory=dict)
   pit_train_out_of_fold: np.ndarray | None = None
+  crps_closed_form_test: np.ndarray | None = None
 
 
 def _synchronize() -> None:
@@ -276,7 +283,10 @@ def _check_outputs(fit: MarginFit, context: str) -> None:
   pits = ["pit_train", "pit_test"]
   if fit.pit_train_out_of_fold is not None:
     pits.append("pit_train_out_of_fold")
-  for name in (*pits, "logpdf_test", "quantiles_test"):
+  finite = [*pits, "logpdf_test", "quantiles_test"]
+  if fit.crps_closed_form_test is not None:
+    finite.append("crps_closed_form_test")
+  for name in finite:
     values = getattr(fit, name)
     if not np.isfinite(values).all():
       raise ValueError(
@@ -514,8 +524,16 @@ def fit_margin(
     **bounds,
     **({"out_of_fold": folds} if folds else {}),
   }
+  closed_form: np.ndarray | None = None
   if isinstance(predictor, EMOS):
     info["emos"] = {"class": type(predictor).__name__, **predictor.parameters}
+    # At the observation itself, not the nudged one the fit saw: a CRPS
+    # scales with the response, so the model scale's times ``scale``.
+    closed_form = response.scale * _timed(
+      timings,
+      "crps_closed_form",
+      lambda: predictor.crps(data.y_test[:, j] / response.scale, x=x_test),
+    )
   elif model.backend is not None:
     spec = config.estimators_by_backend[model.backend]
     info["estimator"] = {
@@ -540,6 +558,9 @@ def fit_margin(
     info=info,
     pit_train_out_of_fold=(
       None if pit_oof is None else np.asarray(pit_oof, dtype=np.float64)
+    ),
+    crps_closed_form_test=(
+      None if closed_form is None else np.asarray(closed_form, dtype=np.float64)
     ),
   )
   _check_outputs(fit, f"station {data.station}'s {model.name} {variable}")
@@ -665,6 +686,13 @@ def fit_station(
             pit=fit.pit_test,
             quantiles=fit.quantiles_test,
             levels=levels,
+          ),
+          # Only a margin with a closed form has the column, so the other
+          # units keep their layout.
+          **(
+            {}
+            if fit.crps_closed_form_test is None
+            else {CLOSED_FORM_CRPS: fit.crps_closed_form_test}
           ),
         }
       )

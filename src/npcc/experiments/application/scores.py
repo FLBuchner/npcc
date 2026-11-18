@@ -5,6 +5,10 @@ Per test case, a margin is scored by the CRPS of its quantiles at the levels
 PIT, and whether each central interval covers the observation. A copula arm
 arrives already scored, by joint NLL and the energy and variogram scores.
 
+An EMOS margin is also scored by its closed-form CRPS
+(:data:`CLOSED_FORM_CRPS`), a check of the quantile CRPS's approximation;
+it enters no skill, so every margin's skill uses the same estimator.
+
 Skills compare a model with a reference on identical cases: a margin with
 seasonal EMOS, a copula arm with independence on the same margins. A score
 skill is ``1 - mean(score) / mean(reference)``, a ratio of means rather than
@@ -50,6 +54,10 @@ def coverage_column(nominal: float) -> str:
       ``coverage_<percent>``.
   """
   return f"coverage_{round(100 * nominal)}"
+
+
+#: The column of an EMOS margin's closed-form CRPS, on the original scale.
+CLOSED_FORM_CRPS: str = "crps_closed_form"
 
 
 def sample_crps_column(variable: str) -> str:
@@ -301,7 +309,10 @@ def marginal_tables(
   """
   _check_paired(cases, "model", ["station", "variable", "row"], [])
   coverage = [coverage_column(n) for n in NOMINAL_COVERAGE]
-  means = ["crps", "nll", *coverage]
+  # The closed-form CRPS is averaged where a model has one, nan elsewhere,
+  # beside the quantile CRPS it checks; no skill reads it.
+  closed = [CLOSED_FORM_CRPS] if CLOSED_FORM_CRPS in cases else []
+  means = ["crps", *closed, "nll", *coverage]
   has_baseline = baseline in set(cases["model"])
 
   by_station = (
@@ -355,7 +366,7 @@ def marginal_tables(
   station_mean = _equal_station(
     by_station,
     ["model", "variable"],
-    ["crps", "crpss", "nll", "log_score_gain", *coverage],
+    ["crps", *closed, "crpss", "nll", "log_score_gain", *coverage],
     seed,
   )
   return {
@@ -408,17 +419,23 @@ def copula_score_columns(cases: pd.DataFrame) -> tuple[str, list[str]]:
       The first of :func:`copula_log_score_columns`.
   scores : list of str
       Every log score (:func:`copula_log_score_columns`), ``energy``,
-      ``variogram``, then each response's CRPS from the draws
-      (``crps_<name>``) where present.
+      ``variogram``, each response subset's ``energy_<name>`` and
+      ``variogram_<name>``, then each response's CRPS from the draws
+      (``crps_<name>``), the last two where present.
   """
   nlls = copula_log_score_columns(cases)
+  derived = ("_skill", "_gain", "_low", "_high")
   crps = [
     c
     for c in cases.columns
-    if c.startswith("crps_")
-    and not c.endswith(("_skill", "_gain", "_low", "_high"))
+    if c.startswith("crps_") and not c.endswith(derived)
   ]
-  return nlls[0], [*nlls, "energy", "variogram", *crps]
+  subsets = [
+    c
+    for c in cases.columns
+    if c.startswith(("energy_", "variogram_")) and not c.endswith(derived)
+  ]
+  return nlls[0], [*nlls, "energy", "variogram", *subsets, *crps]
 
 
 def arm_design(arm: str) -> str:

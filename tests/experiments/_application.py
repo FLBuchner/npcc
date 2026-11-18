@@ -167,13 +167,18 @@ class FakeCopulas:
     seed: int,
     device: str | None,
     sample_crps: bool = False,
+    subsets: Mapping[str, Sequence[str]] | None = None,
+    project_onto: Sequence[str] | None = None,
+    projected_column: str = "joint_nll_modeled",
   ) -> list[FakeCopulaResult]:
     """Independence scores, or a little better for any other arm.
 
     An ``npcc-chain`` arm also returns one order, ``<arm>-m1``, scored by its
     log score alone, as the real stage returns a chain mixture's orders.
     With ``sample_crps``, every result gains a CRPS of every response, as
-    the real stage estimates them for an arm of another design.
+    the real stage estimates them for an arm of another design. The response
+    subsets and the projection are the real stage's to score; this records
+    them with the call and scores neither.
     """
     self.calls.append(
       {
@@ -181,6 +186,8 @@ class FakeCopulas:
         "station": ms.station,
         "model": ms.model,
         "estimators": dict(estimators),
+        "subsets": dict(subsets or {}),
+        "project_onto": project_onto,
         "n_draws": n_draws,
         "sample_batch_size": sample_batch_size,
         "mixture_k": mixture_k,

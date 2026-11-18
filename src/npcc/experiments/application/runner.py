@@ -520,9 +520,20 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             mixture_k=config.mixture_k,
             seed=seed,
             device=_device(config, options, arm),
+            subsets=config.score_subsets,
             # Another design's arm estimates every response's CRPS from its
-            # draws, as the main design does when it derives responses.
-            **({} if design is None else {"sample_crps": True}),
+            # draws, as the main design does when it derives responses; its
+            # independence and Gaussian arms, asked to, also score the main
+            # design's modeled responses, in the main design's column.
+            sample_crps=design is not None,
+            project_onto=(
+              config.modeled
+              if design is not None and config.projected_log_score
+              else None
+            ),
+            projected_column=(
+              "joint_nll_modeled" if config.derived else "joint_nll"
+            ),
           )
           if design is not None:
             # The fit and its seeds are the base arm's, so an arm and its

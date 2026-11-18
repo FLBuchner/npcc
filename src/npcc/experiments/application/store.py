@@ -783,6 +783,16 @@ def write_copula(
         for v, values in result.sample_crps.items()
       },
     }
+    # Each response subset's scores and a projected log score, by column;
+    # none may take a column of the scores above.
+    extra = dict(getattr(result, "extra", {}))
+    clash = sorted(set(extra) & set(columns))
+    if clash:
+      raise ValueError(
+        f"{result.arm}'s extra scores must not reuse the columns {clash} of "
+        f"its other scores; got them in both"
+      )
+    columns.update(extra)
     # A result scored by its log score alone, a chain mixture's order, has
     # no draws of its own: its sample scores are nan throughout.
     unsampled = (
