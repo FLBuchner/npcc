@@ -6,7 +6,7 @@ conditional quantiles directly. It predicts every requested probability level
 in a single call.
 
 PDF, CDF, inverse CDF, and grid evaluation are inherited from
-:class:`QuantileTableDistribution1D`.
+:class:`~npcc.core.margin.ConditionalMargin`.
 
 TabICL uses a NumPy-facing estimator interface. Input conversion is isolated
 inside this adapter, and predictions are immediately converted back to torch
@@ -17,37 +17,24 @@ This backend requires the ``tabicl`` optional dependency.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Unpack
 
 import torch
 from pyvinecopulib.core.extend import to_numpy
 from tabicl import TabICLRegressor
 
-from npcc.core.margin_quantile_table import (
-  QuantileTableConfig,
-  QuantileTableDistribution1D,
-)
+from npcc.core.margin import ConditionalMargin, MarginOptions
 
 
-class TabICLBackend(QuantileTableDistribution1D):
+class TabICLBackend(ConditionalMargin):
   """Conditional margin using TabICL's quantile output.
 
   Parameters
   ----------
-  transform
-    Response transformation inherited from
-    :class:`QuantileTableDistribution1D`.
-  quantile_table_config
-    Quantile-table reconstruction configuration.
-  eps
-    Distance used when clipping values away from the boundaries of
-    ``(0, 1)`` before the logit or probit transform.
-  device
-    Device used for model fitting, prediction, and returned tensors.
-  batch_size
-    Maximum number of conditioning rows evaluated in one prediction call.
-  model_kwargs
-    Additional arguments passed to ``TabICLRegressor``.
+  model_kwargs : dict, optional
+      Additional arguments passed to ``TabICLRegressor``.
+  **margin : MarginOptions
+      Forwarded to :class:`~npcc.core.margin.ConditionalMargin`.
   """
 
   model_: TabICLRegressor | None
@@ -55,20 +42,10 @@ class TabICLBackend(QuantileTableDistribution1D):
   def __init__(
     self,
     *,
-    transform: Literal["identity", "logit", "probit"] = "logit",
-    quantile_table_config: QuantileTableConfig | None = None,
-    eps: float = 1e-6,
-    device: str | torch.device | None = None,
-    batch_size: int | None = None,
     model_kwargs: dict[str, Any] | None = None,
+    **margin: Unpack[MarginOptions],
   ) -> None:
-    super().__init__(
-      transform=transform,
-      quantile_table_config=quantile_table_config,
-      eps=eps,
-      device=device,
-      batch_size=batch_size,
-    )
+    super().__init__(**margin)
     self.model_kwargs = dict(model_kwargs or {})
     self.model_kwargs.setdefault("device", str(self._device))
     self.model_ = None
@@ -91,7 +68,10 @@ class TabICLBackend(QuantileTableDistribution1D):
     x: torch.Tensor,
     alphas: torch.Tensor,
   ) -> torch.Tensor:
-    """Predict one quantile table for a chunk of conditioning rows."""
+    """Predict one quantile table for a chunk of conditioning rows.
+
+    TabICL documents ``(n_samples, n_quantiles)``, so the rows lead.
+    """
     assert self.model_ is not None
 
     predicted = self.model_.predict(
@@ -99,26 +79,4 @@ class TabICLBackend(QuantileTableDistribution1D):
       output_type="quantiles",
       alphas=alphas.tolist(),
     )
-
-    quantiles = torch.as_tensor(
-      predicted,
-      dtype=x.dtype,
-      device=x.device,
-    )
-
-    n_chunk = x.shape[0]
-    n_alphas = alphas.shape[0]
-    expected_shape = (n_chunk, n_alphas)
-    transposed_shape = (n_alphas, n_chunk)
-
-    if quantiles.shape == expected_shape:
-      return quantiles
-
-    if quantiles.shape == transposed_shape:
-      return quantiles.T
-
-    raise RuntimeError(
-      "Unexpected TabICL quantile output shape. "
-      f"Got {tuple(quantiles.shape)}, expected {expected_shape} "
-      f"or {transposed_shape}."
-    )
+    return self._quantile_rows(predicted, x, levels_first=False)

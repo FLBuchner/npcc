@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy
 import pytest
 import torch
 from pyvinecopulib.core import BicopBase, BicopLike
 
-from npcc.core.backends.tabpfn_criterion import TabPFNCriterionBackend
-from npcc.core.backends.tabpfn_quantile import TabPFNQuantileBackend
-from npcc.core.bicop import RosenblattBicop, _sinkhorn_project
-from npcc.core.controls import (
+from npcc import (
+  ConditionalMargin,
   FitControlsRosenblattBicop,
   FitControlsRosenblattVinecop,
+  RosenblattBicop,
+  TabPFNQuantileBackend,
 )
+from npcc.core import registry
+from npcc.core.bicop import _sinkhorn_project
+from npcc.core.margin import MarginOptions
+from tests.conftest import normal_density_y
 
 
 def random_uv(n: int = 30, *, seed: int = 0) -> torch.Tensor:
@@ -26,7 +32,6 @@ def random_uv(n: int = 30, *, seed: int = 0) -> torch.Tensor:
 
 
 def make_controls(
-  method: str = "criterion",
   *,
   transform: str = "logit",
   batch_size: int | None = None,
@@ -34,7 +39,7 @@ def make_controls(
   cdf_n_int: int = 12,
 ) -> FitControlsRosenblattBicop:
   return FitControlsRosenblattBicop(
-    backend=f"tabpfn-{method}",
+    backend="tabpfn-quantiles",
     transform=transform,  # ty: ignore[invalid-argument-type]
     device="cpu",
     batch_size=batch_size,
@@ -45,20 +50,18 @@ def make_controls(
 
 
 def fit_bicop(
-  patch_uniform: None,
-  method: str = "criterion",
+  patch_tabpfn: None,
   *,
   x: torch.Tensor | None = None,
   transform: str = "logit",
   sinkhorn_iters: int | None = None,
   cdf_n_int: int = 12,
 ) -> RosenblattBicop:
-  del patch_uniform
+  del patch_tabpfn
   model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
   return model.fit(
     random_uv(),
     make_controls(
-      method,
       transform=transform,
       sinkhorn_iters=sinkhorn_iters,
       cdf_n_int=cdf_n_int,
@@ -74,21 +77,20 @@ class TestRosenblattBicopConstruction:
     assert isinstance(model, BicopBase)
     assert isinstance(model, BicopLike)
 
-  def test_default_backend_is_criterion(self) -> None:
+  def test_default_backend_is_tabpfn_quantiles(self) -> None:
     model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
 
-    assert model.backend == "tabpfn-criterion"
+    assert model.backend == "tabpfn-quantiles"
     assert model.transform == "logit"
-    assert isinstance(model.v_given_ux_, TabPFNCriterionBackend)
-    assert isinstance(model.u_given_vx_, TabPFNCriterionBackend)
+    assert isinstance(model.v_given_ux_, TabPFNQuantileBackend)
+    assert isinstance(model.u_given_vx_, TabPFNQuantileBackend)
 
   def test_fit_controls_replace_backend_configuration(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
     model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
     controls = make_controls(
-      "quantiles",
       transform="identity",
       batch_size=17,
     )
@@ -107,8 +109,64 @@ class TestRosenblattBicopConstruction:
     assert model.batch_size == 400
     assert model.v_given_ux_.batch_size == 400
 
+  def test_controls_reach_both_inner_margins(
+    self, register_hermetic_backends: None
+  ) -> None:
+    """Every setting a margin reads arrives on both directions' margins.
 
-@pytest.mark.parametrize("method", ["criterion", "quantiles"])
+    ``from_data`` is how a vine builds each edge, so a setting dropped between
+    the pair and its margins would hold on the pair and not where it acts.
+    """
+    del register_hermetic_backends
+    controls = FitControlsRosenblattBicop(
+      backend="normal-quantile", eps=2e-5, device="cpu", batch_size=17
+    )
+
+    pair = RosenblattBicop.from_data(random_uv(), controls)
+
+    for margin in (pair.v_given_ux_, pair.u_given_vx_):
+      assert margin.is_fitted
+      assert margin.eps == 2e-5
+      assert margin.batch_size == 17
+      assert margin._device == torch.device("cpu")
+
+  def test_fit_with_controls_replaces_the_margins(
+    self, register_hermetic_backends: None
+  ) -> None:
+    """New controls build new margins rather than refitting the old ones.
+
+    A margin keeps the settings it was built with, so refitting the old one
+    under new controls would silently keep the old backend.
+    """
+    del register_hermetic_backends
+    controls = FitControlsRosenblattBicop(
+      backend="normal-quantile", device="cpu"
+    )
+    pair = RosenblattBicop(controls)
+    old = (pair.v_given_ux_, pair.u_given_vx_)
+
+    assert pair.fit(random_uv(), controls) is pair
+    assert pair.v_given_ux_ is not old[0]
+    assert pair.u_given_vx_ is not old[1]
+
+  def test_fit_without_controls_keeps_the_margins(
+    self, register_hermetic_backends: None
+  ) -> None:
+    """Omitting controls keeps the configuration the pair was built with."""
+    del register_hermetic_backends
+    pair = RosenblattBicop(
+      FitControlsRosenblattBicop(
+        backend="normal-quantile", device="cpu", batch_size=23
+      )
+    )
+    old = (pair.v_given_ux_, pair.u_given_vx_)
+
+    pair.fit(random_uv())
+
+    assert pair.batch_size == 23
+    assert (pair.v_given_ux_, pair.u_given_vx_) == old
+
+
 class TestRosenblattBicopValidation:
   @pytest.mark.parametrize(
     "uv",
@@ -120,35 +178,32 @@ class TestRosenblattBicopValidation:
   )
   def test_fit_rejects_invalid_shape(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
     uv: torch.Tensor,
   ) -> None:
     model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
 
     with pytest.raises(ValueError, match=r"shape \(n, 2\)"):
-      model.fit(uv, make_controls(method))
+      model.fit(uv, make_controls())
 
   def test_fit_rejects_covariate_length_mismatch(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
     model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
 
     with pytest.raises(ValueError, match="one row per observation"):
       model.fit(
         random_uv(10),
-        make_controls(method),
+        make_controls(),
         x=torch.zeros((5, 2), dtype=torch.float64),
       )
 
   def test_pdf_rejects_covariate_length_mismatch(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
 
     with pytest.raises(ValueError, match="one row per observation"):
       model.pdf(
@@ -158,8 +213,7 @@ class TestRosenblattBicopValidation:
 
   def test_fit_rejects_boundary_values(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
     uv = torch.tensor(
       [[0.5, 0.3], [0.0, 0.4]],
@@ -168,7 +222,7 @@ class TestRosenblattBicopValidation:
     model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
 
     with pytest.raises(ValueError, match="strictly inside"):
-      model.fit(uv, make_controls(method))
+      model.fit(uv, make_controls())
 
 
 def test_sinkhorn_project_rejects_nonpositive_iterations() -> None:
@@ -179,25 +233,111 @@ def test_sinkhorn_project_rejects_nonpositive_iterations() -> None:
     _sinkhorn_project(density, weights, weights, 0)
 
 
-def test_trapezoidal_weights_singleton_grid() -> None:
-  grid = torch.tensor([0.25], dtype=torch.float64)
+@pytest.mark.parametrize(
+  "grid",
+  [
+    torch.tensor([0.25], dtype=torch.float64),
+    (torch.arange(7, dtype=torch.float64) + 0.5) / 7,
+    torch.tensor([0.1, 0.15, 0.6, 0.95], dtype=torch.float64),
+  ],
+)
+def test_cell_weights_cover_the_unit_interval(grid: torch.Tensor) -> None:
+  """The projection integrates over ``(0, 1)``, not over the grid's span.
 
-  result = RosenblattBicop._trapezoidal_weights(grid)
+  Trapezoidal weights stop at the outermost nodes, so a grid that does not
+  reach the boundary would leave its end cells out of every margin. On a
+  midpoint grid each node is its own cell, of width ``1 / m``.
+  """
+  weights = RosenblattBicop._cell_weights(grid)
 
-  torch.testing.assert_close(
-    result,
-    torch.tensor([1.0], dtype=torch.float64),
+  assert float(weights.sum()) == pytest.approx(1.0)
+  assert bool((weights > 0).all())
+  if grid.shape[0] == 7:
+    torch.testing.assert_close(weights, torch.full_like(grid, 1 / 7))
+
+
+class _FlatDiagonalBackend(ConditionalMargin):
+  """Strong dependence, extrapolated flat beyond the data like a tree.
+
+  ``V | U = u`` is logit-normal around ``logit(u)``, but ``u`` is clamped to
+  ``[0.01, 0.99]`` first, as a fitted tree's prediction freezes past its last
+  split. The density on a row at ``u`` near 0 then sits in the far tail.
+  """
+
+  def _fit_model(self, x: torch.Tensor, z: torch.Tensor) -> None:
+    return None
+
+  def _predict_quantiles(
+    self, x: torch.Tensor, alphas: torch.Tensor
+  ) -> torch.Tensor:
+    center = torch.logit(x[:, :1].clamp(0.01, 0.99))
+    scores = cast("torch.Tensor", torch.special.ndtri(alphas))
+    return center + 0.5 * scores.unsqueeze(0)
+
+
+def test_projection_keeps_the_mass_of_a_flat_extrapolating_backend() -> None:
+  """The projection must not inflate a density it is meant to normalize.
+
+  It was laid on ``[eps, 1 - eps]``, so its outer rows sat at the boundary,
+  where a fitted backend extrapolates flat and its density is orders of
+  magnitude off. Those rows were scaled up as much, and the interpolated
+  scalings carried that to every query near the edge: the projected density
+  integrated to about 3.6 here, and E1's CatBoost fits to up to 4.8.
+  """
+  margin_keys = MarginOptions.__annotations__
+  registry.register_backend(
+    "flat-diagonal",
+    lambda **kw: _FlatDiagonalBackend(
+      **cast("MarginOptions", {k: v for k, v in kw.items() if k in margin_keys})
+    ),
+  )
+  try:
+    model = RosenblattBicop(
+      FitControlsRosenblattBicop(
+        backend="flat-diagonal", device="cpu", projection_grid_size=30
+      )
+    )
+    model.fit(random_uv(50))
+  finally:
+    registry._REGISTRY.pop("flat-diagonal", None)
+  axis = (torch.arange(20, dtype=torch.float64) + 0.5) / 20
+
+  out = model.pdf_by_projection(
+    torch.cartesian_prod(axis, axis), sinkhorn_iters=[None, 20]
   )
 
+  raw, projected = (out[k].reshape(20, 20) for k in (None, 20))
+  assert float(projected.mean()) == pytest.approx(1.0, abs=0.05)
+  row_error = (projected.mean(dim=1) - 1.0).abs().max()
+  assert row_error < (raw.mean(dim=1) - 1.0).abs().max()
 
-@pytest.mark.parametrize("method", ["criterion", "quantiles"])
+
 class TestRosenblattBicopEvaluation:
+  def test_pdf_is_the_exact_symmetric_average(
+    self, register_hermetic_backends: None
+  ) -> None:
+    """The pair density is the average of its two directions, exactly.
+
+    Each direction of the hermetic pair is the logit-normal, so the average is
+    too; a weighting or Jacobian slip anywhere in the pair shows here as a
+    number rather than as a shape.
+    """
+    del register_hermetic_backends
+    pair = RosenblattBicop.from_data(
+      random_uv(),
+      FitControlsRosenblattBicop(backend="normal-quantile", device="cpu"),
+    )
+    y = torch.tensor([0.3, 0.5, 0.7], dtype=torch.float64)
+
+    torch.testing.assert_close(
+      pair.pdf(torch.column_stack((y, y))), normal_density_y(y)
+    )
+
   def test_pdf_returns_positive_tensor(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(12, seed=1)
 
     result = model.pdf(uv)
@@ -210,11 +350,10 @@ class TestRosenblattBicopEvaluation:
 
   def test_pdf_accepts_covariates(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
     train_x = torch.zeros((30, 2), dtype=torch.float64)
-    model = fit_bicop(patch_uniform, method, x=train_x)
+    model = fit_bicop(patch_tabpfn, x=train_x)
 
     result = model.pdf(
       random_uv(8, seed=2),
@@ -225,30 +364,27 @@ class TestRosenblattBicopEvaluation:
 
   def test_log_pdf_matches_pdf(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(8, seed=3)
 
     torch.testing.assert_close(model.log_pdf(uv), torch.log(model.pdf(uv)))
 
   def test_loglik_matches_summed_log_pdf(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(8, seed=4)
 
     torch.testing.assert_close(model.loglik(uv), model.log_pdf(uv).sum())
 
   def test_pdf_grid_matches_pointwise_pdf(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
     u_grid = torch.linspace(0.25, 0.75, 4, dtype=torch.float64)
     v_grid = torch.linspace(0.3, 0.7, 5, dtype=torch.float64)
 
@@ -266,10 +402,9 @@ class TestRosenblattBicopEvaluation:
 
   def test_pdf_grid_rejects_multiple_covariate_rows(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
     grid = torch.linspace(0.2, 0.8, 4, dtype=torch.float64)
 
     with pytest.raises(ValueError, match=r"shape \(p,\) or \(1, p\)"):
@@ -281,10 +416,9 @@ class TestRosenblattBicopEvaluation:
 
   def test_hfuncs_return_probabilities(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(10, seed=5)
 
     first = model.hfunc1(uv)
@@ -297,10 +431,9 @@ class TestRosenblattBicopEvaluation:
 
   def test_inverse_hfuncs_invert_forward_hfuncs(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(10, seed=6)
 
     first_input = torch.column_stack((uv[:, 0], model.hfunc1(uv)))
@@ -321,10 +454,9 @@ class TestRosenblattBicopEvaluation:
 
   def test_cdf_returns_probabilities(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method, cdf_n_int=16)
+    model = fit_bicop(patch_tabpfn, cdf_n_int=16)
 
     result = model.cdf(random_uv(6, seed=7))
 
@@ -333,10 +465,9 @@ class TestRosenblattBicopEvaluation:
 
   def test_cdf_grid_matches_pointwise_cdf(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method, cdf_n_int=32)
+    model = fit_bicop(patch_tabpfn, cdf_n_int=32)
     grid = torch.linspace(0.25, 0.75, 4, dtype=torch.float64)
 
     result = model.cdf_grid(grid, grid, n_int=32)
@@ -351,14 +482,12 @@ class TestRosenblattBicopEvaluation:
     torch.testing.assert_close(result, expected, atol=2e-2, rtol=2e-2)
 
 
-@pytest.mark.parametrize("method", ["criterion", "quantiles"])
 class TestRosenblattBicopSampling:
   def test_sample_is_seeded(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
 
     first = model.sample(10, seeds=[42])
     second = model.sample(10, seeds=[42])
@@ -370,10 +499,9 @@ class TestRosenblattBicopSampling:
 
   def test_qrng_sample_is_seeded(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
 
     first = model.sample(10, qrng=True, seeds=[42])
     second = model.sample(10, qrng=True, seeds=[42])
@@ -382,11 +510,10 @@ class TestRosenblattBicopSampling:
 
   def test_sample_accepts_covariates(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
     train_x = torch.zeros((30, 2), dtype=torch.float64)
-    model = fit_bicop(patch_uniform, method, x=train_x)
+    model = fit_bicop(patch_tabpfn, x=train_x)
 
     result = model.sample(
       8,
@@ -398,10 +525,9 @@ class TestRosenblattBicopSampling:
 
   def test_flip_remains_unsupported(
     self,
-    patch_uniform: None,
-    method: str,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, method)
+    model = fit_bicop(patch_tabpfn)
 
     with pytest.raises(NotImplementedError):
       model.flip()
@@ -410,9 +536,9 @@ class TestRosenblattBicopSampling:
 class TestRosenblattBicopTau:
   def test_tau_is_deterministic_and_bounded(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
 
     first = model.tau(n=100, seeds=[42])
     second = model.tau(n=100, seeds=[42])
@@ -420,17 +546,17 @@ class TestRosenblattBicopTau:
     assert -1.0 <= first <= 1.0
     assert first == pytest.approx(second)
 
-  def test_tau_rejects_small_sample(self, patch_uniform: None) -> None:
-    model = fit_bicop(patch_uniform)
+  def test_tau_rejects_small_sample(self, patch_tabpfn: None) -> None:
+    model = fit_bicop(patch_tabpfn)
 
     with pytest.raises(ValueError, match="at least 10"):
       model.tau(n=9)
 
   def test_tau_rejects_multiple_covariate_rows(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
 
     with pytest.raises(ValueError, match=r"shape \(p,\) or \(1, p\)"):
       model.tau(torch.zeros((2, 1), dtype=torch.float64))
@@ -439,9 +565,9 @@ class TestRosenblattBicopTau:
 class TestSinkhornProjection:
   def test_projection_preserves_shape_and_nonnegativity(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
-    model = fit_bicop(patch_uniform, sinkhorn_iters=3)
+    model = fit_bicop(patch_tabpfn, sinkhorn_iters=3)
     uv = random_uv(10, seed=8)
 
     result = model.pdf(uv)
@@ -449,21 +575,8 @@ class TestSinkhornProjection:
     assert result.shape == (10,)
     assert torch.all(result >= 0.0)
 
-  def test_projection_grid_is_cached(self, patch_uniform: None) -> None:
-    model = fit_bicop(patch_uniform, sinkhorn_iters=3)
-
-    assert model._u_grid_borders_ is not None
-    assert model._v_grid_borders_ is not None
-
-    first_u = model._u_grid_borders_
-    first_v = model._v_grid_borders_
-    model._get_grid_borders()
-
-    assert model._u_grid_borders_ is not first_u
-    assert model._v_grid_borders_ is not first_v
-
-  def test_projection_grid_pdf_is_finite(self, patch_uniform: None) -> None:
-    model = fit_bicop(patch_uniform, sinkhorn_iters=3)
+  def test_projection_grid_pdf_is_finite(self, patch_tabpfn: None) -> None:
+    model = fit_bicop(patch_tabpfn, sinkhorn_iters=3)
     grid = torch.linspace(0.2, 0.8, 8, dtype=torch.float64)
 
     result = model.pdf_grid(grid, grid)
@@ -478,7 +591,7 @@ class TestProjectionSweep:
 
   def test_matches_setting_the_control_and_calling_pdf(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
     """The fast path must answer exactly what the slow one did.
 
@@ -487,7 +600,7 @@ class TestProjectionSweep:
     `sinkhorn_iters` and calling `pdf`, the study's numbers would change on a
     performance fix.
     """
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(8, seed=5)
 
     fast = model.pdf_by_projection(uv, sinkhorn_iters=[None, 2, 5])
@@ -498,7 +611,7 @@ class TestProjectionSweep:
 
   def test_pays_for_the_backend_passes_once(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
     """Sweeping by hand re-ran every inner-backend pass per iteration count.
 
@@ -508,7 +621,7 @@ class TestProjectionSweep:
     for them again each time. That is the whole cost; the Sinkhorn iteration
     reaches no backend.
     """
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(8, seed=5)
     calls = 0
     inner = model.v_given_ux_.pdf_grid
@@ -538,19 +651,34 @@ class TestProjectionSweep:
 
   def test_an_unprojected_entry_needs_no_grid_at_all(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
     """`normalize = ["none"]` is the configured default and must stay free.
 
-    The projection grid is built lazily, so asking only for `None` must not
-    evaluate one -- otherwise the fix for the sweep would have made the
-    common single-entry case slower than it was.
+    The projection grid is evaluated only once some count projects, so asking
+    only for `None` must not reach the backends' grid evaluation at all --
+    otherwise sharing it across a sweep would have made the common
+    single-entry case slower than it was.
     """
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
+    calls = 0
+    inner = model.v_given_ux_.pdf_grid
 
+    def counted(
+      y_grid: torch.Tensor,
+      /,
+      *,
+      x: torch.Tensor,
+      batch_size: int | None = None,
+    ) -> torch.Tensor:
+      nonlocal calls
+      calls += 1
+      return inner(y_grid, x=x, batch_size=batch_size)
+
+    model.v_given_ux_.pdf_grid = counted  # ty: ignore[invalid-assignment]
     model.pdf_by_projection(random_uv(8, seed=5), sinkhorn_iters=[None])
 
-    assert model._u_grid_borders_ is None
+    assert calls == 0
 
 
 class TestPlacement:
@@ -564,8 +692,8 @@ class TestPlacement:
   float32 under a float64 contract.
   """
 
-  def test_prep_normalizes_dtype_and_device(self, patch_uniform: None) -> None:
-    model = fit_bicop(patch_uniform)
+  def test_prep_normalizes_dtype_and_device(self, patch_tabpfn: None) -> None:
+    model = fit_bicop(patch_tabpfn)
 
     placed = model._prep(numpy.asarray([[0.3, 0.4]], dtype=numpy.float32))
 
@@ -574,15 +702,15 @@ class TestPlacement:
 
   @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
   def test_pdf_returns_float64_whatever_it_is_given(
-    self, patch_uniform: None, dtype: torch.dtype
+    self, patch_tabpfn: None, dtype: torch.dtype
   ) -> None:
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
     uv = torch.tensor([[0.3, 0.4], [0.6, 0.7]], dtype=dtype)
 
     assert model.pdf(uv).dtype is torch.float64
 
   def test_covariates_are_placed_alongside_the_observations(
-    self, patch_uniform: None
+    self, patch_tabpfn: None
   ) -> None:
     """A float32 covariate matrix must not poison the feature matrix.
 
@@ -590,7 +718,7 @@ class TestPlacement:
     device mismatch -- and, on one device, a silent downcast -- comes from.
     """
     x = torch.zeros((30, 2), dtype=torch.float64)
-    model = fit_bicop(patch_uniform, x=x)
+    model = fit_bicop(patch_tabpfn, x=x)
 
     out = model.pdf(
       torch.tensor([[0.3, 0.4]], dtype=torch.float32),
@@ -599,7 +727,7 @@ class TestPlacement:
 
     assert out.dtype is torch.float64
 
-  def test_the_inherited_plot_runs(self, patch_uniform: None) -> None:
+  def test_the_inherited_plot_runs(self, patch_tabpfn: None) -> None:
     """``BicopBase.plot`` manufactures a NumPy grid and places it via ``_prep``.
 
     The one path that reaches these estimators with a foreign array type, and
@@ -609,14 +737,14 @@ class TestPlacement:
     matplotlib = pytest.importorskip("matplotlib")
     matplotlib.use("Agg")
 
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
     model.plot(grid_size=8)
 
     matplotlib.pyplot.close("all")
 
-  def test_cdf_grid_accumulates_in_float64(self, patch_uniform: None) -> None:
+  def test_cdf_grid_accumulates_in_float64(self, patch_tabpfn: None) -> None:
     """The cumulative integral used to land in a dtype-less ``torch.zeros``."""
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
     grid = torch.linspace(0.1, 0.9, 5, dtype=torch.float64)
 
     assert model.cdf_grid(grid, grid, n_int=8).dtype is torch.float64
@@ -624,7 +752,7 @@ class TestPlacement:
 
 class TestControlsContract:
   def test_tau_accepts_a_one_dimensional_covariate_row(
-    self, patch_uniform: None
+    self, patch_tabpfn: None
   ) -> None:
     """``(p,)`` is documented, and was rejected.
 
@@ -632,7 +760,7 @@ class TestControlsContract:
     int, so a 1-D row was never reshaped and then tripped the shape check.
     """
     x = torch.zeros((30, 1), dtype=torch.float64)
-    model = fit_bicop(patch_uniform, x=x)
+    model = fit_bicop(patch_tabpfn, x=x)
 
     flat = model.tau(torch.zeros(1, dtype=torch.float64), n=50)
     column = model.tau(torch.zeros((1, 1), dtype=torch.float64), n=50)
@@ -640,10 +768,10 @@ class TestControlsContract:
     assert flat == pytest.approx(column)
 
   def test_an_array_in_the_controls_slot_names_the_argument_order(
-    self, patch_uniform: None
+    self, patch_tabpfn: None
   ) -> None:
     """``fit(uv, x)`` binds covariates to ``controls``; say so."""
-    del patch_uniform
+    del patch_tabpfn
     model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
 
     with pytest.raises(TypeError, match="array where `controls` goes"):
@@ -658,7 +786,7 @@ class TestControlsContract:
 
     class ForeignControls:
       def to_dict(self) -> dict[str, object]:
-        return {"backend": "tabpfn-criterion", "tree_criterion": "tau"}
+        return {"backend": "tabpfn-quantiles", "tree_criterion": "tau"}
 
     with pytest.raises(ValueError, match="cannot honor tree_criterion"):
       RosenblattBicop(ForeignControls())
@@ -668,7 +796,7 @@ class TestControlsContract:
   ) -> None:
     class ForeignControls:
       def to_dict(self) -> dict[str, object]:
-        return {"backend": "tabpfn-criterion", "device": "cpu", "eps": 1e-5}
+        return {"backend": "tabpfn-quantiles", "device": "cpu", "eps": 1e-5}
 
     model = RosenblattBicop(ForeignControls())
 
@@ -710,7 +838,7 @@ class TestTheBicopBaseContract:
   @pytest.mark.parametrize("var_types", [["d", "c"], ["c", "d"], ["d", "d"]])
   def test_fit_refuses_a_discrete_declaration(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
     var_types: list[str],
   ) -> None:
     """`fit` used to `del var_types`, accepting an atom it cannot model.
@@ -721,7 +849,7 @@ class TestTheBicopBaseContract:
     quotient of a trapezoidal integration -- a plausible number from a model
     that estimates no atom.
     """
-    del patch_uniform
+    del patch_tabpfn
     model = RosenblattBicop(FitControlsRosenblattBicop(device="cpu"))
 
     with pytest.raises(ValueError, match="must model continuous pairs"):
@@ -775,7 +903,7 @@ class TestTheBicopBaseContract:
   )
   def test_boundary_values_are_rejected_on_every_inherited_member(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
     name: str,
   ) -> None:
     """A rejection written inside a leaf could never fire.
@@ -784,14 +912,14 @@ class TestTheBicopBaseContract:
     has to sit in that hook. Each public member reaches it through `_atoms`,
     and `loglik` reaches it one level further out through `pdf`.
     """
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
 
     with pytest.raises(ValueError, match="strictly inside"):
       getattr(model, name)(torch.tensor([[0.0, 0.5]], dtype=torch.float64))
 
   def test_hinv_reads_the_backend_quantile_rather_than_bisecting(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
     """`_hinv1_raw` is optional upstream, and the default is far worse.
 
@@ -800,7 +928,7 @@ class TestTheBicopBaseContract:
     passes and returning an approximation of a quantile the backend knows
     exactly.
     """
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(5, seed=11)
 
     result = model.hinv1(uv)
@@ -812,7 +940,7 @@ class TestTheBicopBaseContract:
 
   def test_the_projection_runs_when_the_base_dispatcher_calls(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
     """The Sinkhorn projection used to live in a public `pdf` override.
 
@@ -820,8 +948,8 @@ class TestTheBicopBaseContract:
     pair through the base -- `loglik`, `plot`, and each vine cascade -- which
     a projection left in an override would have skipped.
     """
-    projected = fit_bicop(patch_uniform, sinkhorn_iters=3)
-    plain = fit_bicop(patch_uniform)
+    projected = fit_bicop(patch_tabpfn, sinkhorn_iters=3)
+    plain = fit_bicop(patch_tabpfn)
     uv = random_uv(6, seed=3)
 
     assert not torch.allclose(projected.pdf(uv), plain.pdf(uv))
@@ -829,25 +957,22 @@ class TestTheBicopBaseContract:
 
   def test_the_projection_count_can_be_changed_after_the_fit(
     self,
-    patch_uniform: None,
+    patch_tabpfn: None,
   ) -> None:
     """The study sweeps the projection over one fit and must not refit.
 
     `sinkhorn_iters` moved from a per-call keyword onto the controls, so the
     sweep in `npcc.experiments.runner` now writes the setting between
-    evaluations. That only works because the projection grid is built lazily:
-    a model fitted without projection caches no borders, and a sweep that
-    silently returned the unprojected density would compare a setting against
-    itself.
+    evaluations. That only works because nothing about the projection is
+    fixed at fit time, and a sweep that silently returned the unprojected
+    density would compare a setting against itself.
     """
-    model = fit_bicop(patch_uniform)
+    model = fit_bicop(patch_tabpfn)
     uv = random_uv(5, seed=13)
 
-    assert model._u_grid_borders_ is None
     unprojected = model.pdf(uv).clone()
 
     model.sinkhorn_iters = 3
     projected = model.pdf(uv)
 
-    assert model._u_grid_borders_ is not None
     assert not torch.allclose(unprojected, projected)

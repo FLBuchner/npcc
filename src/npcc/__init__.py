@@ -4,7 +4,6 @@ Every public name is re-exported here and from :mod:`npcc.core`, which is a
 supported import path in its own right.
 """
 
-from npcc.core.backends.tabpfn_criterion import TabPFNCriterionBackend
 from npcc.core.backends.tabpfn_quantile import TabPFNQuantileBackend
 from npcc.core.bicop import RosenblattBicop
 from npcc.core.controls import (
@@ -20,11 +19,7 @@ from npcc.core.errors import (
   NpccError,
   UnknownBackendError,
 )
-from npcc.core.margin import ConditionalMargin
-from npcc.core.margin_quantile_table import (
-  QuantileTableConfig,
-  QuantileTableDistribution1D,
-)
+from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 from npcc.core.registry import (
   BackendSpec,
   available_backends,
@@ -47,11 +42,9 @@ __all__ = [
   "MissingBackendDependencyError",
   "NpccError",
   "QuantileTableConfig",
-  "QuantileTableDistribution1D",
   "RosenblattBicop",
   "RosenblattVinecop",
   "RosenblattVinedist",
-  "TabPFNCriterionBackend",
   "TabPFNQuantileBackend",
   "Transform",
   "UnknownBackendError",

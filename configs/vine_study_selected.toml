@@ -1,0 +1,31 @@
+# E2's selected-structure arm (scripts/paper/README.md, E2):
+# `npcc-vinestudy --config configs/vine_study_selected.toml --out results/vine_<TAG>_selected`.
+#
+# The arm a user without the true structure would fit. Each cell's margins are
+# fitted first; Dissmann's algorithm with TLL pairs then selects a structure
+# on their probability integral transforms, ignoring x (E3d's tll-ns call);
+# and TabPFN v3 fits the pairs on it in a non-simplified context, as the
+# random arm does. The structure depends on the cell's training data, so it
+# varies with n.
+#
+# Every key but `arms` is configs/vine_study.toml's, so each cell has the
+# truth, training data and test points it has there, and
+# scripts/paper/e2/analyze.py pairs the arm with oracle and random through
+# --with.
+
+[grid]
+dims = [3, 5]
+n = [500, 1000]
+n_rep = 20
+arms = ["selected"]
+
+eval_x_n = 5
+eval_m = 1000
+
+projection_grid_size = 30
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }

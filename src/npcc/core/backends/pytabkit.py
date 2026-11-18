@@ -6,7 +6,7 @@ the requested probability levels. Their ordinary ``predict`` method then
 returns the corresponding conditional quantile table.
 
 PDF, CDF, inverse CDF, and grid evaluation are inherited from
-:class:`QuantileTableDistribution1D`.
+:class:`~npcc.core.margin.ConditionalMargin`.
 
 PyTabKit uses a NumPy-facing estimator interface. Input conversion is isolated
 inside this adapter, and predictions are immediately converted back to torch
@@ -18,18 +18,16 @@ This backend requires the ``pytabkit`` optional dependency.
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 import torch
 from pyvinecopulib.core.extend import to_numpy
 
-from npcc.core.margin_quantile_table import (
-  QuantileTableConfig,
-  QuantileTableDistribution1D,
-)
+from npcc.core._transform import Transform
+from npcc.core.margin import ConditionalMargin, QuantileTableConfig
 
 
-class _PyTabKitBackend(QuantileTableDistribution1D):
+class _PyTabKitBackend(ConditionalMargin):
   """Shared PyTabKit quantile-model implementation."""
 
   model_: Any | None  # PyTabKit has multiple unrelated estimator classes.
@@ -37,7 +35,7 @@ class _PyTabKitBackend(QuantileTableDistribution1D):
   def __init__(
     self,
     *,
-    transform: Literal["identity", "logit", "probit"] = "logit",
+    transform: Transform = "logit",
     quantile_table_config: QuantileTableConfig | None = None,
     eps: float = 1e-6,
     device: str | torch.device | None = None,
@@ -94,36 +92,15 @@ class _PyTabKitBackend(QuantileTableDistribution1D):
     x: torch.Tensor,
     alphas: torch.Tensor,
   ) -> torch.Tensor:
-    """Predict one quantile table for a chunk of conditioning rows."""
+    """Predict one quantile table for a chunk of conditioning rows.
+
+    A ``multi_pinball`` model predicts one output column per level.
+    """
     assert self.model_ is not None
 
+    del alphas
     predicted = self.model_.predict(to_numpy(x))
-
-    quantiles = torch.as_tensor(
-      predicted,
-      dtype=x.dtype,
-      device=x.device,
-    )
-
-    n_chunk = x.shape[0]
-    n_alphas = alphas.shape[0]
-    expected_shape = (n_chunk, n_alphas)
-    transposed_shape = (n_alphas, n_chunk)
-
-    if quantiles.ndim == 1:
-      quantiles = quantiles.reshape(expected_shape)
-
-    if quantiles.shape == expected_shape:
-      return quantiles
-
-    if quantiles.shape == transposed_shape:
-      return quantiles.T
-
-    raise RuntimeError(
-      "Unexpected pytabkit quantile shape. "
-      f"Got {quantiles.shape}, expected {expected_shape} "
-      f"or {transposed_shape}."
-    )
+    return self._quantile_rows(predicted, x, levels_first=False)
 
 
 class PyTabKitRealMLPBackend(_PyTabKitBackend):

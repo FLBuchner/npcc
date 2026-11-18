@@ -1,0 +1,30 @@
+# E2 at d = 10 (scripts/paper/README.md, E2):
+# `npcc-vinestudy --config configs/vine_study_d10.toml --out results/vine_d10_<TAG>`.
+#
+# configs/vine_study.toml at d = 10, with all four arms in one run: oracle,
+# random, selected (configs/vine_study_selected.toml's arm) and kde-tll. Every
+# other key is E2's, so the truths, training data and test points are drawn as
+# E2 draws them, at d = 10. §3.4 stops at d = 5; E3d shows structure selection
+# starting to matter at d = 10, without covariates.
+#
+# Tree t's tau band is [TAU_LO, TAU_HI ** t] = [0.05, 0.70 ** t]. At t = 9,
+# 0.70 ** 9 = 0.040 lies below 0.05, so the single tree-9 edge has its tau in
+# [0.040, 0.050], with its regime's shape mirrored: a near-independent pair.
+# Trees 1-8 are as at d <= 5.
+
+[grid]
+dims = [10]
+n = [500, 1000]
+n_rep = 20
+arms = ["oracle", "random", "selected", "tll"]
+
+eval_x_n = 5
+eval_m = 1000
+
+projection_grid_size = 30
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }

@@ -1,0 +1,25 @@
+# E6: clean timings of boostcopula-smooth-cv on E1's clayton / linear cells, 1 rep(s) per n,
+# single-threaded on an otherwise idle machine. The script's own step timers
+# give its fit and evaluation times in runtime.parquet; run by
+# scripts/paper/e6/run_all.sh. See scripts/paper/README.md, E6.
+
+[grid]
+families = ["clayton"]
+tau_scenarios = ["linear"]
+normalize = ["none"]
+n = [200, 500, 1000, 2000]
+n_rep = 1
+projection_grid_size = 30
+conditional_uv_grid_n = 20
+conditional_x_grid_n = 10
+surface_tau_levels = [0.1, 0.4, 0.7]
+surface_families = []
+enable_tau_diagnostics = false
+tau_diagnostic_n = 1000
+
+[[grid.estimators]]
+label = "boostcopula-smooth-cv"
+kind = "external_r"
+backend = "boostCopula"
+transform = "identity"
+script = "r_methods/fit_boostcopula_smooth_cv.R"

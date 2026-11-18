@@ -1,0 +1,45 @@
+# boostCopula with a smooth effect of x -- a cubic B-spline basis,
+# splines::bs(x, df = 9), as its covariates -- stopped by the package's 10-fold
+# cross-validation, on the exact cells and seeds of the bivariate study in
+# `configs/study.toml` (E1). This is the boostCopula arm the paper reports.
+# `configs/study_r_smooth.toml` stops the same model by AIC, which stops
+# penalizing once every basis coefficient is in, and `configs/study_r.toml`
+# (E1b) fits it linear in x, which cannot follow a nonmonotone tau(x).
+#
+#   npcc-simstudy --config configs/study_r_smooth_cv.toml --out results/<run> \
+#     --resume --shard I/K   # once per I in 0..K-1, then once without --shard
+#
+# Run from the repository root: the `script` resolves against the working
+# directory. It needs R with boostCopula and VineCopula on the library path;
+# a cell runs it once, which fits the method and predicts the metric grid and
+# the surface grid from that one fit. The basis, its knots, the controls and the
+# cross-validation are documented in the script; it runs on one thread.
+#
+# The [grid] table below is E1's, key for key, so every cell samples the data
+# and truth E1 scores; `tests/experiments/test_external.py` checks that the two
+# configs agree on everything but the estimators. `projection_grid_size` and
+# `tau_diagnostic_n` are kept for that agreement and do not reach the script.
+
+[grid]
+families = ["clayton", "gaussian"]
+tau_scenarios = ["linear", "sin"]
+normalize = ["none"]
+n = [200, 500, 1000, 2000]
+n_rep = 10
+projection_grid_size = 30
+conditional_uv_grid_n = 20
+conditional_x_grid_n = 10
+surface_tau_levels = [0.1, 0.4, 0.7]
+surface_families = ["clayton", "gaussian"]
+enable_tau_diagnostics = true
+tau_diagnostic_n = 1000
+
+# `backend` names the R package in the result tables; `transform` is
+# "identity" because the script fits on the copula scale.
+
+[[grid.estimators]]
+label = "boostcopula-smooth-cv"
+kind = "external_r"
+backend = "boostCopula"
+transform = "identity"
+script = "r_methods/fit_boostcopula_smooth_cv.R"

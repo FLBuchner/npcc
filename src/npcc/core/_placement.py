@@ -31,10 +31,13 @@ depend on which torch is installed.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 from pyvinecopulib.torch import TensorPlacementMixin
+from pyvinecopulib.utils import sample_uniform
 
-__all__ = ["TensorPlacement", "resolve_device"]
+__all__ = ["TensorPlacement", "default_batch_size", "resolve_device"]
 
 
 def resolve_device(device: str | torch.device | None) -> torch.device:
@@ -63,6 +66,22 @@ def resolve_device(device: str | torch.device | None) -> torch.device:
     resolved = torch.device("cuda", torch.cuda.current_device())
 
   return resolved
+
+
+def default_batch_size(device: torch.device) -> int:
+  """Return the inference chunk size used when a caller names none.
+
+  Parameters
+  ----------
+  device : torch.device
+      The device the chunks are evaluated on.
+
+  Returns
+  -------
+  int
+      2000 rows on CUDA, 400 on any other device.
+  """
+  return 2000 if device.type == "cuda" else 400
 
 
 class TensorPlacement(TensorPlacementMixin):
@@ -99,3 +118,46 @@ class TensorPlacement(TensorPlacementMixin):
         Empty, ``float64``, on ``_device``.
     """
     return torch.empty(0, dtype=torch.float64, device=self._device)
+
+  def _draw_uniform(
+    self,
+    shape: tuple[int, ...],
+    *,
+    qrng: bool = False,
+    seeds: Sequence[int] = (),
+  ) -> torch.Tensor:
+    """Draw base uniforms on this estimator's placement.
+
+    Upstream leaves the sampling hooks unimplemented for every namespace, so
+    each estimator here answers them through this one draw. A pseudo-random
+    draw runs on the estimator's own device, seeded by the first seed when
+    there is one; a quasi-random one is pyvinecopulib's, which only NumPy
+    provides, and is placed afterwards.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        ``(n,)`` or ``(n, d)``; a quasi-random draw needs ``(n, d)``.
+    qrng : bool, default=False
+        Whether to draw a quasi-random sequence.
+    seeds : sequence of int, default=()
+        RNG seeds; empty for an unseeded draw.
+
+    Returns
+    -------
+    torch.Tensor
+        Uniforms on ``[0, 1)``, ``float64`` on ``_device``.
+    """
+    if qrng:
+      n, d = shape
+      return self._prep(sample_uniform(n, d, qrng=True, seeds=list(seeds)))
+
+    generator = torch.Generator(device=self._device)
+    if seeds:
+      generator.manual_seed(int(seeds[0]))
+    else:
+      generator.seed()
+
+    return torch.rand(
+      shape, generator=generator, dtype=torch.float64, device=self._device
+    )

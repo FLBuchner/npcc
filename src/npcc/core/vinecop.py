@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, cast
 
 import numpy as np
 import torch
@@ -90,94 +90,66 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
       self._set_placement(device)
       return
 
-    checked_pairs = self._check_pair_copulas(pair_copulas)
-    self._validate_pair_copulas(checked_pairs)
+    self._install_pairs(pair_copulas, device=device)
 
-    self.pair_copulas = checked_pairs
-    self._set_placement(self._resolve_vine_device(checked_pairs, device=device))
-
-  @staticmethod
-  def _check_pair_copulas(
+  def _install_pairs(
+    self,
     pair_copulas: Sequence[Sequence[BicopLike[torch.Tensor]]],
-  ) -> list[list[RosenblattBicop]]:
-    """Check every pair's implementation and rebuild the nested containers.
+    *,
+    device: str | torch.device | None = None,
+  ) -> None:
+    """Check a pair-copula matrix and adopt it, with the device it lives on.
 
     The pairs themselves are shared, not copied: a caller handing in fitted
     pair copulas keeps them, and the fit engine's output has no other owner.
     Only the lists are this vine's own, so a later mutation of the caller's
     sequence cannot reshape the vine.
+
+    For each pair, the implementation is checked; for the matrix, one tree per
+    truncation level and ``d - tree - 1`` edges in each. The pairs must share
+    one device, which is this vine's; a requested ``device`` must be it.
     """
-    checked: list[list[RosenblattBicop]] = []
+    for pair in (pair for row in pair_copulas for pair in row):
+      if not isinstance(pair, RosenblattBicop):
+        raise TypeError(
+          f"RosenblattVinecop hosts RosenblattBicop pairs; got "
+          f"{type(pair).__name__}."
+        )
+    checked = cast(
+      "list[list[RosenblattBicop]]", [list(row) for row in pair_copulas]
+    )
 
-    for row in pair_copulas:
-      checked_row: list[RosenblattBicop] = []
-
-      for pair in row:
-        if not isinstance(pair, RosenblattBicop):
-          raise TypeError(
-            f"RosenblattVinecop hosts RosenblattBicop pairs; got "
-            f"{type(pair).__name__}."
-          )
-
-        checked_row.append(pair)
-
-      checked.append(checked_row)
-
-    return checked
-
-  def _validate_pair_copulas(
-    self,
-    pair_copulas: list[list[RosenblattBicop]],
-  ) -> None:
-    """Validate the tree and edge dimensions of a pair-copula matrix."""
-    if len(pair_copulas) != self.trunc_lvl:
+    if len(checked) != self.trunc_lvl:
       raise ValueError(
-        f"pair_copulas has {len(pair_copulas)} trees, "
-        f"expected {self.trunc_lvl}."
+        f"pair_copulas has {len(checked)} trees, expected {self.trunc_lvl}."
       )
-
-    for tree, row in enumerate(pair_copulas):
+    for tree, row in enumerate(checked):
       expected_edges = self.d - tree - 1
-
       if len(row) != expected_edges:
         raise ValueError(
           f"pair_copulas tree {tree} has {len(row)} edges, "
           f"expected {expected_edges}."
         )
 
-  def _resolve_vine_device(
-    self,
-    pair_copulas: list[list[RosenblattBicop]],
-    *,
-    device: str | torch.device | None = None,
-  ) -> torch.device:
-    """Infer and validate the common pair-copula device."""
-    pair_devices = {pair._device for row in pair_copulas for pair in row}
-
+    pair_devices = {pair._device for row in checked for pair in row}
     if len(pair_devices) > 1:
-      devices = ", ".join(
-        sorted(str(pair_device) for pair_device in pair_devices)
-      )
+      devices = ", ".join(sorted(str(d) for d in pair_devices))
       raise ValueError(
         f"All pair copulas must use the same device; found: {devices}."
       )
 
-    requested_device = None if device is None else resolve_device(device)
-
+    requested = None if device is None else resolve_device(device)
     if pair_devices:
       pair_device = next(iter(pair_devices))
-
-      if requested_device is not None and requested_device != pair_device:
+      if requested is not None and requested != pair_device:
         raise ValueError(
-          f"Requested vine device {requested_device} does not match "
+          f"Requested vine device {requested} does not match "
           f"pair-copula device {pair_device}."
         )
+      requested = pair_device
 
-      return pair_device
-
-    return (
-      requested_device if requested_device is not None else resolve_device(None)
-    )
+    self.pair_copulas = checked
+    self._set_placement(requested)
 
   def fit(
     self,
@@ -243,11 +215,7 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
     pair_copulas: list[list[BicopLike[torch.Tensor]]],
   ) -> None:
     """Install pair copulas produced by the inherited fit engine."""
-    checked_pairs = self._check_pair_copulas(pair_copulas)
-    self._validate_pair_copulas(checked_pairs)
-
-    self.pair_copulas = checked_pairs
-    self._set_placement(self._resolve_vine_device(checked_pairs))
+    self._install_pairs(pair_copulas)
     # The pairs change here without the structure changing, which is the case
     # `_bind_vine` does not cover, so the base asks an implementation to drop
     # anything it memoized from them -- and names the hook rather than the
@@ -263,21 +231,4 @@ class RosenblattVinecop(TensorPlacement, VinecopBase[torch.Tensor]):
     seeds: list[int],
   ) -> torch.Tensor:
     """Draw base uniforms for inherited vine sampling."""
-    if qrng:
-      from pyvinecopulib.utils import sample_uniform
-
-      draws = sample_uniform(n, self.d, qrng=True, seeds=list(seeds))
-      return self._prep(draws)
-
-    generator = torch.Generator(device=self._device)
-    if seeds:
-      generator.manual_seed(int(seeds[0]))
-    else:
-      generator.seed()
-
-    return torch.rand(
-      (n, self.d),
-      generator=generator,
-      dtype=torch.float64,
-      device=self._device,
-    )
+    return self._draw_uniform((n, self.d), qrng=qrng, seeds=seeds)

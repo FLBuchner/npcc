@@ -1,0 +1,69 @@
+# TabPFN softmax-temperature ablation (supplement).
+#
+# Paired with E1 (configs/study.toml) on E1's cells for n in {500, 2000} and
+# reps 0-4: cell seeds depend only on the cell, so these fits see exactly E1's
+# data. E1 runs every TabPFN release at softmax temperature 1.0, no scaling;
+# this runs v3 and v3.5 at 0.9, the temperature v2.5's and v3's checkpoints
+# default to. Probit only, as E1; no surfaces.
+#
+# Run as in scripts/paper/README.md.
+
+[grid]
+# Copula families (one-parameter): clayton, gumbel, frank, gaussian, joe.
+families = ["clayton", "gaussian"]
+
+# Conditional tau(x) regimes: monotone, symmetric, and nonmonotone.
+tau_scenarios = ["linear", "sin"]
+
+# Sinkhorn normalization variants applied to the density. "none" = off.
+# Kept at "none" only: the projection degenerates (±inf KL) for the sharper
+# tree/parametric densities — hardening it is a separate follow-up.
+normalize = ["none"]
+
+# Training sample sizes and Monte-Carlo repetitions. n_rep = 5 seeds fits an
+# overnight window (~2.06 h/seed measured; ~10.3 h total).
+n = [500, 2000]
+n_rep = 5
+
+# Grid resolution for the (disabled) Sinkhorn projection; unused with
+# normalize = ["none"].
+projection_grid_size = 30
+
+# Inner-backend inference chunk. Omitted = the device-aware default, 2000 on
+# CUDA and 400 on CPU, which is sized for an 8 GB laptop card. On a large
+# accelerator a bigger chunk cuts the number of forward passes; it is the
+# first knob to tune there. It changes throughput and not results, so it is
+# absent from the `--resume` signature and re-tuning it keeps every cell
+# already computed.
+# batch_size = 8192
+
+# Conditional metric grid: 20x20 uv points and 10 x slices.
+conditional_uv_grid_n = 20
+conditional_x_grid_n = 10
+
+# Plot-ready quantities are written only for these Kendall-tau slices and
+# families.
+surface_tau_levels = [0.1, 0.4, 0.7]
+surface_families = []
+
+# Kendall's tau diagnostics are sample-based and comparatively expensive.
+enable_tau_diagnostics = true
+tau_diagnostic_n = 1000
+
+# Estimators: each is a registry backend + support transform + optional
+# per-estimator `backend_kwargs` (see `npcc.available_backends()`). TabPFN model
+# version (v2.5 / v3 / v3.5) is a hyperparameter, not a distinct backend. Non-TabPFN
+# backends need their optional extra installed (`uv sync --extra cu130 --extra
+# backends`; Nori via the fork, see pyproject.toml).
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-temp0.9-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 0.9 } }
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3.5-temp0.9-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3.5", model_kwargs = { softmax_temperature = 0.9 } }

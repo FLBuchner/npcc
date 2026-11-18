@@ -1,0 +1,81 @@
+# E1c: two scenarios whose dependence changes shape with x, not only strength,
+# so that one parametric family with a smooth tau(x) -- gamCopula's model, run
+# on the same cells by `configs/study_misspec_r.toml` -- is misspecified.
+#
+# - clayton-gumbel-mix (M1, a tail transition): c(u, v | x) is
+#   (1 - x) c_Clayton(u, v) + x c_Gumbel(u, v), both at tau = 0.5, so the
+#   dependence moves from the lower tail to the upper one while tau stays
+#   within 0.002 of 0.5.
+# - student-varying-nu (M2, varying tails at a fixed tau): a Student t copula
+#   with rho = sin(pi / 4), so tau = 0.5 at every x, and
+#   nu(x) = exp{log 2 + x (log 50 - log 2)}, from 2 at x = 0 to 50 at x = 1.
+#
+# Both take the tau_scenario "implied": a shape family's tau(x) is its own,
+# given in closed form in `npcc.experiments.scenarios`, and is what the tau
+# diagnostics score against. The scored x grid, the uv grid, the metrics and
+# the diagnostics are E1's (`configs/study.toml`). Surfaces are stored at the x
+# values in `surface_x` rather than at target tau levels, since a tau that
+# barely moves (M1) or does not move (M2) picks out no x.
+#
+# Run from the repository root, sharded as in `scripts/paper/README.md`:
+#
+#   OUT=results/<run>
+#   for i in 0 1 2 3; do
+#     OMP_NUM_THREADS=4 OMP_WAIT_POLICY=PASSIVE \
+#       uv run --no-sync npcc-simstudy --config configs/study_misspec.toml \
+#       --out $OUT --workers 1 --resume --shard $i/4 --gpu-mem-fraction 0.9 &
+#   done; wait
+#   uv run --no-sync npcc-simstudy --config configs/study_misspec.toml \
+#     --out $OUT --resume
+#
+# `configs/study_misspec_r.toml` holds the same [grid] table, key for key;
+# `tests/experiments/test_config.py` checks that the two agree.
+
+[grid]
+families = ["clayton-gumbel-mix", "student-varying-nu"]
+tau_scenarios = ["implied"]
+normalize = ["none"]
+n = [200, 500, 1000, 2000]
+n_rep = 10
+projection_grid_size = 30
+conditional_uv_grid_n = 20
+conditional_x_grid_n = 10
+surface_x = [0.1, 0.5, 0.9]
+surface_families = ["clayton-gumbel-mix", "student-varying-nu"]
+enable_tau_diagnostics = true
+tau_diagnostic_n = 1000
+
+# E1's backends at the probit transform, under E1's labels, so each
+# estimator_id is the one E1 reports. TabPFN's model version and softmax
+# temperature are backend_kwargs entries, as in E1.
+
+[[grid.estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[grid.estimators]]
+label = "tabicl-probit"
+backend = "tabicl"
+transform = "probit"
+
+[[grid.estimators]]
+label = "nori-probit"
+backend = "nori"
+transform = "probit"
+
+[[grid.estimators]]
+label = "lightgbm-probit"
+backend = "lightgbm"
+transform = "probit"
+
+[[grid.estimators]]
+label = "xgboost-probit"
+backend = "xgboost"
+transform = "probit"
+
+[[grid.estimators]]
+label = "catboost-probit"
+backend = "catboost"
+transform = "probit"

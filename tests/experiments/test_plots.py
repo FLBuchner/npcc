@@ -12,7 +12,7 @@ from npcc.experiments.plots import metric_boxplot_by_n
 def test_metric_boxplot_by_n_groups_repetitions_by_model_and_n() -> None:
   rows = []
   for n in (100, 200):
-    for label in ("tabpfn-criterion-logit", "tabpfn-quantiles-logit"):
+    for label in ("lightgbm-logit", "tabpfn-quantiles-logit"):
       for rep in (0, 1, 2):
         for x in (0.25, 0.75):
           rows.append(
@@ -49,7 +49,7 @@ def test_metric_boxplot_by_n_groups_repetitions_by_model_and_n() -> None:
   )
   assert legend_anchor.x0 == pytest.approx(1.02)
   assert [text.get_text() for text in legend.get_texts()] == [
-    "label=tabpfn-criterion-logit, normalize=none",
+    "label=lightgbm-logit, normalize=none",
     "label=tabpfn-quantiles-logit, normalize=none",
   ]
 
@@ -61,7 +61,7 @@ def test_metric_boxplot_by_n_ignores_missing_metric_values() -> None:
       "tau_scenario": ["constant", "constant"],
       "quantity": ["pdf", "pdf"],
       "n": [100, 100],
-      "label": ["tabpfn-criterion-logit", "tabpfn-criterion-logit"],
+      "label": ["lightgbm-logit", "lightgbm-logit"],
       "normalize": ["none", "none"],
       "rep": [0, 1],
       "IAE": [0.2, float("nan")],
@@ -93,7 +93,7 @@ def test_metric_boxplot_by_n_filters_each_model_attribute() -> None:
         "rep": 0,
         "ISE": 0.1,
       }
-      for label in ("tabpfn-criterion-logit", "tabpfn-quantiles-logit")
+      for label in ("lightgbm-logit", "tabpfn-quantiles-logit")
       for normalize in ("none", "5")
     ]
   )
@@ -104,7 +104,7 @@ def test_metric_boxplot_by_n_filters_each_model_attribute() -> None:
     tau_scenario="constant",
     quantity="pdf",
     metric="ISE",
-    label=["tabpfn-criterion-logit", "tabpfn-quantiles-logit"],
+    label=["lightgbm-logit", "tabpfn-quantiles-logit"],
     normalize="5",
   )
 
@@ -112,6 +112,6 @@ def test_metric_boxplot_by_n_filters_each_model_attribute() -> None:
   legend = ax.get_legend()
   assert legend is not None
   assert [text.get_text() for text in legend.get_texts()] == [
-    "label=tabpfn-criterion-logit, normalize=5",
+    "label=lightgbm-logit, normalize=5",
     "label=tabpfn-quantiles-logit, normalize=5",
   ]

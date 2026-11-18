@@ -8,23 +8,21 @@ import pytest
 import torch
 from pyvinecopulib.core import ControlsLike
 
-from npcc.core.bicop import RosenblattBicop
-from npcc.core.controls import (
+from npcc.core import (
   FitControlsRosenblattBicop,
   FitControlsRosenblattVinecop,
-  Transform,
-)
-from npcc.core.errors import (
   InvalidBackendKwargsError,
+  QuantileTableConfig,
+  RosenblattBicop,
+  Transform,
   UnknownBackendError,
 )
-from npcc.core.margin_quantile_table import QuantileTableConfig
 
 
 def test_bicop_controls_defaults() -> None:
   controls = FitControlsRosenblattBicop()
 
-  assert controls.backend == "tabpfn-criterion"
+  assert controls.backend == "tabpfn-quantiles"
   assert controls.eps == 1e-6
   assert controls.transform == "logit"
   assert controls.device is None
@@ -86,8 +84,9 @@ def test_to_dict_returns_backend_kwargs_copy() -> None:
 
 def test_to_dict_contains_all_settings() -> None:
   controls = FitControlsRosenblattBicop(
-    backend="tabpfn-criterion",
+    backend="tabpfn-quantiles",
     transform="probit",
+    feature_transform="probit",
     device="cpu",
     batch_size=64,
     backend_kwargs={"model_version": "v2.5"},
@@ -99,10 +98,11 @@ def test_to_dict_contains_all_settings() -> None:
   settings = controls.to_dict()
 
   assert settings == {
-    "backend": "tabpfn-criterion",
+    "backend": "tabpfn-quantiles",
     "quantile_table_config": controls.quantile_table_config,
     "eps": 1e-6,
     "transform": "probit",
+    "feature_transform": "probit",
     "device": torch.device("cpu"),
     "batch_size": 64,
     "backend_kwargs": {"model_version": "v2.5"},

@@ -1,0 +1,31 @@
+# E2b, GAM vines on E2's cells (scripts/paper/README.md, E2):
+# `npcc-vinestudy --config configs/vine_study_gamvine_d10.toml --device cpu --out results/vine_gamvine_d10_<TAG>`.
+#
+# The competitors of R's gamCopula on configs/vine_study_d10.toml's cells: the
+# same dims, n, n_rep and evaluation keys, so each cell has the truth,
+# training sample and test points it has there, and
+# scripts/paper/e2/analyze.py pairs the run with E2's through --with. Each arm
+# is one run of r_methods/fit_gamvine.R per cell: mgcv margins
+# gam(y_j ~ s(x)), and a GAM vine with x a smooth term in every pair, at
+# E1b's gamCopula settings --
+#   gamvine-oracle    gamVineCopSelect on the true structure, simplified
+#   gamvine-selected  gamVineStructureSelect, simplified, treecrit = "tau"
+#   gamvine-ns        gamVineStructureSelect, not simplified
+# Run from the repository root, where `gamvine_script` resolves, with R,
+# gamCopula, mgcv and VineCopula on the library path; each script runs on one
+# core with OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1.
+# configs/vine_study_gamvine.toml is the same at d = 3 and 5, and the _n2000
+# configs at n = 2000, for E2d's cells.
+
+[grid]
+dims = [10]
+n = [500, 1000]
+n_rep = 20
+arms = ["gamvine-oracle", "gamvine-selected", "gamvine-ns"]
+
+eval_x_n = 5
+eval_m = 1000
+
+projection_grid_size = 30
+
+gamvine_script = "r_methods/fit_gamvine.R"

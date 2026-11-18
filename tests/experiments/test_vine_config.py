@@ -2,21 +2,145 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
 
+from npcc.experiments.config import load_grid
 from npcc.experiments.vine_config import VineGridConfig, load_vine_grid
+
+_CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
 
 def test_shipped_vine_config_loads() -> None:
-  """The committed vine config must load and match the study design."""
-  cfg_path = Path(__file__).resolve().parents[2] / "configs" / "vine_study.toml"
-  grid = load_vine_grid(cfg_path)
+  """The committed vine config must load and fit E1's main-text estimator.
+
+  The vine study reports the backend and transform of E1's main text; one
+  that drifted from E1's estimator id would describe a different model.
+  """
+  grid = load_vine_grid(_CONFIGS / "vine_study.toml")
   assert grid.dims == [3, 5]
   assert grid.n_rep == 20
   assert grid.arms == ["oracle", "random", "tll"]
-  assert grid.estimators
+  assert [e.label for e in grid.estimators] == ["tabpfn-quantiles-v3-probit"]
+  e1 = load_grid(_CONFIGS / "study.toml")
+  assert {e.estimator_id for e in grid.estimators} <= {
+    e.estimator_id for e in e1.estimators
+  }
+
+
+def test_the_selected_arm_runs_on_e2s_cells() -> None:
+  """The selected arm must fit E2's cells with E2's estimator.
+
+  It runs from its own config and is paired with the oracle and random arms
+  of E2's run, so any other drift from ``vine_study.toml`` would score it on
+  other data, test points or pair copulas.
+  """
+  e2 = load_vine_grid(_CONFIGS / "vine_study.toml")
+  selected = load_vine_grid(_CONFIGS / "vine_study_selected.toml")
+  assert selected.arms == ["selected"]
+  for f in fields(VineGridConfig):
+    if f.name != "arms":
+      assert getattr(selected, f.name) == getattr(e2, f.name), f.name
+
+
+def test_e2_at_d10_is_e2_at_another_dimension() -> None:
+  """E2 at d = 10 must differ from E2 only in its dimension and its arms.
+
+  Any other drift -- the sample sizes, repetitions, evaluation points,
+  projection grid or estimator -- would make its numbers incomparable with
+  §3.4's at d <= 5.
+  """
+  e2 = load_vine_grid(_CONFIGS / "vine_study.toml")
+  d10 = load_vine_grid(_CONFIGS / "vine_study_d10.toml")
+  assert d10.dims == [10]
+  assert d10.arms == ["oracle", "random", "selected", "tll"]
+  for f in fields(VineGridConfig):
+    if f.name not in {"dims", "arms"}:
+      assert getattr(d10, f.name) == getattr(e2, f.name), f.name
+
+
+@pytest.mark.parametrize(
+  ("name", "dims", "e2_name"),
+  [
+    ("vine_study_n2000.toml", [3, 5], "vine_study.toml"),
+    ("vine_study_d10_n2000.toml", [10], "vine_study_d10.toml"),
+  ],
+)
+def test_e2d_is_e2_at_n_2000(name: str, dims: list[int], e2_name: str) -> None:
+  """E2d must differ from E2 at its dimension only in n and the arms.
+
+  Its cells pair with E2's at n = 500 and 1000 by (d, rep), which holds only
+  while the repetitions, evaluation points, projection grid and estimator
+  are E2's; a drift in any would score n = 2000 on other test points or
+  another model.
+  """
+  e2 = load_vine_grid(_CONFIGS / e2_name)
+  e2d = load_vine_grid(_CONFIGS / name)
+  assert e2d.dims == dims == e2.dims
+  assert e2d.n == [2000]
+  assert e2d.arms == ["oracle", "random", "selected", "tll"]
+  for f in fields(VineGridConfig):
+    if f.name not in {"n", "arms"}:
+      assert getattr(e2d, f.name) == getattr(e2, f.name), f.name
+
+
+@pytest.mark.parametrize(
+  ("name", "dims", "e2_name"),
+  [
+    ("vine_study_mixture.toml", [3, 5], "vine_study.toml"),
+    ("vine_study_mixture_d10.toml", [10], "vine_study_d10.toml"),
+  ],
+)
+def test_e10_mixtures_run_on_e2s_cells(
+  name: str, dims: list[int], e2_name: str
+) -> None:
+  """E10's mixtures must fit E2's cells with E2's estimator.
+
+  The mixture is read against E2's arms at the same (d, n, rep), and its
+  first member against the selected arm there; any other drift would score
+  it on other data, test points or pair copulas.
+  """
+  e2 = load_vine_grid(_CONFIGS / e2_name)
+  e10 = load_vine_grid(_CONFIGS / name)
+  assert e10.dims == dims == e2.dims
+  assert e10.n == [500, 1000, 2000]
+  assert e10.arms == ["mixture"]
+  assert e10.mixture_k == 5
+  for f in fields(VineGridConfig):
+    if f.name not in {"n", "arms", "mixture_k"}:
+      assert getattr(e10, f.name) == getattr(e2, f.name), f.name
+
+
+@pytest.mark.parametrize(
+  ("name", "dims", "e2_name"),
+  [
+    ("vine_study_chain.toml", [5], "vine_study.toml"),
+    ("vine_study_chain_d10.toml", [10], "vine_study_d10.toml"),
+  ],
+)
+def test_e11_chains_run_on_e2s_cells(
+  name: str, dims: list[int], e2_name: str
+) -> None:
+  """E11's chains must fit E2's cells with E2's estimator.
+
+  The chain is read against E2's arms and E10's mixture at the same
+  (d, n, rep), so a drift in the repetitions, evaluation points, projection
+  grid or estimator would score it on other test points or pair copulas,
+  and the analysis would refuse to pair it.
+  """
+  e2 = load_vine_grid(_CONFIGS / e2_name)
+  e11 = load_vine_grid(_CONFIGS / name)
+  assert e11.dims == dims
+  assert set(dims) <= set(e2.dims)
+  assert e11.n == [1000]
+  assert set(e11.n) <= set(e2.n)
+  assert e11.arms == ["chain"]
+  assert e11.chain_k == 5
+  for f in fields(VineGridConfig):
+    if f.name not in {"dims", "n", "arms", "chain_k"}:
+      assert getattr(e11, f.name) == getattr(e2, f.name), f.name
 
 
 @pytest.mark.parametrize(
@@ -26,10 +150,20 @@ def test_shipped_vine_config_loads() -> None:
     ({"arms": ["tll", "tll"]}, "arms must be unique"),
     ({"dims": [1]}, "dims must be"),
     ({"eval_m": 5}, "eval_m must be"),
+    ({"mixture_k": 0}, "mixture_k must be"),
+    ({"chain_k": 0}, "chain_k must be"),
+    (
+      {"arms": ["gamvine-ns"], "gamvine_script": "missing.R"},
+      "gamvine_script must name an existing file",
+    ),
   ],
 )
 def test_bad_grid_is_refused(overrides: dict[str, object], match: str) -> None:
-  """An unknown or repeated arm would silently drop or double-count a column."""
+  """An unknown or repeated arm would silently drop or double-count a column.
+
+  A GAM-vine arm without its script would fail every fit, each recorded as
+  the method's failure.
+  """
   kwargs: dict[str, object] = {
     "dims": [3],
     "n": [40],
@@ -40,3 +174,34 @@ def test_bad_grid_is_refused(overrides: dict[str, object], match: str) -> None:
   kwargs.update(overrides)
   with pytest.raises(ValueError, match=match):
     VineGridConfig(**kwargs)  # ty: ignore[invalid-argument-type] - mistyped values exercise the guard
+
+
+@pytest.mark.parametrize(
+  ("config", "e2", "n"),
+  [
+    ("vine_study_gamvine.toml", "vine_study.toml", None),
+    ("vine_study_gamvine_d10.toml", "vine_study_d10.toml", None),
+    ("vine_study_gamvine_n2000.toml", "vine_study.toml", [2000]),
+    ("vine_study_gamvine_d10_n2000.toml", "vine_study_d10.toml", [2000]),
+  ],
+)
+def test_the_gam_vines_run_on_e2s_cells(
+  monkeypatch: pytest.MonkeyPatch, config: str, e2: str, n: list[int] | None
+) -> None:
+  """Each GAM-vine run must hold E2's cells, so --with can pair it.
+
+  Each pairs with one E2 run -- d = 3 and 5 or d = 10, at n = 500 and 1000
+  or, as E2d, at 2000 -- by cell, so a dimension, repetition count or
+  evaluation key that drifted would score its arms on other truths or test
+  points, which the analysis would then refuse.
+  """
+  monkeypatch.chdir(_CONFIGS.parent)
+  grid = load_vine_grid(_CONFIGS / config)
+  reference = load_vine_grid(_CONFIGS / e2)
+  assert grid.arms == ["gamvine-oracle", "gamvine-selected", "gamvine-ns"]
+  assert grid.estimators == []
+  assert grid.n == (reference.n if n is None else n)
+  for f in fields(VineGridConfig):
+    if f.name not in {"arms", "estimators", "n", "gamvine_script_sha256"}:
+      assert getattr(grid, f.name) == getattr(reference, f.name), f.name
+  assert grid.gamvine_script_sha256 is not None

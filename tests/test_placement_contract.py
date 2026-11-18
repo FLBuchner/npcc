@@ -22,13 +22,14 @@ import torch
 from pyvinecopulib import RVineStructure
 from pyvinecopulib.core.extend import prepare_covariates
 
+from npcc.core import (
+  FitControlsRosenblattBicop,
+  RosenblattBicop,
+  RosenblattVinecop,
+  RosenblattVinedist,
+)
 from npcc.core._placement import TensorPlacement, resolve_device
-from npcc.core.bicop import RosenblattBicop
-from npcc.core.controls import FitControlsRosenblattBicop
-from npcc.core.margin_quantile_table import QuantileTableConfig
-from npcc.core.registry import create_backend
-from npcc.core.vinecop import RosenblattVinecop
-from npcc.core.vinedist import RosenblattVinedist
+from tests.conftest import NormalQuantileBackend
 
 
 def _cuda_available() -> bool:
@@ -79,33 +80,17 @@ def _estimators(device: str) -> dict[str, TensorPlacement]:
       The four estimators, keyed by a short name. Typed by the mixin they
       share, which is what carries ``_prep`` and ``_placement_ref``.
   """
-  controls = FitControlsRosenblattBicop(backend="uniform-native", device=device)
-  margin = create_backend(
-    "uniform-native",
-    transform="identity",
-    quantile_table_config=controls.quantile_table_config
-    or QuantileTableConfig(),
-    eps=controls.eps,
-    device=device,
-    batch_size=None,
+  controls = FitControlsRosenblattBicop(
+    backend="normal-quantile", device=device
   )
   structure = RVineStructure.from_order([1, 2, 3])
   vinecop = RosenblattVinecop(None, structure, device=device)
   margins = [
-    create_backend(
-      "uniform-native",
-      transform="identity",
-      quantile_table_config=controls.quantile_table_config
-      or QuantileTableConfig(),
-      eps=controls.eps,
-      device=device,
-      batch_size=None,
-    )
-    for _ in range(3)
+    NormalQuantileBackend(transform="identity", device=device) for _ in range(3)
   ]
   return {
     "bicop": RosenblattBicop(controls),
-    "margin": margin,
+    "margin": NormalQuantileBackend(transform="identity", device=device),
     "vinecop": vinecop,
     "vinedist": RosenblattVinedist(vinecop, margins),
   }
@@ -114,12 +99,12 @@ def _estimators(device: str) -> dict[str, TensorPlacement]:
 @pytest.mark.parametrize("name", ["bicop", "margin", "vinecop", "vinedist"])
 @pytest.mark.parametrize("device", _DEVICES)
 def test_place_finds_every_estimators_placement(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
   device: str,
   name: str,
 ) -> None:
   """A host NumPy covariate block arrives placed, through the hook."""
-  del register_uniform_backends
+  del register_hermetic_backends
 
   expected = resolve_device(device)
   estimator = _estimators(device)[name]
@@ -135,7 +120,7 @@ def test_place_finds_every_estimators_placement(
 
 @pytest.mark.parametrize("name", ["bicop", "margin", "vinecop", "vinedist"])
 def test_every_estimator_declares_its_placement(
-  register_uniform_backends: None,
+  register_hermetic_backends: None,
   name: str,
 ) -> None:
   """The declaration is ``_ref_tensor``, not an array the object happens to hold.
@@ -146,7 +131,7 @@ def test_every_estimator_declares_its_placement(
   last would silently put a CUDA estimator's inputs on the host. The override
   is what makes the second step the one that answers.
   """
-  del register_uniform_backends
+  del register_hermetic_backends
 
   estimator = _estimators("cpu")[name]
   reference = estimator._ref_tensor()
@@ -182,3 +167,34 @@ def test_prep_keeps_a_gradient_whatever_torch_is_installed(
   assert placed.dtype is torch.float64
   assert placed.requires_grad
   assert placed.grad_fn is not None or placed is tracked
+
+
+def test_resolve_device_keeps_an_explicit_choice() -> None:
+  """A named device, as text or as an object, is the device used."""
+  assert resolve_device("cpu") == torch.device("cpu")
+  assert resolve_device(torch.device("cpu")) == torch.device("cpu")
+
+
+@pytest.mark.parametrize("name", ["bicop", "margin", "vinecop"])
+@pytest.mark.parametrize("device", _DEVICES)
+def test_base_uniforms_are_drawn_seeded_on_the_estimators_device(
+  register_hermetic_backends: None,
+  device: str,
+  name: str,
+) -> None:
+  """Every estimator's sampling hook draws on its own device, reproducibly.
+
+  The hook is upstream's to call and this package's to answer, once for all
+  three levels; a draw on the host would meet a CUDA cascade in its first
+  concatenation, and an unseeded one would make ``sample(seeds=...)`` a lie.
+  """
+  del register_hermetic_backends
+  estimator = _estimators(device)[name]
+  draw = estimator._draw_uniform
+
+  first = draw((5, 2), seeds=[7])
+
+  assert first.device == resolve_device(device)
+  assert first.dtype is torch.float64
+  torch.testing.assert_close(first, draw((5, 2), seeds=[7]))
+  assert draw((5, 2), qrng=True, seeds=[7]).device == resolve_device(device)
