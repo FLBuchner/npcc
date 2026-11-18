@@ -476,7 +476,14 @@ def write_margin(
 
 
 def read_marginal_set(
-  out: Path, station: int, model: str, *, train_pits: str = "in_sample"
+  out: Path,
+  station: int,
+  model: str,
+  *,
+  train_pits: str = "in_sample",
+  modeled: Sequence[str] | None = None,
+  derived: Sequence[str] | None = None,
+  derivation: Derivation | None = None,
 ) -> MarginalSet:
   """One station's saved predictions from one marginal model.
 
@@ -491,16 +498,25 @@ def read_marginal_set(
   train_pits : {"in_sample", "out_of_fold"}, default="in_sample"
       Which training PITs the set carries: the stored ``pit`` of the
       training rows, or their ``pit_out_of_fold``.
+  modeled : sequence of str, optional
+      The responses the set carries, a subset of those the unit fitted, as
+      a copula design names them; the unit's own list when omitted.
+  derived : sequence of str, optional
+      The responses derived from them; the unit's own list when ``modeled``
+      is omitted, and none otherwise.
+  derivation : Derivation, optional
+      The derivations' Magnus formula; the unit's own when omitted.
 
   Returns
   -------
   MarginalSet
-      What a copula arm reads.
+      What a copula arm reads, its responses in the data's order.
 
   Raises
   ------
   ValueError
-      If ``train_pits`` is ``"out_of_fold"`` and the unit stored none.
+      If ``train_pits`` is ``"out_of_fold"`` and the unit stored none, or
+      ``modeled`` names a response the unit did not fit.
   """
   if train_pits not in ("in_sample", "out_of_fold"):
     raise ValueError(
@@ -517,9 +533,21 @@ def read_marginal_set(
   levels = np.asarray(info["levels"], dtype=np.float64)
   # A unit of the default design records neither list: it models every
   # response and derives none.
-  modeled = tuple(info.get("modeled", data.variables))
-  derived = tuple(info.get("derived", ()))
-  derivation = Derivation(**info.get("derivation", {}))
+  fitted = tuple(info.get("modeled", data.variables))
+  if modeled is None:
+    modeled = fitted
+    derived = tuple(info.get("derived", ()))
+  else:
+    stray = [v for v in modeled if v not in fitted]
+    if stray:
+      raise ValueError(
+        f"modeled must be drawn from the responses station {station}'s "
+        f"{model} unit fitted, {list(fitted)}; got {stray}"
+      )
+    modeled = tuple(v for v in data.variables if v in set(modeled))
+    derived = tuple(v for v in data.variables if v in set(derived or ()))
+  if derivation is None:
+    derivation = Derivation(**info.get("derivation", {}))
   modeled_columns = [data.column(v) for v in modeled]
   derived_columns = [data.column(v) for v in derived]
   predictions = pd.read_parquet(unit / "predictions.parquet")
@@ -690,6 +718,7 @@ def write_copula(
   seed: int,
   wall_seconds: float,
   save_draws: bool = False,
+  nll_column: str | None = None,
 ) -> None:
   """Write one copula arm's results on one marginal set, as a unit.
 
@@ -711,8 +740,13 @@ def write_copula(
   wall_seconds : float
       How long the call took.
   save_draws : bool, default=False
-      Whether to also write ``draws.parquet``, every sampled result's draws
-      (:func:`draws_frame`).
+      Whether to also write ``draws.parquet``, the arm's draws
+      (:func:`draws_frame`); a mixture member's are not stored.
+  nll_column : str, optional
+      The log score's column: ``joint_nll_<design>`` for an arm of another
+      design of the copula stage. When omitted, ``joint_nll_modeled`` with
+      derived responses, whose log score covers the modeled ones only, and
+      ``joint_nll`` otherwise.
   """
   n_test = len(ms.y_test)
   if np.shape(rows) != (n_test,):
@@ -727,8 +761,12 @@ def write_copula(
       f"{arm} must return results with distinct arm names; got {names}"
     )
   # With derived responses, the log score covers the modeled ones only and
-  # is named so, apart from a log score of every response.
-  nll = "joint_nll_modeled" if ms.derived else "joint_nll"
+  # is named so, apart from a log score of every response; another design's
+  # is named for the design, so no table puts the two in one column.
+  if nll_column is not None:
+    nll = nll_column
+  else:
+    nll = "joint_nll_modeled" if ms.derived else "joint_nll"
   for result in results:
     columns = {
       "logcop": result.logcop_test,
@@ -819,7 +857,11 @@ def write_copula(
       r.arm: {"timings": dict(r.timings), "info": dict(r.info)} for r in results
     },
   }
-  draws = draws_frame(ms, arm, results, rows=rows) if save_draws else None
+  draws = (
+    draws_frame(ms, arm, [r for r in results if r.arm == arm], rows=rows)
+    if save_draws
+    else None
+  )
   with _unit(copula_dir(out, ms.station, ms.model, arm)) as temporary:
     pd.concat(frames, ignore_index=True).to_parquet(
       temporary / "scores.parquet", index=False
@@ -919,6 +961,11 @@ def draws_frame(
           **{v: flat[:, j] for j, v in enumerate(variables)},
         }
       )
+    )
+  if not frames:
+    raise ValueError(
+      f"{arm} must return a sampled result to store draws of; got "
+      f"{[r.arm for r in results]}"
     )
   return pd.concat(frames, ignore_index=True)
 

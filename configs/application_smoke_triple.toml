@@ -24,13 +24,6 @@ min_cases = 20
 # all the covariates.
 models = ["emos-seasonal", "tabpfn-quantiles-all"]
 n_levels = 199
-# The copulas' training PITs come from margins fitted without the case's
-# initialization year, leave one year out over the four training years. A
-# margin evaluated at its own training cases crowds their PITs toward 0.5:
-# in the full run at dc09eaf, TabPFN's in-sample training PITs had SD 0.26
-# to 0.27 against a uniform 0.289, EMOS's 0.288. The test predictions stay
-# those of the margin fitted on every training case.
-train_pits = "out_of_fold"
 
 # The measured triple. T, RH and p are measured, stored exactly on a 0.1
 # grid; the dew point and the mixing ratio are computed from them
@@ -64,11 +57,6 @@ arms = [
 n_draws = 200
 sample_batch_size = 5000
 mixture_k = 5
-# Every scored result's draws of all five responses, per test case, are
-# stored beside its scores as draws.parquet (float32, zstd): 363 test cases
-# x 200 draws x 5 responses x 4 bytes, about 1.45 MB per sampled result and
-# station before compression.
-save_draws = true
 
 # `--device` overrides every entry. A backend left out picks its own: CUDA
 # where there is one.

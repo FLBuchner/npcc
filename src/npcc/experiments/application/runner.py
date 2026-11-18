@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from pathlib import Path
 from time import perf_counter
@@ -32,13 +32,18 @@ import pyarrow.parquet as pq
 
 from npcc.core.errors import MissingBackendDependencyError
 from npcc.experiments._study import derive_seed, release_gpu
-from npcc.experiments.application.config import ApplicationConfig
+from npcc.experiments.application.config import (
+  ARM_DESIGN,
+  ApplicationConfig,
+  split_arm,
+)
 from npcc.experiments.application.data import (
   feature_columns,
   load_station,
   station_ids,
 )
 from npcc.experiments.application.derived import residuals
+from npcc.experiments.application.marginal_set import MarginalSet
 from npcc.experiments.application.margins import build_predictor, fit_station
 from npcc.experiments.application.scores import (
   copula_tables,
@@ -213,7 +218,7 @@ def _check_arms(arms: Sequence[str]) -> None:
   """Refuse an arm the copula stage does not know, before fitting any."""
   from npcc.experiments.application.copulas import COPULA_ARMS
 
-  unknown = [a for a in arms if a not in COPULA_ARMS]
+  unknown = [a for a in arms if split_arm(a)[0] not in COPULA_ARMS]
   if unknown:
     raise ValueError(
       f"copula arms must be drawn from {list(COPULA_ARMS)}; got {unknown}"
@@ -449,7 +454,7 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
   for station in stations:
     rows = read_station_data(out, station).row_test
     for model, model_arms in units.items():
-      ms = read_marginal_set(out, station, model, train_pits=config.train_pits)
+      sets: dict[str | None, MarginalSet] = {}
       for arm in model_arms:
         status = copula_status(out, station, model, arm)
         if status is not None:
@@ -457,10 +462,14 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             "station %d: %s %s already %s", station, model, arm, status
           )
           continue
+        base, design = split_arm(arm)
+        if design not in sets:
+          sets[design] = _marginal_set(config, out, station, model, design)
+        ms = sets[design]
         start = perf_counter()
         try:
           results = run_copula_arm(
-            arm,
+            base,
             ms,
             estimators=config.estimators_by_backend,
             n_draws=config.n_draws,
@@ -468,7 +477,17 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             mixture_k=config.mixture_k,
             seed=seed,
             device=_device(config, options, arm),
+            # Another design's arm estimates every response's CRPS from its
+            # draws, as the main design does when it derives responses.
+            **({} if design is None else {"sample_crps": True}),
           )
+          if design is not None:
+            # The fit and its seeds are the base arm's, so an arm and its
+            # other design's share their random numbers; the results carry
+            # the design in their names, members included.
+            results = [
+              replace(r, arm=f"{r.arm}{ARM_DESIGN}{design}") for r in results
+            ]
         except CopulaFailure as error:
           write_copula_failure(out, ms, arm, error, rows=rows, seed=seed)
           logger.warning(
@@ -488,9 +507,37 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             seed=seed,
             wall_seconds=perf_counter() - start,
             save_draws=config.save_draws,
+            nll_column=None if design is None else f"joint_nll_{design}",
           )
           logger.info("station %d: %s %s stored", station, model, arm)
         release_gpu()
+
+
+def _marginal_set(
+  config: ApplicationConfig,
+  out: Path,
+  station: int,
+  model: str,
+  design: str | None,
+) -> MarginalSet:
+  """What an arm of ``design`` reads from one stored margin unit.
+
+  Without other designs, the unit's own responses, as every earlier run
+  read them; with them, the design's responses, every unit having fitted
+  all of them.
+  """
+  if not config.copula_designs:
+    return read_marginal_set(out, station, model, train_pits=config.train_pits)
+  chosen = config.design(design)
+  return read_marginal_set(
+    out,
+    station,
+    model,
+    train_pits=config.train_pits,
+    modeled=chosen.modeled,
+    derived=chosen.derived,
+    derivation=config.derivation,
+  )
 
 
 def _bounds(

@@ -166,11 +166,14 @@ class FakeCopulas:
     mixture_k: int,
     seed: int,
     device: str | None,
+    sample_crps: bool = False,
   ) -> list[FakeCopulaResult]:
     """Independence scores, or a little better for any other arm.
 
     An ``npcc-chain`` arm also returns one order, ``<arm>-m1``, scored by its
     log score alone, as the real stage returns a chain mixture's orders.
+    With ``sample_crps``, every result gains a CRPS of every response, as
+    the real stage estimates them for an arm of another design.
     """
     self.calls.append(
       {
@@ -185,6 +188,9 @@ class FakeCopulas:
         "device": device,
         "train_pits": ms.train_pits,
         "pit_train": ms.pit_train.copy(),
+        "variables": ms.variables,
+        "derived": ms.derived,
+        "sample_crps": sample_crps,
       }
     )
     if (ms.station, ms.model, arm) in self.fail:
@@ -202,6 +208,11 @@ class FakeCopulas:
         variogram=rng.gamma(4.0, 0.5, n),
         timings={"fit": 0.01, "sample": 0.02},
         info={"seed": seed},
+        sample_crps=(
+          {v: rng.gamma(4.0, 0.5, n) for v in (*ms.variables, *ms.derived)}
+          if sample_crps
+          else {}
+        ),
       )
     ]
     if arm.startswith("npcc-chain-"):

@@ -525,12 +525,17 @@ def fit_margin(
       "backend_kwargs": dict(spec.backend_kwargs),
       "device": device,
     }
+  quantiles_test = np.asarray(quantiles, dtype=np.float64) * response.scale
+  if config.quantile_dtype == "float32":
+    # Rounded once, here, so the scores below, the stored file and the copula
+    # stage, which reads the file, all see the same numbers.
+    quantiles_test = quantiles_test.astype(np.float32).astype(np.float64)
   fit = MarginFit(
     variable=variable,
     pit_train=np.asarray(pit_train, dtype=np.float64),
     pit_test=np.asarray(pit_test, dtype=np.float64),
     logpdf_test=np.asarray(logpdf, dtype=np.float64) - response.log_scale,
-    quantiles_test=np.asarray(quantiles, dtype=np.float64) * response.scale,
+    quantiles_test=quantiles_test,
     timings=timings,
     info=info,
     pit_train_out_of_fold=(
@@ -591,9 +596,14 @@ def fit_station(
   """
   levels = config.levels
   q_columns = quantile_columns(len(levels))
+  # The quantiles' storage dtype: float32 holds exactly what fit_margin
+  # rounded them to; float64 keeps the earlier layout.
+  dtype = np.dtype(config.quantile_dtype)
   predictions, scores, timings = [], [], []
   details: dict[str, object] = {}
-  modeled = data.variables if config.is_default_design else config.modeled
+  modeled = (
+    data.variables if config.is_default_design else config.margin_responses
+  )
   for variable in modeled:
     logger.info(
       "station %d: fitting %s to %s", data.station, model.name, variable
@@ -622,7 +632,7 @@ def fit_station(
           "pit": fit.pit_train,
           **oof,
           "logpdf": np.nan,
-          **dict.fromkeys(q_columns, np.nan),
+          **{c: np.full(len(data.row_train), np.nan, dtype) for c in q_columns},
         }
       )
     )
@@ -636,7 +646,9 @@ def fit_station(
           "pit": fit.pit_test,
           **dict.fromkeys(oof, np.nan),
           "logpdf": fit.logpdf_test,
-          **dict(zip(q_columns, fit.quantiles_test.T, strict=True)),
+          **dict(
+            zip(q_columns, fit.quantiles_test.T.astype(dtype), strict=True)
+          ),
         }
       )
     )
@@ -674,8 +686,10 @@ def fit_station(
         {}
         if config.is_default_design
         else {
-          "modeled": list(config.modeled),
-          "derived": list(config.derived),
+          # What the unit holds: the responses it fitted, and the main
+          # design's derived ones it did not.
+          "modeled": list(modeled),
+          "derived": [v for v in config.derived if v not in modeled],
           "derivation": asdict(config.derivation),
         }
       ),

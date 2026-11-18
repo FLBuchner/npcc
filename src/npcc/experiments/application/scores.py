@@ -22,7 +22,11 @@ from typing import cast
 import numpy as np
 import pandas as pd
 
-from npcc.experiments.application.config import EMOS_MODEL
+from npcc.experiments.application.config import (
+  ARM_DESIGN,
+  EMOS_MODEL,
+  split_arm,
+)
 
 #: The central intervals whose coverage is scored.
 NOMINAL_COVERAGE: tuple[float, ...] = (0.5, 0.8, 0.9, 0.95)
@@ -362,8 +366,36 @@ def marginal_tables(
   }
 
 
+def copula_log_score_columns(cases: pd.DataFrame) -> list[str]:
+  """The copula log-score columns present, the main design's first.
+
+  Parameters
+  ----------
+  cases : pandas.DataFrame
+      Per-case copula scores, or a table of their means.
+
+  Returns
+  -------
+  list of str
+      ``joint_nll`` or ``joint_nll_modeled`` (where responses are derived and
+      the log score covers the modeled ones only), then each other design's
+      ``joint_nll_<design>``, sorted. A table without any gives
+      ``["joint_nll"]``.
+  """
+  main = [c for c in ("joint_nll", "joint_nll_modeled") if c in cases]
+  others = sorted(
+    c
+    for c in cases.columns
+    if c.startswith("joint_nll_")
+    and c != "joint_nll_modeled"
+    and not c.endswith(("_skill", "_gain", "_low", "_high"))
+    and not c.startswith("joint_nll_modeled_")
+  )
+  return [*(main or (["joint_nll"] if not others else [])), *others]
+
+
 def copula_score_columns(cases: pd.DataFrame) -> tuple[str, list[str]]:
-  """The copula scores present: the log score's column, then every score.
+  """The copula scores present: the main log score's column, then every score.
 
   Parameters
   ----------
@@ -373,20 +405,41 @@ def copula_score_columns(cases: pd.DataFrame) -> tuple[str, list[str]]:
   Returns
   -------
   nll : str
-      ``joint_nll``, or ``joint_nll_modeled`` where responses are derived and
-      the log score covers the modeled ones only.
+      The first of :func:`copula_log_score_columns`.
   scores : list of str
-      ``nll``, ``energy``, ``variogram``, then each response's CRPS from the
-      draws (``crps_<name>``) where present.
+      Every log score (:func:`copula_log_score_columns`), ``energy``,
+      ``variogram``, then each response's CRPS from the draws
+      (``crps_<name>``) where present.
   """
-  nll = "joint_nll_modeled" if "joint_nll_modeled" in cases else "joint_nll"
+  nlls = copula_log_score_columns(cases)
   crps = [
     c
     for c in cases.columns
     if c.startswith("crps_")
     and not c.endswith(("_skill", "_gain", "_low", "_high"))
   ]
-  return nll, [nll, "energy", "variogram", *crps]
+  return nlls[0], [*nlls, "energy", "variogram", *crps]
+
+
+def arm_design(arm: str) -> str:
+  """The design an arm or result belongs to; ``""`` for the main one.
+
+  Parameters
+  ----------
+  arm : str
+      An arm or a mixture member, such as ``gaussian@5d``.
+
+  Returns
+  -------
+  str
+      What follows :data:`~npcc.experiments.application.config.ARM_DESIGN`.
+  """
+  return split_arm(arm)[1] or ""
+
+
+def _reference_name(reference: str, design: str) -> str:
+  """The reference arm of a design: ``independence@5d`` for ``5d``."""
+  return f"{reference}{ARM_DESIGN}{design}" if design else reference
 
 
 def copula_tables(
@@ -396,6 +449,11 @@ def copula_tables(
   seed: int = 42,
 ) -> dict[str, pd.DataFrame]:
   """The copula score tables, each arm against independence on its margins.
+
+  An arm of another design (``<arm>@<design>``) is compared with the
+  reference of its own design, ``independence@<design>``, since the two
+  designs model different responses; each design's log score has its own
+  column (:func:`copula_log_score_columns`).
 
   Parameters
   ----------
@@ -412,17 +470,18 @@ def copula_tables(
   -------
   dict of str to pandas.DataFrame
       ``by_station``, ``pooled`` and ``station_mean`` as for
-      :func:`marginal_tables`: each score's mean, the log score's gain
-      (``joint_nll_gain``, the additive improvement on the reference) and
+      :func:`marginal_tables`: each score's mean, each log score's gain
+      (``<log score>_gain``, the additive improvement on the reference) and
       every other score's skill (``energy_skill``, ``variogram_skill``, a
       ratio of means); and
-      ``cases``, the input with each case's log-score gain and its
+      ``cases``, the input with each case's log-score gains and its
       ``energy_gain`` and ``variogram_gain`` over the reference's pooled
       mean.
   """
   _check_paired(cases, "arm", ["station", "row"], ["model"])
-  nll, scores = copula_score_columns(cases)
-  skilled = scores[1:]
+  _, scores = copula_score_columns(cases)
+  nlls = copula_log_score_columns(cases)
+  skilled = [s for s in scores if s not in nlls]
   means = scores
   by_station = (
     cases.groupby(["station", "model", "arm"], sort=True)
@@ -438,32 +497,54 @@ def copula_tables(
     )
     .reset_index()
   )
-  ref_cases = cases.loc[
-    cases["arm"] == reference, ["station", "model", "row", *scores]
-  ].rename(columns={m: f"ref_{m}" for m in scores})
-  wide = cases.merge(
-    ref_cases, on=["station", "model", "row"], how="left", validate="m:1"
+  design = cases["arm"].map(arm_design)
+  is_reference = cases["arm"] == design.map(
+    lambda d: _reference_name(reference, d)
   )
-  wide[f"{nll}_gain"] = wide[f"ref_{nll}"] - wide[nll]
+  ref_cases = (
+    cases.loc[is_reference, ["station", "model", "row", *scores]]
+    .assign(_design=design[is_reference])
+    .rename(columns={m: f"ref_{m}" for m in scores})
+  )
+  wide = cases.assign(_design=design).merge(
+    ref_cases,
+    on=["station", "model", "_design", "row"],
+    how="left",
+    validate="m:1",
+  )
+  for nll in nlls:
+    wide[f"{nll}_gain"] = wide[f"ref_{nll}"] - wide[nll]
   for metric in ("energy", "variogram"):
-    pooled_ref = ref_cases.groupby("model")[f"ref_{metric}"].mean()
-    denominator = wide["model"].map(pooled_ref)
+    pooled_ref = ref_cases.groupby(["model", "_design"])[f"ref_{metric}"].mean()
+    denominator = pd.Series(
+      pooled_ref.reindex(
+        pd.MultiIndex.from_frame(wide[["model", "_design"]])
+      ).to_numpy(),
+      index=wide.index,
+    )
     wide[f"{metric}_gain"] = (wide[f"ref_{metric}"] - wide[metric]) / (
       denominator.where(denominator > 0)
     )
-  wide = wide.drop(columns=[f"ref_{m}" for m in scores])
+  wide = wide.drop(columns=[*(f"ref_{m}" for m in scores), "_design"])
   for table, keys in (
     (by_station, ["station", "model"]),
     (pooled, ["model"]),
   ):
-    ref = table.loc[table["arm"] == reference, [*keys, *scores]]
-    merged = table.merge(
+    table_design = table["arm"].map(arm_design)
+    ref_rows = table["arm"] == table_design.map(
+      lambda d: _reference_name(reference, d)
+    )
+    ref = table.loc[ref_rows, [*keys, *scores]].assign(
+      _design=table_design[ref_rows]
+    )
+    merged = table.assign(_design=table_design).merge(
       ref.rename(columns={m: f"ref_{m}" for m in scores}),
-      on=keys,
+      on=[*keys, "_design"],
       how="left",
       validate="m:1",
     )
-    table[f"{nll}_gain"] = (merged[f"ref_{nll}"] - merged[nll]).to_numpy()
+    for nll in nlls:
+      table[f"{nll}_gain"] = (merged[f"ref_{nll}"] - merged[nll]).to_numpy()
     for metric in skilled:
       ref_mean = merged[f"ref_{metric}"]
       table[f"{metric}_skill"] = (
@@ -472,7 +553,11 @@ def copula_tables(
   station_mean = _equal_station(
     by_station,
     ["model", "arm"],
-    [*means, f"{nll}_gain", *(f"{m}_skill" for m in skilled)],
+    [
+      *means,
+      *(f"{nll}_gain" for nll in nlls),
+      *(f"{m}_skill" for m in skilled),
+    ],
     seed,
   )
   return {

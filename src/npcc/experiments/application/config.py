@@ -19,6 +19,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
@@ -51,6 +52,65 @@ MARGIN_SCOPES: tuple[str, ...] = ("all", "emos")
 #: training case evaluated at them (``in_sample``), or each case's PIT from a
 #: margin fitted without its initialization year (``out_of_fold``).
 TRAIN_PITS: tuple[str, ...] = ("in_sample", "out_of_fold")
+#: The dtypes a margin's test quantiles may be stored in. Under ``float32``
+#: they are rounded to it as soon as they are predicted, before anything
+#: scores or stores them, so the copula stage, which reads them from the
+#: files, sees exactly what the margin stage scored.
+QUANTILE_DTYPES: tuple[str, ...] = ("float64", "float32")
+#: What separates a copula arm from its design, as in ``gaussian@5d``: an arm
+#: without it runs on ``[responses] modeled`` with ``derived`` drawn from it,
+#: one with it on the responses ``[copulas.designs.<name>]`` names.
+ARM_DESIGN: str = "@"
+_DESIGN_NAME = re.compile(r"[a-z0-9_]+")
+
+
+def split_arm(arm: str) -> tuple[str, str | None]:
+  """An arm's base name and its design, ``None`` for the main one.
+
+  Parameters
+  ----------
+  arm : str
+      A copula arm as configured, such as ``gaussian`` or ``gaussian@5d``.
+
+  Returns
+  -------
+  base : str
+      The arm the copula stage fits, such as ``gaussian``.
+  design : str or None
+      The design's name, such as ``5d``; ``None`` without one.
+
+  Raises
+  ------
+  ValueError
+      If the name has an empty part or more than one separator.
+  """
+  base, sep, design = arm.partition(ARM_DESIGN)
+  if not sep:
+    return arm, None
+  if not base or not _DESIGN_NAME.fullmatch(design):
+    raise ValueError(
+      f"a copula arm must be '<arm>' or '<arm>{ARM_DESIGN}<design>', the "
+      f"design of lowercase letters, digits and underscores; got {arm!r}"
+    )
+  return base, design
+
+
+@dataclass(frozen=True)
+class CopulaDesign:
+  """Which responses a copula arm models, and which it derives from them.
+
+  Attributes
+  ----------
+  modeled : tuple of str
+      The responses the copula is fitted to, sorted as the data sorts them.
+  derived : tuple of str
+      The responses computed from each of its draws
+      (:mod:`~npcc.experiments.application.derived`), sorted likewise.
+  """
+
+  modeled: tuple[str, ...]
+  derived: tuple[str, ...] = ()
+
 
 _SUPPORTS: dict[str, tuple[float, float]] = {
   "identity": (-math.inf, math.inf),
@@ -240,8 +300,17 @@ class ApplicationConfig:
       model once per training year without that year's cases and store
       their PITs beside the in-sample ones.
   save_draws : bool
-      Whether the copula stage stores every scored result's draws of every
-      response, per test case, beside its scores.
+      Whether the copula stage stores each arm's draws of every response,
+      per test case, beside its scores; a mixture's members are scored on
+      their own draws, but only the mixture's are stored.
+  copula_designs : mapping of str to CopulaDesign
+      The copula stage's other designs, by name: an arm named
+      ``<arm>@<name>`` runs on that design's responses rather than on
+      ``modeled`` and ``derived``. The margins are fitted to every response
+      any design models (:attr:`margin_responses`). Empty by default.
+  quantile_dtype : str
+      One of :data:`QUANTILE_DTYPES`: the dtype each margin's test
+      quantiles are rounded to and stored in.
   """
 
   data_dir: Path
@@ -268,11 +337,16 @@ class ApplicationConfig:
   batch_size: int | None = None
   train_pits: str = "in_sample"
   save_draws: bool = False
+  copula_designs: Mapping[str, CopulaDesign] = field(default_factory=dict)
+  quantile_dtype: str = "float64"
 
   def __post_init__(self) -> None:
     """Refuse a configuration no run could honor."""
     object.__setattr__(
       self, "responses", MappingProxyType(dict(self.responses))
+    )
+    object.__setattr__(
+      self, "copula_designs", MappingProxyType(dict(self.copula_designs))
     )
     object.__setattr__(
       self,
@@ -313,6 +387,12 @@ class ApplicationConfig:
     self._check_arms_by_margin()
     self._check_devices()
     self._check_modeled()
+    self._check_designs()
+    if self.quantile_dtype not in QUANTILE_DTYPES:
+      raise ValueError(
+        f"quantile_dtype must be one of {list(QUANTILE_DTYPES)}; got "
+        f"{self.quantile_dtype!r}"
+      )
     for name, low in (
       ("n_levels", 2),
       ("n_draws", 2),
@@ -419,6 +499,99 @@ class ApplicationConfig:
         f"every response must be modeled or derived; got neither for {left}"
       )
 
+  def _check_designs(self) -> None:
+    """Refuse a design, or an arm's design, the data cannot support."""
+    names = self.variables
+    for name, design in self.copula_designs.items():
+      where = f"copulas.designs.{name}"
+      if not _DESIGN_NAME.fullmatch(name):
+        raise ValueError(
+          f"{where} must be named with lowercase letters, digits and "
+          f"underscores; got {name!r}"
+        )
+      _unique(f"{where}.modeled", design.modeled)
+      _unique(f"{where}.derived", design.derived)
+      unknown = sorted(set(design.modeled) - set(names))
+      if not design.modeled or unknown:
+        raise ValueError(
+          f"{where}.modeled must be a non-empty subset of the responses "
+          f"{list(names)}; got {list(design.modeled)}"
+        )
+      for derived in design.derived:
+        inputs = DERIVATIONS.get(derived)
+        if inputs is None or derived not in names:
+          raise ValueError(
+            f"{where}.derived must be drawn from "
+            f"{sorted(set(DERIVATIONS) & set(names))}, the responses with a "
+            f"formula; got {derived!r}"
+          )
+        if derived in design.modeled:
+          raise ValueError(
+            f"{where}: {derived} must be either modeled or derived, not both"
+          )
+        missing = [v for v in inputs if v not in design.modeled]
+        if missing:
+          raise ValueError(
+            f"{where}: {derived} must be derived from modeled responses; its "
+            f"inputs {missing} are not modeled"
+          )
+      left = [
+        v for v in names if v not in design.modeled and v not in design.derived
+      ]
+      if left:
+        raise ValueError(
+          f"{where} must model or derive every response, so its arms are "
+          f"scored on all of them; got neither for {left}"
+        )
+    for arm in self.copula_arms:
+      _, design = split_arm(arm)
+      if design is not None and design not in self.copula_designs:
+        raise ValueError(
+          f"copulas.arms: {arm!r} must name a design of copulas.designs "
+          f"{sorted(self.copula_designs)}; got {design!r}"
+        )
+
+  @property
+  def margin_responses(self) -> tuple[str, ...]:
+    """The responses the margins are fitted to, sorted as the data sorts them.
+
+    Every response of the default design; otherwise every response the main
+    design or another design of the copula stage models.
+    """
+    if self.is_default_design:
+      return self.variables
+    wanted = set(self.modeled)
+    for design in self.copula_designs.values():
+      wanted.update(design.modeled)
+    return tuple(v for v in self.variables if v in wanted)
+
+  def design(self, name: str | None) -> CopulaDesign:
+    """The responses an arm of design ``name`` models and derives.
+
+    Parameters
+    ----------
+    name : str or None
+        A key of :attr:`copula_designs`; ``None`` for the main design,
+        ``modeled`` and ``derived``.
+
+    Returns
+    -------
+    CopulaDesign
+        Its modeled and derived responses, sorted as the data sorts them.
+    """
+    if name is None:
+      return CopulaDesign(modeled=self.modeled, derived=self.derived)
+    if name not in self.copula_designs:
+      raise ValueError(
+        f"name must be a design of copulas.designs "
+        f"{sorted(self.copula_designs)}; got {name!r}"
+      )
+    design = self.copula_designs[name]
+    return CopulaDesign(
+      modeled=tuple(v for v in self.variables if v in design.modeled),
+      derived=tuple(v for v in self.variables if v in design.derived),
+    )
+
   @property
   def variables(self) -> tuple[str, ...]:
     """Every response, sorted as the data sorts them."""
@@ -461,16 +634,28 @@ class ApplicationConfig:
     }
 
   def _outputs(self) -> dict[str, object]:
-    """The training PITs and the stored draws, recorded off their defaults.
+    """The settings added since, each recorded only off its default.
 
-    The defaults' signature predates both settings, so a run folder they
-    started still resumes, and one that changes either does not.
+    The training PITs, the stored draws, the quantiles' dtype and the copula
+    stage's other designs: the defaults' signature predates them all, so a
+    run folder they started still resumes, and one that changes any does
+    not.
     """
     out: dict[str, object] = {}
     if self.train_pits != "in_sample":
       out["train_pits"] = self.train_pits
     if self.save_draws:
       out["save_draws"] = True
+    if self.quantile_dtype != "float64":
+      out["quantile_dtype"] = self.quantile_dtype
+    if self.copula_designs:
+      out["copula_designs"] = {
+        name: {
+          "modeled": list(self.design(name).modeled),
+          "derived": list(self.design(name).derived),
+        }
+        for name in sorted(self.copula_designs)
+      }
     return out
 
   @property
@@ -626,6 +811,15 @@ class ApplicationConfig:
       "batch_size": self.batch_size,
       "train_pits": self.train_pits,
       "save_draws": self.save_draws,
+      "quantile_dtype": self.quantile_dtype,
+      "copula_designs": {
+        name: {
+          "modeled": list(self.design(name).modeled),
+          "derived": list(self.design(name).derived),
+        }
+        for name in sorted(self.copula_designs)
+      },
+      "margin_responses": list(self.margin_responses),
       **self._design(),
       "signature": self.signature(),
     }
@@ -660,7 +854,13 @@ _TABLES: dict[str, tuple[str, ...]] = {
     "min_cases",
     "verify",
   ),
-  "margins": ("models", "n_levels", "batch_size", "train_pits"),
+  "margins": (
+    "models",
+    "n_levels",
+    "batch_size",
+    "train_pits",
+    "quantile_dtype",
+  ),
   "copulas": (
     "arms",
     "margins",
@@ -669,6 +869,7 @@ _TABLES: dict[str, tuple[str, ...]] = {
     "sample_batch_size",
     "mixture_k",
     "save_draws",
+    "designs",
   ),
 }
 #: The keys of ``[responses]`` that are settings rather than a response.
@@ -764,6 +965,38 @@ def _response(name: str, value: object) -> ResponseSpec:
   )
 
 
+def _designs(value: object) -> dict[str, CopulaDesign]:
+  """``[copulas.designs]``: each design's modeled and derived responses."""
+  if not isinstance(value, dict):
+    raise TypeError(
+      f"copulas.designs must be a table of designs, such as "
+      f"[copulas.designs.5d]; got {value!r}"
+    )
+  designs = {}
+  for name, table in value.items():
+    if not isinstance(table, dict):
+      raise TypeError(
+        f"copulas.designs.{name} must be a table with modeled and derived; "
+        f"got {table!r}"
+      )
+    unknown = sorted(set(table) - {"modeled", "derived"})
+    if unknown:
+      raise ValueError(
+        f"copulas.designs.{name} must hold only modeled and derived; got "
+        f"unknown {unknown}"
+      )
+    designs[str(name)] = CopulaDesign(
+      modeled=_strings(
+        _required(table, f"copulas.designs.{name}", "modeled"),
+        f"copulas.designs.{name}.modeled",
+      ),
+      derived=_strings(
+        table.get("derived", []), f"copulas.designs.{name}.derived"
+      ),
+    )
+  return designs
+
+
 def load_config(path: str | Path) -> ApplicationConfig:
   """Read an :class:`ApplicationConfig` from a TOML file.
 
@@ -829,6 +1062,15 @@ def load_config(path: str | Path) -> ApplicationConfig:
         f"{margins['train_pits']!r}"
       )
     options["train_pits"] = margins["train_pits"]
+  if "quantile_dtype" in margins:
+    if not isinstance(margins["quantile_dtype"], str):
+      raise TypeError(
+        f"margins.quantile_dtype must be one of {list(QUANTILE_DTYPES)}; got "
+        f"{margins['quantile_dtype']!r}"
+      )
+    options["quantile_dtype"] = margins["quantile_dtype"]
+  if "designs" in copulas:
+    options["copula_designs"] = _designs(copulas["designs"])
   if "save_draws" in copulas:
     if not isinstance(copulas["save_draws"], bool):
       raise TypeError(

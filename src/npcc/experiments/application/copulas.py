@@ -210,8 +210,9 @@ class CopulaResult:
       What was fitted, as JSON-ready values: structures, seeds, settings and
       versions.
   sample_crps : dict of str to numpy.ndarray
-      With derived responses only: every response's CRPS of each test case,
-      modeled and derived, estimated from the draws in its own units.
+      With derived responses, or where :func:`run_copula_arm` is asked for
+      it: every response's CRPS of each test case, modeled and derived,
+      estimated from the draws in its own units.
   sampled : bool
       Whether the sample scores come from draws of this copula; ``False``
       for a chain mixture's order, scored by its log score alone, whose
@@ -284,6 +285,7 @@ class _Inputs:
   derived_scale: np.ndarray
   n_draws: int
   seed: int
+  sample_crps: bool = False
 
   @property
   def draws_shape(self) -> tuple[int, int, int]:
@@ -503,6 +505,7 @@ def run_copula_arm(
   mixture_k: int,
   seed: int,
   device: str | None,
+  sample_crps: bool = False,
 ) -> list[CopulaResult]:
   """Fit one copula arm to a marginal set and score it on its test cases.
 
@@ -526,6 +529,10 @@ def run_copula_arm(
   device : str or None
       Where an npcc vine fits and evaluates; ``None`` picks CUDA when it is
       available.
+  sample_crps : bool, default=False
+      Whether to estimate every response's CRPS from the draws even when no
+      response is derived, as for an arm of another design that models every
+      response; with derived responses it is estimated regardless.
 
   Returns
   -------
@@ -550,7 +557,7 @@ def run_copula_arm(
     )
   if mixture_k < 1:
     raise ValueError(f"mixture_k must be positive; got {mixture_k}")
-  inputs = _inputs(ms, n_draws=n_draws, seed=seed)
+  inputs = _inputs(ms, n_draws=n_draws, seed=seed, sample_crps=sample_crps)
   logger.info("station %d, %s: fitting %s", ms.station, ms.model, arm)
   if parsed.kind == "independence":
     results = [_independence(arm, inputs)]
@@ -600,7 +607,9 @@ def run_copula_arm(
   return results
 
 
-def _inputs(ms: MarginalSet, *, n_draws: int, seed: int) -> _Inputs:
+def _inputs(
+  ms: MarginalSet, *, n_draws: int, seed: int, sample_crps: bool = False
+) -> _Inputs:
   """Refuse a marginal set no arm can be scored on; clip its transforms."""
   for name in ("pit_train", "pit_test"):
     values = getattr(ms, name)
@@ -633,6 +642,7 @@ def _inputs(ms: MarginalSet, *, n_draws: int, seed: int) -> _Inputs:
     derived_scale=derived_scale,
     n_draws=n_draws,
     seed=seed,
+    sample_crps=sample_crps,
   )
 
 
@@ -685,7 +695,7 @@ def _score(
   observed = observed_raw / scale
   energy = energy_score(standardized, observed)
   variogram = variogram_score(standardized, observed, p=0.5)
-  if ms.derived:
+  if ms.derived or inputs.sample_crps:
     for j, variable in enumerate((*ms.variables, *ms.derived)):
       sample_crps[variable] = energy_score(
         draws[:, :, j : j + 1], observed_raw[:, j : j + 1]
