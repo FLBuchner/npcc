@@ -63,26 +63,14 @@ class VdcServer:
       VDC's device, ``"cpu"`` here (the GPU is reserved).
   """
 
-  def __init__(
-    self, *, cpu_core: int | None = None, device: str = "cpu"
-  ) -> None:
-    env = {
-      k: v for k, v in os.environ.items() if k != "PYTORCH_CUDA_ALLOC_CONF"
-    }
-    env.update(
-      OMP_NUM_THREADS="1", MKL_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1"
-    )
-    cmd = [
-      str(common.VDC_PYTHON),
-      str(HERE / "e3_vdc_server.py"),
-      "--device",
-      device,
-    ]
+  def __init__(self, *, cpu_core: int | None = None, device: str = "cpu") -> None:
+    env = {k: v for k, v in os.environ.items() if k != "PYTORCH_CUDA_ALLOC_CONF"}
+    env.update(OMP_NUM_THREADS="1", MKL_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
+    cmd = [str(common.VDC_PYTHON), str(HERE / "e3_vdc_server.py"), "--device", device]
     if cpu_core is not None:
       cmd = ["taskset", "-c", str(cpu_core), *cmd]
     self.proc = subprocess.Popen(
-      cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, cwd=str(HERE)
-    )
+      cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, cwd=str(HERE))
     self.calls: list[dict[str, float]] = []
     self.info = self._info()
 
@@ -90,9 +78,7 @@ class VdcServer:
     assert self.proc.stdout is not None
     data = self.proc.stdout.read(size)
     if data is None or len(data) != size:
-      raise RuntimeError(
-        f"VDC server must answer {size} bytes; got {0 if data is None else len(data)}"
-      )
+      raise RuntimeError(f"VDC server must answer {size} bytes; got {0 if data is None else len(data)}")
     return data
 
   def _info(self) -> dict[str, Any]:
@@ -111,23 +97,15 @@ class VdcServer:
       raise ValueError(f"u must have shape (n, 2); got {u.shape}")
     assert self.proc.stdin is not None
     t0 = time.perf_counter()
-    self.proc.stdin.write(
-      HEADER.pack(1, u.shape[0], projection_iters, 0) + u.tobytes()
-    )
+    self.proc.stdin.write(HEADER.pack(1, u.shape[0], projection_iters, 0) + u.tobytes())
     self.proc.stdin.flush()
     status, m, server_s, projection_s = REPLY.unpack(self._read(REPLY.size))
-    grid = (
-      np.frombuffer(self._read(m * m * 8), dtype="<f8").reshape(m, m).copy()
-    )
+    grid = np.frombuffer(self._read(m * m * 8), dtype="<f8").reshape(m, m).copy()
     roundtrip_s = time.perf_counter() - t0
     if status != 0:
       raise RuntimeError(f"VDC server must return status 0; got {status}")
-    timing = {
-      "server_s": server_s,
-      "projection_s": projection_s,
-      "roundtrip_s": roundtrip_s,
-      "ipc_s": roundtrip_s - server_s,
-    }
+    timing = {"server_s": server_s, "projection_s": projection_s,
+              "roundtrip_s": roundtrip_s, "ipc_s": roundtrip_s - server_s}
     self.calls.append(timing)
     return grid, timing
 
@@ -158,17 +136,11 @@ def replicate_pad(density: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
   ``_replicate_pad``).
   """
   if density.ndim != 2 or density.shape[0] != density.shape[1]:
-    raise ValueError(
-      f"density must be square and 2-D; got {tuple(density.shape)}"
-    )
+    raise ValueError(f"density must be square and 2-D; got {tuple(density.shape)}")
   m = density.shape[0]
-  centers = (
-    torch.arange(m, dtype=density.dtype, device=density.device) + 0.5
-  ) / m
+  centers = (torch.arange(m, dtype=density.dtype, device=density.device) + 0.5) / m
   points = torch.cat([centers.new_zeros(1), centers, centers.new_ones(1)])
-  padded = torch.nn.functional.pad(
-    density[None, None], (1, 1, 1, 1), mode="replicate"
-  )[0, 0]
+  padded = torch.nn.functional.pad(density[None, None], (1, 1, 1, 1), mode="replicate")[0, 0]
   return points, padded
 
 
@@ -205,29 +177,17 @@ class VdcBicop(TorchTllBicop):
     if var_types is not None and "d" in var_types:
       raise ValueError(f"var_types must be continuous for VDC; got {var_types}")
     if cls.server is None:
-      raise RuntimeError(
-        "VdcBicop.server must be set to a running VdcServer before fitting"
-      )
-    u_np = (
-      u.detach().cpu().numpy() if isinstance(u, torch.Tensor) else np.asarray(u)
-    )
+      raise RuntimeError("VdcBicop.server must be set to a running VdcServer before fitting")
+    u_np = u.detach().cpu().numpy() if isinstance(u, torch.Tensor) else np.asarray(u)
     # The Table 1 runner's sample clip; a no-op on its samples, and it keeps a
     # vine's pseudo-observations off the boundary of VDC's histogram.
     u_np = np.clip(np.asarray(u_np, dtype=np.float64)[:, :2], 1e-10, 1 - 1e-10)
     grid, timing = cls.server.estimate(u_np, cls.projection_iters)
     dtype = torch.float64 if dtype is None else dtype
-    points, values = replicate_pad(
-      torch.as_tensor(grid, dtype=dtype, device=device)
-    )
-    pair = cls(
-      grid_points=points,
-      values=values,
-      cache_integrals=True if cache_integrals is None else cache_integrals,
-      norm_maxiter=0,
-      is_linear=False,
-      device=device,
-      dtype=dtype,
-    )
+    points, values = replicate_pad(torch.as_tensor(grid, dtype=dtype, device=device))
+    pair = cls(grid_points=points, values=values,
+               cache_integrals=True if cache_integrals is None else cache_integrals,
+               norm_maxiter=0, is_linear=False, device=device, dtype=dtype)
     pair.vdc_timing = timing
     pair.vdc_grid = grid
     return pair

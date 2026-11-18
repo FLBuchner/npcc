@@ -84,17 +84,13 @@ def resolve(names: list[str]) -> list[str]:
     elif name in e3_npcc.KNOWN or name == VDC_ADAPTED:
       out.append(name)
     else:
-      raise SystemExit(
-        f"estimator must be cpu, gpu, all, {VDC_ADAPTED} or one of "
-        f"{list(e3_npcc.KNOWN)}; got {name}"
-      )
+      raise SystemExit(f"estimator must be cpu, gpu, all, {VDC_ADAPTED} or one of "
+                       f"{list(e3_npcc.KNOWN)}; got {name}")
   return list(dict.fromkeys(out))
 
 
 def samples_path(folder: Path, n_train: int) -> Path:
-  return folder / (
-    "samples.npz" if n_train == 2000 else f"samples_n{n_train}.npz"
-  )
+  return folder / ("samples.npz" if n_train == 2000 else f"samples_n{n_train}.npz")
 
 
 class VdcAdapted:
@@ -118,45 +114,21 @@ class VdcAdapted:
 
 def main() -> None:  # noqa: PLR0915 - one linear protocol
   p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-  p.add_argument(
-    "--folder",
-    type=Path,
-    default=common.RESULTS / "e3a",
-    help="the VDC side's samples and truths",
-  )
-  p.add_argument(
-    "--out",
-    type=Path,
-    default=None,
-    help="where the fits go (default: --folder)",
-  )
-  p.add_argument(
-    "--config",
-    type=Path,
-    default=e3_npcc.E1_CONFIG,
-    help="the config the estimators are read from (default: E1's)",
-  )
+  p.add_argument("--folder", type=Path, default=common.RESULTS / "e3a",
+                 help="the VDC side's samples and truths")
+  p.add_argument("--out", type=Path, default=None,
+                 help="where the fits go (default: --folder)")
+  p.add_argument("--config", type=Path, default=e3_npcc.E1_CONFIG,
+                 help="the config the estimators are read from (default: E1's)")
   p.add_argument("--estimators", nargs="+", default=["cpu"])
   p.add_argument("--n-train", type=int, nargs="+", default=[2000, 10000])
   p.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
-  p.add_argument(
-    "--gpu-is-free",
-    action="store_true",
-    help="required for --device cuda; the GPU is shared with E1",
-  )
-  p.add_argument(
-    "--vdc-core",
-    type=int,
-    default=None,
-    help="core to pin the VDC density server to (vdc-adapted only)",
-  )
-  p.add_argument(
-    "--only",
-    type=int,
-    nargs="*",
-    default=None,
-    help="fit indices to run (default: all 45); for smoke tests",
-  )
+  p.add_argument("--gpu-is-free", action="store_true",
+                 help="required for --device cuda; the GPU is shared with E1")
+  p.add_argument("--vdc-core", type=int, default=None,
+                 help="core to pin the VDC density server to (vdc-adapted only)")
+  p.add_argument("--only", type=int, nargs="*", default=None,
+                 help="fit indices to run (default: all 45); for smoke tests")
   a = p.parse_args()
 
   labels = resolve(a.estimators)
@@ -164,26 +136,18 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
   for label in labels:
     kind = "cpu" if label == VDC_ADAPTED else e3_npcc.KNOWN[label][2]
     if kind == "gpu" and a.device != "cuda":
-      raise SystemExit(
-        f"{label} must run with --device cuda; got --device {a.device}"
-      )
+      raise SystemExit(f"{label} must run with --device cuda; got --device {a.device}")
     if kind == "cpu" and a.device != "cpu":
-      raise SystemExit(
-        f"{label} runs on the host; pass --device cpu, got {a.device}"
-      )
+      raise SystemExit(f"{label} runs on the host; pass --device cpu, got {a.device}")
   if a.device == "cuda" and not a.gpu_is_free:
-    raise SystemExit(
-      "--device cuda requires --gpu-is-free: the GPU is shared with E1"
-    )
+    raise SystemExit("--device cuda requires --gpu-is-free: the GPU is shared with E1")
 
   info = json.loads((a.folder / "vdc_side.json").read_text())
   with np.load(a.folder / "grid_truth.npz") as f:
     g, grid_true = f["midpoints"], f["pdf_true"]
   uu, vv = np.meshgrid(g, g, indexing="ij")
   grid_pts = np.column_stack([uu.ravel(), vv.ravel()])
-  spot = np.random.default_rng(20261105).choice(
-    grid_pts.shape[0], N_SPOT, replace=False
-  )
+  spot = np.random.default_rng(20261105).choice(grid_pts.shape[0], N_SPOT, replace=False)
   prov = common.provenance(__file__, a.device)
 
   for n_train in a.n_train:
@@ -217,12 +181,9 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
           tr, te = data["train"][k], data["test"][k]
           if not warmed:
             t0 = time.perf_counter()
-            e3_npcc.fit_and_score(
-              est, tr, te[:N_WARMUP_TEST], device=a.device, salt=("E3a-warmup",)
-            )
-            print(
-              f"{label}: warm-up {time.perf_counter() - t0:.1f} s", flush=True
-            )
+            e3_npcc.fit_and_score(est, tr, te[:N_WARMUP_TEST], device=a.device,
+                                  salt=("E3a-warmup",))
+            print(f"{label}: warm-up {time.perf_counter() - t0:.1f} s", flush=True)
             warmed = True
           load_before = common.load_average()
           extra: dict = {}
@@ -235,55 +196,31 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
             gpdf = runner.pdf(grid_pts)
             grid_s = time.perf_counter() - t0
             timing = runner.pair.vdc_timing
-            extra = {
-              "vdc_server_code_sha256": json.dumps(
-                runner.server.info["code_sha256"], sort_keys=True
-              ),
-              "server_s": timing["server_s"],
-              "projection_s": timing["projection_s"],
-              "ipc_s": timing["ipc_s"],
-              "roundtrip_s": timing["roundtrip_s"],
-              "grid_equal_vdc_side": bool(
-                np.array_equal(runner.pair.vdc_grid, vdc_grids[k])
-              ),
-              "grid_max_abs_diff_vdc_side": float(
-                np.max(np.abs(runner.pair.vdc_grid - vdc_grids[k]))
-              ),
-            }
+            extra = {"vdc_server_code_sha256": json.dumps(runner.server.info["code_sha256"], sort_keys=True),
+                     "server_s": timing["server_s"], "projection_s": timing["projection_s"],
+                     "ipc_s": timing["ipc_s"], "roundtrip_s": timing["roundtrip_s"],
+                     "grid_equal_vdc_side": bool(np.array_equal(runner.pair.vdc_grid, vdc_grids[k])),
+                     "grid_max_abs_diff_vdc_side": float(np.max(np.abs(runner.pair.vdc_grid - vdc_grids[k])))}
             n_nan = int(np.sum(~np.isfinite(gpdf)))
             spot_rel = None
           else:
-            res = e3_npcc.fit_and_score(
-              est,
-              tr,
-              te,
-              device=a.device,
-              salt=("E3a", i_case, seed, n_train),
-              grid=g,
-              spot=grid_pts[spot],
-            )
+            res = e3_npcc.fit_and_score(est, tr, te, device=a.device,
+                                        salt=("E3a", i_case, seed, n_train),
+                                        grid=g, spot=grid_pts[spot])
             fit_s, inference_s, grid_s = res.fit_s, res.inference_s, res.grid_s
             log_pdf, gpdf, n_nan = res.log_pdf, res.grid_pdf.ravel(), res.n_nan
-            spot_rel = float(
-              np.max(np.abs(res.spot_pdf - gpdf[spot]) / np.abs(res.spot_pdf))
-            )
+            spot_rel = float(np.max(np.abs(res.spot_pdf - gpdf[spot]) / np.abs(res.spot_pdf)))
           ratio = data["logtrue"][k] - log_pdf
           row = {
-            "experiment": "E3a",
-            "case_index": i_case,
-            "case": case,
-            "family": str(data["family"][k]),
-            "rotation": int(data["rotation"][k]),
-            "parameters": str(data["parameters"][k]),
-            "seed": seed,
-            "n_train": int(tr.shape[0]),
-            "n_test": int(te.shape[0]),
+            "experiment": "E3a", "case_index": i_case, "case": case,
+            "family": str(data["family"][k]), "rotation": int(data["rotation"][k]),
+            "parameters": str(data["parameters"][k]), "seed": seed,
+            "n_train": int(tr.shape[0]), "n_test": int(te.shape[0]),
             "method": "vdc_adapted" if adapted else f"npcc-{label}",
             "method_group": "cross_check" if adapted else "npcc",
             "role": "cross_check" if adapted else "arm",
             "conditions_on_u1": None,
-            "estimator": label,
-            "estimator_id": None if adapted else est.estimator_id,
+            "estimator": label, "estimator_id": None if adapted else est.estimator_id,
             "backend": "vdc" if adapted else est.backend,
             "transform": None if adapted else est.transform,
             "feature_transform": None if adapted else est.feature_transform,
@@ -298,18 +235,12 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
             **grid_metrics(gpdf, grid_true[i_case].ravel(), g),
             "grid_n": int(g.size),
             "grid_spot_check_max_rel": spot_rel,
-            "fit_s": fit_s,
-            "projection_s": extra.pop("projection_s", None),
-            "inference_s": inference_s,
-            "grid_s": grid_s,
+            "fit_s": fit_s, "projection_s": extra.pop("projection_s", None),
+            "inference_s": inference_s, "grid_s": grid_s,
             **extra,
             "torch_threads": torch.get_num_threads(),
-            "backend_threads": (
-              f"library defaults, confined to {len(os.sched_getaffinity(0))} "
-              "pinned core(s)"
-              if a.device == "cpu"
-              else None
-            ),
+            "backend_threads": (f"library defaults, confined to {len(os.sched_getaffinity(0))} "
+                                "pinned core(s)" if a.device == "cpu" else None),
             "warmup_excluded": True,
             "samples_sha256": sha,
             "load_avg_1m": load_before,
@@ -317,30 +248,22 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
           }
           np.save(stem.with_suffix(".npy"), log_pdf.astype(np.float32))
           common.write_json(row, stem.with_suffix(".json"))
-          print(
-            f"{label} n={n_train} k={k:02d} {case} s{seed}: KL {row['kl']:.5f} "
-            f"IAE {row['iae']:.4f} fit {fit_s:.2f} s inf {inference_s:.2f} s "
-            f"grid {grid_s:.2f} s",
-            flush=True,
-          )
+          print(f"{label} n={n_train} k={k:02d} {case} s{seed}: KL {row['kl']:.5f} "
+                f"IAE {row['iae']:.4f} fit {fit_s:.2f} s inf {inference_s:.2f} s "
+                f"grid {grid_s:.2f} s", flush=True)
       finally:
         if runner is not None:
           runner.server.close()
 
   for label in labels:
-    rows = [
-      json.loads(path.read_text())
-      for path in sorted((out / "npcc_cells" / label).glob("n*/k*.json"))
-    ]
+    rows = [json.loads(path.read_text())
+            for path in sorted((out / "npcc_cells" / label).glob("n*/k*.json"))]
     if rows:
       common.write_csv(rows, out / f"npcc_{label}.csv")
       for n in sorted({r["n_train"] for r in rows}):
         sel = [r for r in rows if r["n_train"] == n]
-        print(
-          f"{label} n={n}: {len(sel)} fits, mean KL {np.mean([r['kl'] for r in sel]):.5f}, "
-          f"mean IAE {np.mean([r['iae'] for r in sel]):.4f}",
-          flush=True,
-        )
+        print(f"{label} n={n}: {len(sel)} fits, mean KL {np.mean([r['kl'] for r in sel]):.5f}, "
+              f"mean IAE {np.mean([r['iae'] for r in sel]):.4f}", flush=True)
 
 
 if __name__ == "__main__":

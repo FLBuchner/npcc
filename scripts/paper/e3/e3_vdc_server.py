@@ -83,10 +83,7 @@ def main() -> None:
 
   import vdc
   import vdc.models.projection as projection
-  from vdc.pretrained import (
-    estimate_pair_density_from_samples,
-    load_checkpoint_bundle,
-  )
+  from vdc.pretrained import estimate_pair_density_from_samples, load_checkpoint_bundle
 
   sys.path.insert(0, str(Path(__file__).resolve().parent))
   from e3a_vdc_side import ProjectionTimer
@@ -107,36 +104,19 @@ def main() -> None:
   timer = ProjectionTimer(projection)
   with torch.no_grad():
     estimate_pair_density_from_samples(
-      bundle,
-      np.random.default_rng(0).uniform(size=(2000, 2)),
-      m=64,
-      projection_iters=30,
-    )
+      bundle, np.random.default_rng(0).uniform(size=(2000, 2)), m=64, projection_iters=30)
   timer.take()
 
   info = {
-    "server": Path(__file__).name,
-    "server_sha256": common.sha256_file(__file__),
+    "server": Path(__file__).name, "server_sha256": common.sha256_file(__file__),
     "code_sha256": common.code_hashes(__file__),
-    "checkpoint_sha256": checkpoint_sha,
-    "vdc_commit": common.git_short(common.VDC_REPO),
+    "checkpoint_sha256": checkpoint_sha, "vdc_commit": common.git_short(common.VDC_REPO),
     "vdc_module": str(Path(vdc.__file__).resolve()),
-    "versions": {
-      "python": sys.version.split()[0],
-      "numpy": np.__version__,
-      "torch": torch.__version__,
-    },
-    "device": a.device,
-    "torch_threads": torch.get_num_threads(),
-    "model_load_s": load_s,
-    "settings": {
-      "m": 64,
-      "normalization": "grid /= grid.mean()",
-      "dtype": "float32 model",
-      "matmul_tf32": False,
-      "cudnn_tf32": True,
-      "cudnn_benchmark": False,
-    },
+    "versions": {"python": sys.version.split()[0], "numpy": np.__version__,
+                 "torch": torch.__version__},
+    "device": a.device, "torch_threads": torch.get_num_threads(), "model_load_s": load_s,
+    "settings": {"m": 64, "normalization": "grid /= grid.mean()", "dtype": "float32 model",
+                 "matmul_tf32": False, "cudnn_tf32": True, "cudnn_benchmark": False},
     "cpu_affinity": ",".join(str(c) for c in sorted(os.sched_getaffinity(0))),
   }
   while True:
@@ -151,26 +131,18 @@ def main() -> None:
       proto_out.write(struct.pack("<I", len(payload)) + payload)
       proto_out.flush()
       continue
-    u = np.frombuffer(read_exact(proto_in, n * 2 * 8), dtype="<f8").reshape(
-      n, 2
-    )
+    u = np.frombuffer(read_exact(proto_in, n * 2 * 8), dtype="<f8").reshape(n, 2)
     timer.take()
     t0 = time.perf_counter()
     with torch.no_grad():
-      grid = np.asarray(
-        estimate_pair_density_from_samples(
-          bundle, u, m=64, projection_iters=int(iters)
-        ),
-        dtype=float,
-      )
+      grid = np.asarray(estimate_pair_density_from_samples(
+        bundle, u, m=64, projection_iters=int(iters)), dtype=float)
     grid /= grid.mean()
     server_s = time.perf_counter() - t0
     projection_s = timer.take()
     m = grid.shape[0]
-    proto_out.write(
-      REPLY.pack(0, m, server_s, projection_s)
-      + np.ascontiguousarray(grid, dtype="<f8").tobytes()
-    )
+    proto_out.write(REPLY.pack(0, m, server_s, projection_s)
+                    + np.ascontiguousarray(grid, dtype="<f8").tobytes())
     proto_out.flush()
 
 

@@ -80,27 +80,10 @@ from e3_vine import SharedVinecop  # noqa: E402
 
 SPECIAL = ("vdc", "tll", "tll_cpp", "parametric", "rosenblatt-vinecop-check")
 #: VDC's ``fit_bicop`` parametric family set (``vdc.baselines.pyvinecopulib``).
-PARAMETRIC_FAMILIES = (
-  "indep",
-  "gaussian",
-  "student",
-  "clayton",
-  "gumbel",
-  "frank",
-  "joe",
-  "bb1",
-  "bb6",
-  "bb7",
-  "bb8",
-  "tawn",
-)
-ROLES = {
-  "vdc": "arm",
-  "tll": "arm",
-  "parametric": "arm",
-  "tll_cpp": "cross_check",
-  "rosenblatt-vinecop-check": "cross_check",
-}
+PARAMETRIC_FAMILIES = ("indep", "gaussian", "student", "clayton", "gumbel", "frank",
+                       "joe", "bb1", "bb6", "bb7", "bb8", "tawn")
+ROLES = {"vdc": "arm", "tll": "arm", "parametric": "arm", "tll_cpp": "cross_check",
+         "rosenblatt-vinecop-check": "cross_check"}
 MACHINERY = {
   "shared": "pyvinecopulib 1.0 VinecopBase (e3_vine.SharedVinecop), simplified, true structure",
   "cpp": "pyvinecopulib 1.0 compiled Vinecop.from_data, true structure",
@@ -123,27 +106,19 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
   a = p.parse_args()
 
   for arm in a.arms:
-    label = arm[len("npcc-") :] if arm.startswith("npcc-") else None
+    label = arm[len("npcc-"):] if arm.startswith("npcc-") else None
     if arm not in SPECIAL and label not in e3_npcc.ESTIMATORS:
-      raise SystemExit(
-        f"arm must be one of {SPECIAL} or npcc-<E1 estimator>; got {arm}"
-      )
+      raise SystemExit(f"arm must be one of {SPECIAL} or npcc-<E1 estimator>; got {arm}")
     kind = e3_npcc.ESTIMATORS[label][2] if label else "cpu"
     if (kind == "gpu") != (a.device == "cuda"):
-      raise SystemExit(
-        f"{arm} must run with --device {'cuda' if kind == 'gpu' else 'cpu'}"
-      )
+      raise SystemExit(f"{arm} must run with --device {'cuda' if kind == 'gpu' else 'cpu'}")
   if a.device == "cuda" and not a.gpu_is_free:
-    raise SystemExit(
-      "--device cuda requires --gpu-is-free: the GPU is shared with E1"
-    )
+    raise SystemExit("--device cuda requires --gpu-is-free: the GPU is shared with E1")
 
   info = json.loads((a.folder / "vdc_side.json").read_text())
   samples = a.folder / "samples.npz"
   if common.sha256_file(samples) != info["samples_sha256"]:
-    raise SystemExit(
-      f"{samples} must match the sha256 recorded by the VDC side"
-    )
+    raise SystemExit(f"{samples} must match the sha256 recorded by the VDC side")
   with np.load(samples) as f:
     data = {k: f[k] for k in f.files}
   prov = common.provenance(__file__, a.device)
@@ -166,19 +141,11 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
         if path.exists():
           continue
         key = f"d{d}_s{seed}"
-        tr, te, logtrue = (
-          data[f"{key}_train"],
-          data[f"{key}_test"],
-          data[f"{key}_logtrue"],
-        )
+        tr, te, logtrue = data[f"{key}_train"], data[f"{key}_test"], data[f"{key}_logtrue"]
         order = [int(o) for o in data[f"{key}_order"]]
         structure = pv.RVineStructure.from_matrix(data[f"{key}_matrix"])
-        if not np.array_equal(
-          structure.matrix, pv.RVineStructure.from_order(order).matrix
-        ):
-          raise RuntimeError(
-            f"{key}: the structure must be the D-vine on order {order}"
-          )
+        if not np.array_equal(structure.matrix, pv.RVineStructure.from_order(order).matrix):
+          raise RuntimeError(f"{key}: the structure must be the D-vine on order {order}")
         tr_t = torch.as_tensor(tr, dtype=torch.float64)
         te_t = torch.as_tensor(te, dtype=torch.float64)
         extra: dict = {}
@@ -199,18 +166,12 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
         def npcc_edge(est):  # noqa: ANN001, ANN202
           from npcc import FitControlsRosenblattBicop, RosenblattBicop
 
-          controls = est.controls(
-            FitControlsRosenblattBicop,
-            device=a.device,
-            projection_grid_size=e3_npcc.PROJECTION_GRID_SIZE,
-            batch_size=None,
-          )
+          controls = est.controls(FitControlsRosenblattBicop, device=a.device,
+                                  projection_grid_size=e3_npcc.PROJECTION_GRID_SIZE, batch_size=None)
 
           def fit_edge(tree, edge, u_e, x_e=None, var_types=("c", "c")):  # noqa: ANN001, ANN202
             if x_e is not None:
-              raise ValueError(
-                "x_e must be None in a simplified unconditional vine"
-              )
+              raise ValueError("x_e must be None in a simplified unconditional vine")
             return RosenblattBicop(controls).fit(u_e)
 
           return fit_edge
@@ -218,56 +179,30 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
         load_before = common.load_average()
         if arm == "vdc":
           n_calls = len(server.calls)
-          lp, fit_s, inference_s = shared_fit(
-            lambda t, e, u_e, x_e=None, var_types=("c", "c"): (
-              VdcBicop.from_data(u_e)
-            )
-          )
+          lp, fit_s, inference_s = shared_fit(lambda t, e, u_e, x_e=None, var_types=("c", "c"): VdcBicop.from_data(u_e))
           calls = server.calls[n_calls:]
-          extra = {
-            "vdc_server_s": sum(c["server_s"] for c in calls),
-            "vdc_projection_s": sum(c["projection_s"] for c in calls),
-            "vdc_ipc_s": sum(c["ipc_s"] for c in calls),
-            "vdc_calls": len(calls),
-            "vdc_server_code_sha256": json.dumps(
-              server.info["code_sha256"], sort_keys=True
-            ),
-            "vdc_server_versions": json.dumps(server.info["versions"]),
-          }
-          machinery, pair = (
-            "shared",
-            "e3_vdc_pair.VdcBicop (VDC grid, padded, TorchTllBicop norm_maxiter=0)",
-          )
+          extra = {"vdc_server_s": sum(c["server_s"] for c in calls),
+                   "vdc_projection_s": sum(c["projection_s"] for c in calls),
+                   "vdc_ipc_s": sum(c["ipc_s"] for c in calls), "vdc_calls": len(calls),
+                   "vdc_server_code_sha256": json.dumps(server.info["code_sha256"], sort_keys=True),
+                   "vdc_server_versions": json.dumps(server.info["versions"])}
+          machinery, pair = "shared", "e3_vdc_pair.VdcBicop (VDC grid, padded, TorchTllBicop norm_maxiter=0)"
         elif arm == "tll":
           from pyvinecopulib.torch import FitControlsTorchBicop, TorchTllBicop
 
           ctl = FitControlsTorchBicop()
           lp, fit_s, inference_s = shared_fit(
-            lambda t, e, u_e, x_e=None, var_types=("c", "c"): (
-              TorchTllBicop.from_data(u_e, ctl)
-            )
-          )
-          machinery, pair = (
-            "shared",
-            f"pyvinecopulib.torch.TorchTllBicop, {ctl}",
-          )
+            lambda t, e, u_e, x_e=None, var_types=("c", "c"): TorchTllBicop.from_data(u_e, ctl))
+          machinery, pair = "shared", f"pyvinecopulib.torch.TorchTllBicop, {ctl}"
         elif arm in ("parametric", "tll_cpp"):
           fams = PARAMETRIC_FAMILIES if arm == "parametric" else ("tll",)
-          ctl = pv.FitControlsVinecop(
-            family_set=[getattr(pv.families, f) for f in fams],
-            selection_criterion="bic",
-            allow_rotations=True,
-            num_threads=1,
-          )
+          ctl = pv.FitControlsVinecop(family_set=[getattr(pv.families, f) for f in fams],
+                                      selection_criterion="bic", allow_rotations=True, num_threads=1)
           t0 = time.perf_counter()
           vc = pv.Vinecop.from_data(tr, structure=structure, controls=ctl)
           fit_s = time.perf_counter() - t0
           t0 = time.perf_counter()
-          lp = np.log(
-            np.maximum(
-              np.asarray(vc.pdf(te), dtype=np.float64), common.LOG_FLOOR
-            )
-          )
+          lp = np.log(np.maximum(np.asarray(vc.pdf(te), dtype=np.float64), common.LOG_FLOOR))
           inference_s = time.perf_counter() - t0
           machinery = "cpp"
           pair = f"pyvinecopulib.Bicop, family set {list(fams)}, BIC, rotations, 1 thread"
@@ -277,15 +212,9 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
 
           est = e3_npcc.spec(e3_npcc.VINECOP_CHECK)
           torch.manual_seed(common_seed(d, seed, est))
-          vine = RosenblattVinecop(
-            None, structure, device="cpu", context=SimplifiedContext()
-          )
-          controls = est.controls(
-            FitControlsRosenblattVinecop,
-            device="cpu",
-            projection_grid_size=e3_npcc.PROJECTION_GRID_SIZE,
-            batch_size=None,
-          )
+          vine = RosenblattVinecop(None, structure, device="cpu", context=SimplifiedContext())
+          controls = est.controls(FitControlsRosenblattVinecop, device="cpu",
+                                  projection_grid_size=e3_npcc.PROJECTION_GRID_SIZE, batch_size=None)
           t0 = time.perf_counter()
           vine.fit(tr_t, controls)
           fit_s = time.perf_counter() - t0
@@ -295,75 +224,48 @@ def main() -> None:  # noqa: PLR0915 - one linear protocol
             inference_s = time.perf_counter() - t0
           machinery, pair = "npcc", f"npcc.RosenblattBicop ({est.label})"
         else:
-          est = e3_npcc.spec(arm[len("npcc-") :])
+          est = e3_npcc.spec(arm[len("npcc-"):])
           if not warmed:
-            SharedVinecop(
-              pv.RVineStructure.from_order([1, 2, 3]), device=a.device
-            ).fit(tr_t[:, :3], fit_edge=npcc_edge(est))
+            SharedVinecop(pv.RVineStructure.from_order([1, 2, 3]), device=a.device).fit(
+              tr_t[:, :3], fit_edge=npcc_edge(est))
             warmed = True
           torch.manual_seed(common_seed(d, seed, est))
           lp, fit_s, inference_s = shared_fit(npcc_edge(est), device=a.device)
           machinery, pair = "shared", f"npcc.RosenblattBicop ({est.label})"
-          extra = {
-            "estimator": est.label,
-            "estimator_id": est.estimator_id,
-            "backend": est.backend,
-            "transform": est.transform,
-            "model_version": e3_npcc.ESTIMATORS[est.label][1],
-          }
+          extra = {"estimator": est.label, "estimator_id": est.estimator_id,
+                   "backend": est.backend, "transform": est.transform,
+                   "model_version": e3_npcc.ESTIMATORS[est.label][1]}
         # A density the arm cannot evaluate (NaN) counts as the floor, as a
         # density below it does: every arm is then scored on all the test
         # points. `np.maximum` alone would pass a NaN through. The excess
         # over the finite points is recorded beside it.
         finite = np.isfinite(lp)
         n_nonfinite = int(np.sum(~finite))
-        excess_finite = (
-          float(np.mean((logtrue - lp)[finite])) if finite.any() else None
-        )
+        excess_finite = float(np.mean((logtrue - lp)[finite])) if finite.any() else None
         floor = np.log(common.LOG_FLOOR)
         lp = np.where(np.isnan(lp) | (lp < floor), floor, lp)
         ratio = logtrue - lp
         row = {
-          "experiment": "E3c",
-          "d": d,
-          "seed": seed,
-          "n_train": int(tr.shape[0]),
-          "n_test": int(te.shape[0]),
-          "n_edges": d * (d - 1) // 2,
-          "order": json.dumps(order),
-          "method": arm,
-          "role": ROLES.get(arm, "arm"),
-          "vine_machinery": MACHINERY[machinery],
-          "pair_copula": pair,
-          "env": "npcc",
-          "test_loglik": float(np.mean(lp)),
-          "true_loglik": float(np.mean(logtrue)),
+          "experiment": "E3c", "d": d, "seed": seed, "n_train": int(tr.shape[0]),
+          "n_test": int(te.shape[0]), "n_edges": d * (d - 1) // 2, "order": json.dumps(order),
+          "method": arm, "role": ROLES.get(arm, "arm"),
+          "vine_machinery": MACHINERY[machinery], "pair_copula": pair, "env": "npcc",
+          "test_loglik": float(np.mean(lp)), "true_loglik": float(np.mean(logtrue)),
           "excess_nll": float(np.mean(ratio)),
-          "excess_nll_mc_se": float(
-            np.std(ratio, ddof=1) / np.sqrt(ratio.size)
-          ),
-          "n_nonfinite": n_nonfinite,
-          "excess_nll_finite": excess_finite,
-          "fit_s": fit_s,
-          "inference_s": inference_s,
-          **extra,
+          "excess_nll_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
+          "n_nonfinite": n_nonfinite, "excess_nll_finite": excess_finite,
+          "fit_s": fit_s, "inference_s": inference_s, **extra,
           "structure_selection": "none (true structure given)",
           "torch_threads": torch.get_num_threads(),
           "cpu_cores": len(os.sched_getaffinity(0)),
           "samples_sha256": info["samples_sha256"],
-          "load_avg_1m": load_before,
-          **prov,
+          "load_avg_1m": load_before, **prov,
         }
         np.save(path.with_suffix(".npy"), lp.astype(np.float32))
         common.write_json(row, path)
-        print(
-          f"{arm} d={d} s{seed}: ll {row['test_loglik']:.4f} (true {row['true_loglik']:.4f}) "
-          f"excess {row['excess_nll']:.4f} fit {fit_s:.1f} s inf {inference_s:.1f} s",
-          flush=True,
-        )
-      rows = [
-        json.loads(q.read_text()) for q in sorted(out_dir.glob("d*.json"))
-      ]
+        print(f"{arm} d={d} s{seed}: ll {row['test_loglik']:.4f} (true {row['true_loglik']:.4f}) "
+              f"excess {row['excess_nll']:.4f} fit {fit_s:.1f} s inf {inference_s:.1f} s", flush=True)
+      rows = [json.loads(q.read_text()) for q in sorted(out_dir.glob("d*.json"))]
       if rows:
         common.write_csv(rows, a.folder / f"npcc_{arm}.csv")
   finally:

@@ -44,13 +44,8 @@ def dvine_edges(order: Sequence[int]) -> list[set[Edge]]:
   """The edges of each tree of the D-vine on ``order`` (1-based labels)."""
   o = [int(v) for v in order]
   d = len(o)
-  return [
-    {
-      (frozenset((o[i], o[i + t + 1])), frozenset(o[i + 1 : i + t + 1]))
-      for i in range(d - 1 - t)
-    }
-    for t in range(d - 1)
-  ]
+  return [{(frozenset((o[i], o[i + t + 1])), frozenset(o[i + 1:i + t + 1]))
+           for i in range(d - 1 - t)} for t in range(d - 1)]
 
 
 def recovery(selected: list[set[Edge]], truth: list[set[Edge]]) -> dict:
@@ -71,10 +66,7 @@ def recovery(selected: list[set[Edge]], truth: list[set[Edge]]) -> dict:
     per_tree.append(k / len(true_tree))
     hit += k
     total += len(true_tree)
-  equal = all(
-    (selected[t] if t < len(selected) else set()) == truth[t]
-    for t in range(len(truth))
-  )
+  equal = all((selected[t] if t < len(selected) else set()) == truth[t] for t in range(len(truth)))
   return {"per_tree": per_tree, "overall": hit / total, "equal": equal}
 
 
@@ -83,6 +75,4 @@ def self_check(pv) -> None:  # noqa: ANN001 - the pyvinecopulib module of the ca
   for order in ([3, 1, 4, 2, 5], [2, 5, 1, 4, 3, 6], list(range(1, 11))):
     structure = pv.DVineStructure(order=order)
     if edges_from_matrix(np.asarray(structure.matrix)) != dvine_edges(order):
-      raise RuntimeError(
-        f"structure edges must agree with the D-vine on {order}"
-      )
+      raise RuntimeError(f"structure edges must agree with the D-vine on {order}")

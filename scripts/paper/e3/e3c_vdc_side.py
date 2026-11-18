@@ -58,14 +58,8 @@ DIMS = (5, 10)
 SEEDS = (101, 202, 303, 404, 505)
 N_TRAIN = 2000
 N_TEST = 20000
-VDC_VINE_SETTINGS = {
-  "vine_type": "dvine",
-  "m": 64,
-  "projection_iters": 30,
-  "hfunc_use_spline": False,
-  "batch_edges": True,
-  "edge_batch_size": 256,
-}
+VDC_VINE_SETTINGS = {"vine_type": "dvine", "m": 64, "projection_iters": 30,
+                     "hfunc_use_spline": False, "batch_edges": True, "edge_batch_size": 256}
 
 
 def main() -> None:
@@ -99,11 +93,8 @@ def main() -> None:
 
   def bicop(j: int):  # noqa: ANN202 - a pv.Bicop
     family, params, rotation = cases[j]
-    return pv.Bicop(
-      family=getattr(pv.BicopFamily, family),
-      rotation=rotation,
-      **({"parameters": np.asarray(params)} if params else {}),
-    )
+    return pv.Bicop(family=getattr(pv.BicopFamily, family), rotation=rotation,
+                    **({"parameters": np.asarray(params)} if params else {}))
 
   arrays: dict[str, list] = {k: [] for k in ("d", "seed")}
   per_cell: dict[str, np.ndarray] = {}
@@ -113,43 +104,22 @@ def main() -> None:
     for seed in SEEDS:
       rng = np.random.default_rng([seed, d])
       order = [int(o) + 1 for o in rng.permutation(d)]
-      edge_cases = [
-        [int(rng.integers(len(cases))) for _ in range(d - 1 - t)]
-        for t in range(d - 1)
-      ]
+      edge_cases = [[int(rng.integers(len(cases))) for _ in range(d - 1 - t)] for t in range(d - 1)]
       structure = pv.DVineStructure(order=order)
       vine = pv.Vinecop.from_structure(
-        structure=structure,
-        pair_copulas=[[bicop(j) for j in row] for row in edge_cases],
-      )
+        structure=structure, pair_copulas=[[bicop(j) for j in row] for row in edge_cases])
       tr = np.clip(vine.simulate(N_TRAIN, seeds=[seed, d, 1]), 1e-10, 1 - 1e-10)
       te = np.clip(vine.simulate(N_TEST, seeds=[seed, d, 2]), 1e-10, 1 - 1e-10)
       logtrue = np.log(np.maximum(vine.pdf(te), common.LOG_FLOOR))
       key = f"d{d}_s{seed}"
-      per_cell.update(
-        {
-          f"{key}_train": tr,
-          f"{key}_test": te,
-          f"{key}_logtrue": logtrue,
-          f"{key}_order": np.asarray(order),
-          f"{key}_matrix": np.asarray(structure.matrix),
-          f"{key}_edge_cases": np.asarray(
-            [c for row in edge_cases for c in row]
-          ),
-        }
-      )
-      arrays["d"].append(d)
-      arrays["seed"].append(seed)
+      per_cell.update({f"{key}_train": tr, f"{key}_test": te, f"{key}_logtrue": logtrue,
+                       f"{key}_order": np.asarray(order), f"{key}_matrix": np.asarray(structure.matrix),
+                       f"{key}_edge_cases": np.asarray([c for row in edge_cases for c in row])})
+      arrays["d"].append(d); arrays["seed"].append(seed)
 
-      settings = {
-        **VDC_VINE_SETTINGS,
-        "order": [o - 1 for o in order],
-        "device": a.device,
-      }
+      settings = {**VDC_VINE_SETTINGS, "order": [o - 1 for o in order], "device": a.device}
       if not warmed:  # VDC's protocol excludes warm-up
-        VineCopulaModel(**settings).fit(
-          tr, diffusion_model=bundle.model, diffusion=None, verbose=False
-        )
+        VineCopulaModel(**settings).fit(tr, diffusion_model=bundle.model, diffusion=None, verbose=False)
         warmed = True
       load_before = common.load_average()
       model = VineCopulaModel(**settings)
@@ -165,82 +135,43 @@ def main() -> None:
       cells = a.out / "vdc_own_cells"
       cells.mkdir(exist_ok=True)
       np.save(cells / f"d{d}_s{seed}.npy", lp.astype(np.float32))
-      rows.append(
-        {
-          "experiment": "E3c",
-          "d": d,
-          "seed": seed,
-          "n_train": N_TRAIN,
-          "n_test": N_TEST,
-          "n_edges": d * (d - 1) // 2,
-          "order": json.dumps(order),
-          "edge_cases": json.dumps(
-            [[case_label(*cases[j]) for j in row] for row in edge_cases]
-          ),
-          "method": "vdc_own",
-          "method_group": "reference",
-          "role": "reference",
-          "vine_machinery": "VDC's own (vdc.vine.api.VineCopulaModel, D-vine on the true order)",
-          "env": "vdc",
-          "test_loglik": float(np.mean(lp)),
-          "true_loglik": float(np.mean(logtrue)),
-          "excess_nll": float(np.mean(ratio)),
-          "excess_nll_mc_se": float(
-            np.std(ratio, ddof=1) / np.sqrt(ratio.size)
-          ),
-          "n_nonfinite": int(np.sum(~np.isfinite(lp))),
-          "fit_s": fit_s,
-          "inference_s": inference_s,
-          "torch_threads": torch.get_num_threads(),
-          "vdc_settings": json.dumps(settings),
-          "load_avg_1m": load_before,
-          **prov,
-        }
-      )
-      print(
-        f"d={d} seed={seed}: true ll {np.mean(logtrue):.4f}, vdc_own ll {np.mean(lp):.4f}, "
-        f"excess {np.mean(ratio):.4f}, fit {fit_s:.1f} s, inf {inference_s:.1f} s",
-        flush=True,
-      )
+      rows.append({
+        "experiment": "E3c", "d": d, "seed": seed, "n_train": N_TRAIN, "n_test": N_TEST,
+        "n_edges": d * (d - 1) // 2, "order": json.dumps(order),
+        "edge_cases": json.dumps([[case_label(*cases[j]) for j in row] for row in edge_cases]),
+        "method": "vdc_own", "method_group": "reference", "role": "reference",
+        "vine_machinery": "VDC's own (vdc.vine.api.VineCopulaModel, D-vine on the true order)",
+        "env": "vdc",
+        "test_loglik": float(np.mean(lp)), "true_loglik": float(np.mean(logtrue)),
+        "excess_nll": float(np.mean(ratio)),
+        "excess_nll_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
+        "n_nonfinite": int(np.sum(~np.isfinite(lp))),
+        "fit_s": fit_s, "inference_s": inference_s,
+        "torch_threads": torch.get_num_threads(),
+        "vdc_settings": json.dumps(settings),
+        "load_avg_1m": load_before, **prov,
+      })
+      print(f"d={d} seed={seed}: true ll {np.mean(logtrue):.4f}, vdc_own ll {np.mean(lp):.4f}, "
+            f"excess {np.mean(ratio):.4f}, fit {fit_s:.1f} s, inf {inference_s:.1f} s", flush=True)
 
   samples = a.out / "samples.npz"
-  common.save_npz(
-    samples,
-    {
-      "d": np.asarray(arrays["d"]),
-      "seed": np.asarray(arrays["seed"]),
-      **per_cell,
-    },
-  )
+  common.save_npz(samples, {"d": np.asarray(arrays["d"]), "seed": np.asarray(arrays["seed"]), **per_cell})
   common.write_csv(rows, a.out / "vdc_side.csv")
-  common.write_json(
-    {
-      "experiment": "E3c",
-      "description": "simplified D-vines on the nine Table 1 pair copulas; VDC's own vine as a reference",
-      "provenance": prov,
-      "design": {
-        "dims": list(DIMS),
-        "seeds": list(SEEDS),
-        "n_train": N_TRAIN,
-        "n_test": N_TEST,
-        "structure": "D-vine, order = rng.permutation(d) + 1",
-        "edges": "case index rng.integers(9) per edge, tree by tree, in every tree",
-        "rng": "np.random.default_rng([seed, d]); order first, then edges",
-        "simulate_seeds": {"train": "[seed, d, 1]", "test": "[seed, d, 2]"},
-        "sample_clip": [1e-10, 1 - 1e-10],
-        "cases": cases,
-      },
-      "vdc_own_settings": {
-        **VDC_VINE_SETTINGS,
-        "source": "paper/neurips2026/runners/run_uci_maf.py",
-        "order": "the true D-vine order",
-      },
-      "log_floor": common.LOG_FLOOR,
-      "samples_npz": samples.name,
-      "samples_sha256": common.sha256_file(samples),
-    },
-    a.out / "vdc_side.json",
-  )
+  common.write_json({
+    "experiment": "E3c",
+    "description": "simplified D-vines on the nine Table 1 pair copulas; VDC's own vine as a reference",
+    "provenance": prov,
+    "design": {"dims": list(DIMS), "seeds": list(SEEDS), "n_train": N_TRAIN, "n_test": N_TEST,
+               "structure": "D-vine, order = rng.permutation(d) + 1",
+               "edges": "case index rng.integers(9) per edge, tree by tree, in every tree",
+               "rng": "np.random.default_rng([seed, d]); order first, then edges",
+               "simulate_seeds": {"train": "[seed, d, 1]", "test": "[seed, d, 2]"},
+               "sample_clip": [1e-10, 1 - 1e-10], "cases": cases},
+    "vdc_own_settings": {**VDC_VINE_SETTINGS, "source": "paper/neurips2026/runners/run_uci_maf.py",
+                         "order": "the true D-vine order"},
+    "log_floor": common.LOG_FLOOR,
+    "samples_npz": samples.name, "samples_sha256": common.sha256_file(samples),
+  }, a.out / "vdc_side.json")
 
 
 if __name__ == "__main__":

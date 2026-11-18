@@ -61,48 +61,30 @@ MODES = ("conditional", "pooled")
 
 def main() -> None:
   p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-  p.add_argument(
-    "--samples", type=Path, default=common.RESULTS / "e3b" / "samples.npz"
-  )
+  p.add_argument("--samples", type=Path, default=common.RESULTS / "e3b" / "samples.npz")
   p.add_argument("--estimators", nargs="+", default=["cpu"])
   p.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES))
   p.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
-  p.add_argument(
-    "--gpu-is-free",
-    action="store_true",
-    help="required for --device cuda; the GPU is shared with E1",
-  )
+  p.add_argument("--gpu-is-free", action="store_true",
+                 help="required for --device cuda; the GPU is shared with E1")
   p.add_argument("--out", type=Path, default=common.RESULTS / "e3b")
-  p.add_argument(
-    "--only",
-    type=int,
-    nargs="*",
-    default=None,
-    help="fit indices to run (default: all 20); for smoke tests",
-  )
+  p.add_argument("--only", type=int, nargs="*", default=None,
+                 help="fit indices to run (default: all 20); for smoke tests")
   a = p.parse_args()
 
   labels = resolve(a.estimators)
   for label in labels:
     kind = e3_npcc.ESTIMATORS[label][2]
     if kind == "gpu" and a.device != "cuda":
-      raise SystemExit(
-        f"{label} must run with --device cuda; got --device {a.device}"
-      )
+      raise SystemExit(f"{label} must run with --device cuda; got --device {a.device}")
     if kind == "cpu" and a.device != "cpu":
-      raise SystemExit(
-        f"{label} runs on the host; pass --device cpu, got {a.device}"
-      )
+      raise SystemExit(f"{label} runs on the host; pass --device cpu, got {a.device}")
   if a.device == "cuda" and not a.gpu_is_free:
-    raise SystemExit(
-      "--device cuda requires --gpu-is-free: the GPU is shared with E1"
-    )
+    raise SystemExit("--device cuda requires --gpu-is-free: the GPU is shared with E1")
 
   sample_info = json.loads((a.samples.parent / "vdc_side.json").read_text())
   if common.sha256_file(a.samples) != sample_info["samples_sha256"]:
-    raise SystemExit(
-      f"{a.samples} must match the sha256 recorded by the VDC side"
-    )
+    raise SystemExit(f"{a.samples} must match the sha256 recorded by the VDC side")
   with np.load(a.samples) as f:
     data = {k: f[k] for k in f.files}
   n_fits = data["train"].shape[0]
@@ -127,92 +109,55 @@ def main() -> None:
         if not warmed:
           t0 = time.perf_counter()
           e3_npcc.fit_and_score(
-            est,
-            tr[:, 1:],
-            te[:N_WARMUP_TEST, 1:],
-            device=a.device,
-            salt=("E3b-warmup",),
-            x_train=tr[:, [0]],
-            x_test=te[:N_WARMUP_TEST, [0]],
-          )
-          print(
-            f"{label}: warm-up {time.perf_counter() - t0:.1f} s", flush=True
-          )
+            est, tr[:, 1:], te[:N_WARMUP_TEST, 1:], device=a.device,
+            salt=("E3b-warmup",), x_train=tr[:, [0]], x_test=te[:N_WARMUP_TEST, [0]])
+          print(f"{label}: warm-up {time.perf_counter() - t0:.1f} s", flush=True)
           warmed = True
         load_before = common.load_average()
         res = e3_npcc.fit_and_score(
-          est,
-          tr[:, 1:],
-          te[:, 1:],
-          device=a.device,
-          salt=("E3b", case, seed, mode),
-          x_train=x_tr,
-          x_test=x_te,
-        )
+          est, tr[:, 1:], te[:, 1:], device=a.device,
+          salt=("E3b", case, seed, mode), x_train=x_tr, x_test=x_te)
         ratio = logtrue - res.log_pdf
         row = {
-          "experiment": "E3b",
-          "case": case,
-          "seed": seed,
+          "experiment": "E3b", "case": case, "seed": seed,
           "split": design["split"],
-          "n_train": int(tr.shape[0]),
-          "n_test": int(te.shape[0]),
+          "n_train": int(tr.shape[0]), "n_test": int(te.shape[0]),
           "n_train_low": int(np.sum(tr[:, 0] < design["split"])),
           "n_test_low": int(np.sum(te[:, 0] < design["split"])),
           "oracle_nll": -float(np.mean(logtrue)),
-          "method": f"npcc-{label}"
-          + ("" if mode == "conditional" else "-pooled"),
-          "method_group": "npcc_conditional"
-          if mode == "conditional"
-          else "npcc_pooled",
+          "method": f"npcc-{label}" + ("" if mode == "conditional" else "-pooled"),
+          "method_group": "npcc_conditional" if mode == "conditional" else "npcc_pooled",
           "conditions_on_u1": "yes" if mode == "conditional" else "no",
           "mode": mode,
-          "estimator": label,
-          "estimator_id": est.estimator_id,
-          "backend": est.backend,
-          "transform": est.transform,
+          "estimator": label, "estimator_id": est.estimator_id,
+          "backend": est.backend, "transform": est.transform,
           "model_version": e3_npcc.ESTIMATORS[label][1],
           "env": "npcc",
           "test_nll": -float(np.mean(res.log_pdf)),
           "excess_nll": float(np.mean(ratio)),
-          "excess_nll_mc_se": float(
-            np.std(ratio, ddof=1) / np.sqrt(ratio.size)
-          ),
+          "excess_nll_mc_se": float(np.std(ratio, ddof=1) / np.sqrt(ratio.size)),
           "n_floored": int(np.sum(res.log_pdf <= np.log(common.LOG_FLOOR))),
           "n_nonfinite": res.n_nan,
           "min_logpdf": float(np.min(res.log_pdf)),
-          "fit_s": res.fit_s,
-          "projection_s": None,
-          "inference_s": res.inference_s,
+          "fit_s": res.fit_s, "projection_s": None, "inference_s": res.inference_s,
           "torch_threads": torch.get_num_threads(),
-          "backend_threads": (
-            f"library defaults, confined to {len(os.sched_getaffinity(0))} pinned core(s)"
-            if a.device == "cpu"
-            else None
-          ),
+          "backend_threads": (f"library defaults, confined to {len(os.sched_getaffinity(0))} pinned core(s)" if a.device == "cpu" else None),
           "warmup_excluded": True,
-          "samples_sha256": sample_info["samples_sha256"],
+        "samples_sha256": sample_info["samples_sha256"],
           "load_avg_1m": load_before,
           **prov,
         }
         np.save(stem.with_suffix(".npy"), res.log_pdf.astype(np.float32))
         common.write_json(row, stem.with_suffix(".json"))
-        print(
-          f"{label} k={k:02d} {case} s{seed} {mode}: excess {row['excess_nll']:.4f} "
-          f"fit {res.fit_s:.2f} s inf {res.inference_s:.2f} s",
-          flush=True,
-        )
+        print(f"{label} k={k:02d} {case} s{seed} {mode}: excess {row['excess_nll']:.4f} "
+              f"fit {res.fit_s:.2f} s inf {res.inference_s:.2f} s", flush=True)
 
-    rows = [
-      json.loads(path.read_text()) for path in sorted(cell_dir.glob("k*.json"))
-    ]
+    rows = [json.loads(path.read_text()) for path in sorted(cell_dir.glob("k*.json"))]
     if len(rows) == n_fits * len(MODES):
       common.write_csv(rows, a.out / f"npcc_{label}.csv")
       for mode in MODES:
         vals = [r["excess_nll"] for r in rows if r["mode"] == mode]
-        print(
-          f"{label} {mode}: mean excess NLL {np.mean(vals):.4f}", flush=True
-        )
+        print(f"{label} {mode}: mean excess NLL {np.mean(vals):.4f}", flush=True)
 
 
 if __name__ == "__main__":

@@ -47,94 +47,41 @@ def run(script: str, *args: str, log: Path | None = None) -> None:
   env = {k: v for k, v in os.environ.items() if k != "PYTORCH_CUDA_ALLOC_CONF"}
   cmd = ["uv", "run", "--no-sync", "python", str(HERE / script), *args]
   print("$", " ".join(cmd), flush=True)
-  with log.open("a") if log else open(os.devnull, "w") as sink:
-    proc = subprocess.run(
-      cmd,
-      cwd=REPO,
-      env=env,
-      stdout=sink if log else None,
-      stderr=subprocess.STDOUT if log else None,
-    )
+  with (log.open("a") if log else open(os.devnull, "w")) as sink:
+    proc = subprocess.run(cmd, cwd=REPO, env=env,
+                          stdout=sink if log else None, stderr=subprocess.STDOUT if log else None)
   if proc.returncode != 0:
     sys.exit(f"{script} must exit 0; got {proc.returncode} (see {log})")
 
 
 def main() -> None:
   p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-  p.add_argument(
-    "--main-tabpfn",
-    required=True,
-    choices=["v2.5", "v3", "v3.5"],
-    help="the main-text TabPFN version, at the probit transform as every E3 "
-    "estimator (e3_npcc.ESTIMATORS); the only GPU arm at n_train = 10000",
-  )
-  p.add_argument(
-    "--stages",
-    nargs="+",
-    default=["e3a", "e3b", "e3c"],
-    choices=["e3a", "e3b", "e3c"],
-  )
-  p.add_argument(
-    "--designs",
-    nargs="+",
-    default=["decay", "strong"],
-    choices=["decay", "strong"],
-    help="E3c designs to run",
-  )
-  p.add_argument(
-    "--no-collect",
-    action="store_true",
-    help="skip the collector, e.g. when two drivers share the GPU",
-  )
+  p.add_argument("--main-tabpfn", required=True, choices=["v2.5", "v3", "v3.5"],
+                 help="the main-text TabPFN version, at the probit transform as every E3 "
+                      "estimator (e3_npcc.ESTIMATORS); the only GPU arm at n_train = 10000")
+  p.add_argument("--stages", nargs="+", default=["e3a", "e3b", "e3c"],
+                 choices=["e3a", "e3b", "e3c"])
+  p.add_argument("--designs", nargs="+", default=["decay", "strong"], choices=["decay", "strong"],
+                 help="E3c designs to run")
+  p.add_argument("--no-collect", action="store_true",
+                 help="skip the collector, e.g. when two drivers share the GPU")
   a = p.parse_args()
 
   gpu = ("--device", "cuda", "--gpu-is-free")
   main_tabpfn = f"tabpfn-quantiles-{a.main_tabpfn}-probit"
   if "e3a" in a.stages:
     log = RESULTS / "e3a_npcc_gpu.log"
-    run(
-      "e3a_npcc_fit.py",
-      "--estimators",
-      "gpu",
-      "--n-train",
-      "2000",
-      *gpu,
-      log=log,
-    )
-    run(
-      "e3a_npcc_fit.py",
-      "--estimators",
-      main_tabpfn,
-      "--n-train",
-      "10000",
-      *gpu,
-      log=log,
-    )
+    run("e3a_npcc_fit.py", "--estimators", "gpu", "--n-train", "2000", *gpu, log=log)
+    run("e3a_npcc_fit.py", "--estimators", main_tabpfn, "--n-train", "10000", *gpu, log=log)
   if "e3b" in a.stages:
-    run(
-      "e3b_npcc_fit.py",
-      "--estimators",
-      "gpu",
-      *gpu,
-      log=RESULTS / "e3b_npcc_gpu.log",
-    )
+    run("e3b_npcc_fit.py", "--estimators", "gpu", *gpu, log=RESULTS / "e3b_npcc_gpu.log")
   if "e3c" in a.stages:
     arms = [f"npcc-{main_tabpfn}"]
-    folders = {
-      "decay": ("e3c_decay", "e3c_decay_npcc_gpu.log"),
-      "strong": ("e3c", "e3c_npcc_gpu.log"),
-    }
+    folders = {"decay": ("e3c_decay", "e3c_decay_npcc_gpu.log"), "strong": ("e3c", "e3c_npcc_gpu.log")}
     for design in a.designs:
       folder, log = folders[design]
-      run(
-        "e3c_npcc_fit.py",
-        "--folder",
-        str(RESULTS / folder),
-        "--arms",
-        *arms,
-        *gpu,
-        log=RESULTS / log,
-      )
+      run("e3c_npcc_fit.py", "--folder", str(RESULTS / folder), "--arms", *arms, *gpu,
+          log=RESULTS / log)
   if not a.no_collect:
     run("e3_collect.py")
 

@@ -43,16 +43,10 @@ from pathlib import Path
 #: whose ``results/`` the scripts read and write, ``E3_NPCC_PYTHON`` its
 #: interpreter (``<repo>/.venv/bin/python`` by default), and ``E3_VDC_REPO``
 #: and ``E3_VDC_PYTHON`` VDC's clone and environment.
-VDC_REPO = Path(
-  os.environ.get("E3_VDC_REPO", "/home/thibault/vdc/vine-denoising-copula")
-)
-VDC_PYTHON = Path(
-  os.environ.get("E3_VDC_PYTHON", "/home/thibault/vdc/env/bin/python")
-)
+VDC_REPO = Path(os.environ.get("E3_VDC_REPO", "/home/thibault/vdc/vine-denoising-copula"))
+VDC_PYTHON = Path(os.environ.get("E3_VDC_PYTHON", "/home/thibault/vdc/env/bin/python"))
 NPCC_REPO = Path(os.environ.get("E3_NPCC_REPO", "/home/thibault/npcc"))
-NPCC_PYTHON = Path(
-  os.environ.get("E3_NPCC_PYTHON", str(NPCC_REPO / ".venv" / "bin" / "python"))
-)
+NPCC_PYTHON = Path(os.environ.get("E3_NPCC_PYTHON", str(NPCC_REPO / ".venv" / "bin" / "python")))
 RESULTS = NPCC_REPO / "results" / "e3_vdc"
 #: The directory of the E3 scripts; every module here is fingerprinted.
 E3_DIR = Path(__file__).resolve().parent
@@ -69,11 +63,7 @@ CHECKPOINT_SHA256 = (
   "8a1b71ad6d2012ed344b22a743a96e667d32a2ab54ade4444686e375e91f5c0f"
 )
 TABLE1_RUNNER = (
-  VDC_REPO
-  / "paper"
-  / "neurips2026"
-  / "runners"
-  / "reproduce_table1_likelihood.py"
+  VDC_REPO / "paper" / "neurips2026" / "runners" / "reproduce_table1_likelihood.py"
 )
 #: The v0.2.0 tag points at e09f3d3; the merge of the release into main is
 #: d5aaa46. Both have tree db4fe77, so either names the code that ran.
@@ -155,12 +145,7 @@ def git_src_dirty(repo: Path) -> bool:
 def env_versions(python: Path, names: tuple[str, ...]) -> dict:
   """Package versions of another interpreter, without importing them here."""
   out = subprocess.run(
-    [
-      str(python),
-      "-I",
-      "-c",
-      _VERSION_PROBE.replace("NAMES", repr(list(names))),
-    ],
+    [str(python), "-I", "-c", _VERSION_PROBE.replace("NAMES", repr(list(names)))],
     check=True,
     capture_output=True,
     text=True,
@@ -201,9 +186,7 @@ def save_npz(path: Path, arrays: dict) -> None:
   with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     for name in sorted(arrays):
       buf = io.BytesIO()
-      np.lib.format.write_array(
-        buf, np.asanyarray(arrays[name]), allow_pickle=False
-      )
+      np.lib.format.write_array(buf, np.asanyarray(arrays[name]), allow_pickle=False)
       info = zipfile.ZipInfo(f"{name}.npy", date_time=(1980, 1, 1, 0, 0, 0))
       info.compress_type = zipfile.ZIP_DEFLATED
       info.external_attr = 0o644 << 16
@@ -230,11 +213,8 @@ def provenance(script: Path | str, device: str) -> dict:
   # A machine without VDC's environment can still run the npcc-only arms;
   # its rows then hold None for VDC's versions rather than this machine's.
   has_vdc = VDC_PYTHON.exists()
-  vdc_env = (
-    env_versions(VDC_PYTHON, VDC_ENV_PACKAGES)
-    if has_vdc
-    else dict.fromkeys(("python", *VDC_ENV_PACKAGES))
-  )
+  vdc_env = (env_versions(VDC_PYTHON, VDC_ENV_PACKAGES) if has_vdc
+             else dict.fromkeys(("python", *VDC_ENV_PACKAGES)))
   npcc_env = env_versions(NPCC_PYTHON, NPCC_ENV_PACKAGES)
   return {
     "vdc_tag": VDC_TAG,
@@ -285,16 +265,10 @@ def cpu_model() -> str | None:
 def gpu_name() -> str | None:
   """The first GPU's name, from ``nvidia-smi``."""
   try:
-    return (
-      subprocess.run(
-        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-        check=True,
-        capture_output=True,
-        text=True,
-      )
-      .stdout.strip()
-      .splitlines()[0]
-    )
+    return subprocess.run(
+      ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+      check=True, capture_output=True, text=True,
+    ).stdout.strip().splitlines()[0]
   except (OSError, subprocess.CalledProcessError, IndexError):
     return None
 
