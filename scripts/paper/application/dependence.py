@@ -47,7 +47,7 @@ from matplotlib.figure import Figure
 from scipy.stats import kendalltau
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from report_common import Report
+from report import Report
 
 from npcc.experiments.application.marginal_set import MarginalSet
 from npcc.experiments.application.store import (
