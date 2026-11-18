@@ -598,3 +598,41 @@ def pit_uniformity(predictions: pd.DataFrame) -> pd.DataFrame:
         }
       )
   return pd.DataFrame(rows)
+
+
+def physical_validity(cases: pd.DataFrame, n_draws: int) -> pd.DataFrame:
+  """How many draws of each arm break a physical bound, per station.
+
+  Parameters
+  ----------
+  cases : pandas.DataFrame
+      Per-case copula scores, with a ``broken_<check>`` column per physical
+      check, each case's count of draws breaking it; ``nan`` for a result
+      without draws of its own, which is left out.
+  n_draws : int
+      Draws per test case.
+
+  Returns
+  -------
+  pandas.DataFrame
+      One row per ``(station, model, arm)``: ``n_cases``, ``n_draws`` (all
+      of the cases' draws), and per check its count of draws and their
+      ``share``. Empty where no case carries a check.
+  """
+  checks = [c for c in cases.columns if c.startswith("broken_")]
+  if not checks:
+    return pd.DataFrame()
+  sampled = cases.loc[cases[checks].notna().all(axis=1)]
+  if sampled.empty:
+    return pd.DataFrame()
+  table = cast(
+    "pd.DataFrame",
+    sampled.groupby(["station", "model", "arm"], sort=True)
+    .agg(n_cases=("row", "size"), **{c: (c, "sum") for c in checks})
+    .reset_index(),
+  )
+  table.insert(4, "n_draws", table["n_cases"] * n_draws)
+  for c in checks:
+    table[c] = table[c].astype(np.int64)
+    table[f"{c}_share"] = table[c] / table["n_draws"]
+  return table

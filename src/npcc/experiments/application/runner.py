@@ -43,6 +43,7 @@ from npcc.experiments.application.margins import build_predictor, fit_station
 from npcc.experiments.application.scores import (
   copula_tables,
   marginal_tables,
+  physical_validity,
   pit_uniformity,
   summarize_timings,
 )
@@ -648,6 +649,9 @@ def evaluate(config: ApplicationConfig, options: RunOptions) -> list[str]:
       tables["copulas_by_station"] = summary["by_station"]
       tables["copulas_pooled"] = summary["pooled"]
       tables["copulas_station_mean"] = summary["station_mean"]
+      validity = physical_validity(cases, config.n_draws)
+      if not validity.empty:
+        tables["copulas_physical_validity"] = validity
     copula_timings = copula["timings"]
     if not copula_timings.empty:
       tables["copulas_timings"] = summarize_timings(

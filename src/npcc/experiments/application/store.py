@@ -759,6 +759,12 @@ def write_copula(
           f"{result.arm}'s {name} must be finite with shape ({n_test},); got "
           f"shape {values.shape}"
         )
+    # How many of each case's draws break a physical bound, by check; none
+    # for a result without draws of its own.
+    physical = {
+      physical_column(k): np.asarray(v, dtype=np.float64)
+      for k, v in getattr(result, "physical", {}).items()
+    }
     frames.append(
       pd.DataFrame(
         {
@@ -769,6 +775,7 @@ def write_copula(
           "row": rows,
           "time": ms.time_test,
           **{k: np.asarray(v, dtype=np.float64) for k, v in columns.items()},
+          **physical,
         }
       )
     )
@@ -823,6 +830,24 @@ def write_copula(
         temporary / "draws.parquet", index=False, compression="zstd"
       )
     (temporary / "info.json").write_text(_json(info))
+
+
+def physical_column(check: str) -> str:
+  """The ``scores.parquet`` column of a physical check, e.g. ``broken_any``.
+
+  Parameters
+  ----------
+  check : str
+      A key of
+      :data:`~npcc.experiments.application.derived.PHYSICAL_CHECKS`, or
+      ``"any"``.
+
+  Returns
+  -------
+  str
+      ``broken_`` and the check.
+  """
+  return f"broken_{check}"
 
 
 def draws_frame(

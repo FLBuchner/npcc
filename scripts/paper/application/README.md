@@ -160,6 +160,22 @@ sampled results (4 arms on EMOS; 4 classical arms, 2 mixtures with their 6
 members and 2 chains on TabPFN) at 131 stations about 3.4 GB, a little less
 compressed, since float noise compresses poorly.
 
+**Physical validity.** Every sampled result's draws are checked, as
+FLBuchner's `physics.py` checks them: a dew point above the air temperature
+(an RH above 100 %), an RH outside [0, 100], a negative mixing ratio, and a
+pressure at or below the vapor pressure `e = e_s(Td)` (with `T`'s
+constants), where the mixing ratio's formula breaks down. `scores.parquet`
+holds, per test case, how many of its draws break each (`broken_td_above_t`,
+`broken_rh_outside_0_100`, `broken_w_negative`, `broken_p_not_above_e`, and
+`broken_any` for at least one), and `evaluate` writes
+`tables/copulas_physical_validity.csv`: per station, marginal model and
+arm, the cases, the draws, and each check's count and share. A check needs
+its responses among the drawn ones. For the triple, the first two are zero
+by construction, since its RH margin lives on (0, 100) and so `Td <= T`;
+the last two would need a pressure drawn below the vapor pressure, which is
+at most `e_s(T)`, some tens of hPa. Five responses drawn at once carry no
+such guarantee.
+
 **RH = 100.** The cases with RH exactly 100 (or 0) are moved to 99.95 (or
 0.05) by the boundary nudge, as in FLBuchner's code. Their counts, per
 station, split and marginal model, are stored with each margin unit and

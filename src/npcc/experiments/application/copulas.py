@@ -124,7 +124,7 @@ from npcc.core.controls import FitControlsRosenblattVinecop
 from npcc.core.vinecop import RosenblattVinecop
 from npcc.experiments import _external, _external_vine
 from npcc.experiments._study import derive_seed, release_gpu
-from npcc.experiments.application.derived import derive
+from npcc.experiments.application.derived import derive, physical_violations
 from npcc.experiments.application.joint_scores import (
   energy_score,
   inverse_margins,
@@ -220,6 +220,11 @@ class CopulaResult:
       The draws the sample scores were computed from, on each response's
       own scale: the ``d`` modeled responses, then the ``k`` derived ones;
       ``None`` for a result that draws nothing of its own.
+  physical : dict of str to numpy.ndarray
+      Per physical check
+      (:func:`~npcc.experiments.application.derived.physical_violations`),
+      how many of each test case's draws break it; empty for a result that
+      draws nothing of its own.
   """
 
   arm: str
@@ -232,6 +237,7 @@ class CopulaResult:
   sample_crps: dict[str, np.ndarray] = field(default_factory=dict)
   sampled: bool = True
   draws: np.ndarray | None = None
+  physical: dict[str, np.ndarray] = field(default_factory=dict)
 
 
 class CopulaFailure(ValueError):
@@ -699,6 +705,9 @@ def _score(
       f"values at {bad.size} test cases",
       bad,
     )
+  physical = physical_violations(
+    draws, (*ms.variables, *ms.derived), ms.derivation
+  )
   timings["scoring"] = perf_counter() - t0
   if ms.derived:
     info = {
@@ -717,6 +726,7 @@ def _score(
     info=info,
     sample_crps=sample_crps,
     draws=draws,
+    physical=physical,
   )
 
 

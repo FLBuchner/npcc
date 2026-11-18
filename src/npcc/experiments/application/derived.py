@@ -363,3 +363,74 @@ def residuals(
     }
     for j, name in enumerate(derived)
   }
+
+
+#: The physical checks :func:`physical_violations` counts, and the responses
+#: each needs.
+PHYSICAL_CHECKS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+  {
+    "td_above_t": (TEMPERATURE, DEW_POINT),
+    "rh_outside_0_100": (RELATIVE_HUMIDITY,),
+    "w_negative": (MIXING_RATIO,),
+    "p_not_above_e": (TEMPERATURE, DEW_POINT, PRESSURE),
+  }
+)
+
+
+def physical_violations(
+  draws: np.ndarray,
+  variables: Sequence[str],
+  derivation: Derivation | None = None,
+) -> dict[str, np.ndarray]:
+  """How many of each case's draws break a physical bound.
+
+  The checks are those of :data:`PHYSICAL_CHECKS` whose responses are all
+  in ``variables``: a dew point above the air temperature, which is a
+  relative humidity above 100 %; a relative humidity outside [0, 100]; a
+  negative mixing ratio; and a pressure at or below the vapor pressure
+  ``e = e_s(Td)`` (with the air temperature's constants), where the mixing
+  ratio's formula breaks down. A triple of (T, RH, p) with RH in (0, 100]
+  breaks neither of the first two by construction, and the last two only
+  with a pressure below ``e_s(T)``; a draw of all five responses at once
+  may break any.
+
+  Parameters
+  ----------
+  draws : numpy.ndarray, shape (n, m, k)
+      ``m`` draws of each of ``n`` cases, last axis in the order of
+      ``variables``, each on its own scale.
+  variables : sequence of str
+      The responses' names.
+  derivation : Derivation, optional
+      The Magnus formula of the vapor pressure; MeteoSwiss's by default.
+
+  Returns
+  -------
+  dict of str to numpy.ndarray
+      Per computable check, then ``any`` (a draw breaking at least one),
+      the number of each case's draws breaking it, shape ``(n,)``.
+  """
+  formula = (derivation or Derivation()).formula
+  names = list(variables)
+  column = {v: draws[..., names.index(v)] for v in names}
+  broken: dict[str, np.ndarray] = {}
+  for check, needs in PHYSICAL_CHECKS.items():
+    if not all(v in column for v in needs):
+      continue
+    if check == "td_above_t":
+      flag = column[DEW_POINT] > column[TEMPERATURE]
+    elif check == "rh_outside_0_100":
+      rh = column[RELATIVE_HUMIDITY]
+      flag = (rh < 0.0) | (rh > 100.0)
+    elif check == "w_negative":
+      flag = column[MIXING_RATIO] < 0.0
+    else:
+      e = formula.saturation_vapor_pressure(
+        column[DEW_POINT], column[TEMPERATURE]
+      )
+      flag = column[PRESSURE] <= e
+    broken[check] = flag
+  if not broken:
+    return {}
+  broken["any"] = np.logical_or.reduce(list(broken.values()))
+  return {k: v.sum(axis=1).astype(np.int64) for k, v in broken.items()}
