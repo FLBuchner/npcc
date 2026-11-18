@@ -719,6 +719,7 @@ def write_copula(
   wall_seconds: float,
   save_draws: bool = False,
   nll_column: str | None = None,
+  stored_draws: int | None = None,
 ) -> None:
   """Write one copula arm's results on one marginal set, as a unit.
 
@@ -747,6 +748,10 @@ def write_copula(
       design of the copula stage. When omitted, ``joint_nll_modeled`` with
       derived responses, whose log score covers the modeled ones only, and
       ``joint_nll`` otherwise.
+  stored_draws : int, optional
+      With ``save_draws``, how many of each test case's draws to store, the
+      first ones; all of them when omitted. The scores, computed before,
+      use every draw. The count is recorded in ``info.json``.
   """
   n_test = len(ms.y_test)
   if np.shape(rows) != (n_test,):
@@ -858,10 +863,18 @@ def write_copula(
     },
   }
   draws = (
-    draws_frame(ms, arm, [r for r in results if r.arm == arm], rows=rows)
+    draws_frame(
+      ms,
+      arm,
+      [r for r in results if r.arm == arm],
+      rows=rows,
+      keep=stored_draws,
+    )
     if save_draws
     else None
   )
+  if draws is not None:
+    info["stored_draws"] = int(draws["draw"].max()) + 1
   with _unit(copula_dir(out, ms.station, ms.model, arm)) as temporary:
     pd.concat(frames, ignore_index=True).to_parquet(
       temporary / "scores.parquet", index=False
@@ -898,6 +911,7 @@ def draws_frame(
   results: Sequence[CopulaResultLike],
   *,
   rows: np.ndarray,
+  keep: int | None = None,
 ) -> pd.DataFrame:
   """Every sampled result's draws, one row per test case and draw.
 
@@ -917,6 +931,9 @@ def draws_frame(
       What the arm returned; each sampled one carries ``draws``.
   rows : numpy.ndarray, shape (n_test,)
       The test cases' rows in the input files.
+  keep : int, optional
+      Only each case's first ``keep`` draws, ``0`` to ``keep - 1``; all of
+      them when omitted.
 
   Returns
   -------
@@ -947,6 +964,13 @@ def draws_frame(
         f"{result.arm}'s draws must hold the {len(variables)} responses "
         f"{list(variables)}; got {draws.shape[2]}"
       )
+    if keep is not None:
+      if not 1 <= keep <= draws.shape[1]:
+        raise ValueError(
+          f"keep must lie between 1 and the {draws.shape[1]} draws per case "
+          f"of {result.arm}; got {keep}"
+        )
+      draws = draws[:, :keep]
     n_draws = draws.shape[1]
     flat = draws.reshape(n_test * n_draws, len(variables)).astype(np.float32)
     frames.append(

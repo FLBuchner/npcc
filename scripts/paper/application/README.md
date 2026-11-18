@@ -314,12 +314,28 @@ station 106:
    CRPS and each physical check's share of draws, from
    `tables/copulas_physical_validity.csv`; never on the log score.
 
-**Size.** 36 stored arms (on the triple, 21 classical arms on the seven
-margins, 6 chains on the npcc margins, and boostCopula on time, 2 mixtures
-and the chain on time on `tabpfn-quantiles-all`; on 5d, 4 classical arms
-and the chain) at about 190 MB each over 131 stations make about 6.8 GB of
-draws before compression; the margins' 35 units per station, with float32
-quantiles, about 1.8 GB.
+**Stored draws, and size.** Every score is computed from all 200 draws of
+each case before anything is stored, so the paper's numbers do not depend
+on what is stored. `[copulas] stored_draws_by_margin` sets, per marginal
+model, how many of each case's draws its arms of the main design store, the
+first ones; arms of another design, and margins it does not name, store
+`stored_draws` (all of them by default); each unit's `info.json` records
+its count under `stored_draws`. The consolidated config stores all 200 for
+the 13 arms on `tabpfn-quantiles-all` and the 5d arms, and the first 50 for
+the triple's 23 arms on the six other margins (independence, gaussian,
+boostcopula-all and the chain on all covariates): at about 190 MB per arm
+and 200 draws over 131 stations, about 3.6 GB of draws before compression,
+against 6.8 GB with all of them. The margins' 35 units per station, with
+float32 quantiles, take about 1.8 GB.
+
+**Launching.** `launch_consolidated.sh` runs the whole design from a clean
+worktree at a named commit, into a new folder, with its provenance: the
+margins (EMOS first, on the CPU, which stores every station's cases; then
+TabPFN and TabICL on the GPU, one process, beside LightGBM on six CPU
+shards), the copula stage (the npcc arms on the GPU, one process, beside
+the classical arms on six CPU shards), `evaluate` and `paired_summary.py`.
+Before each stage it stops if the disk holds less than 2 GB free, or if its
+stop file exists.
 
 ## Running
 

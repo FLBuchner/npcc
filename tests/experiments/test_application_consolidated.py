@@ -72,15 +72,18 @@ def _config(
   designs: str = _DESIGNS,
   stations: str = "[0, 1]",
   margins: str = 'train_pits = "out_of_fold"\nquantile_dtype = "float32"\n',
+  copulas: str = "",
+  name: str = "consolidated.toml",
 ) -> Path:
   text = config_text(data, arms=arms, stations=stations)
   text = text.replace("[responses]\n", "[responses]\n" + _RESPONSES)
   text = text.replace("n_levels = 19\n", "n_levels = 19\n" + margins)
   text = text.replace(
-    "sample_batch_size = 50\n", "sample_batch_size = 50\nsave_draws = true\n"
+    "sample_batch_size = 50\n",
+    "sample_batch_size = 50\nsave_draws = true\n" + copulas,
   )
   text = text.replace("[[estimators]]", designs + "[[estimators]]", 1)
-  path = tmp_path / "consolidated.toml"
+  path = tmp_path / name
   path.write_text(text)
   return path
 
@@ -226,6 +229,53 @@ def test_a_design_no_run_could_honor_is_refused(
     load_config(_config(tmp_path, Path("data"), designs=designs, arms=arms))
 
 
+@pytest.mark.usefixtures("register_linear_gaussian_backend")
+@pytest.mark.parametrize(
+  ("copulas", "match"),
+  [
+    ("stored_draws = 1\n", "between 2 and n_draws"),
+    ("stored_draws = 9\n", "between 2 and n_draws"),
+    ('stored_draws_by_margin = { "emos-seasonal" = 1 }\n', "between 2"),
+    ('stored_draws_by_margin = { "tabicl-all" = 4 }\n', "marginal models"),
+  ],
+)
+def test_a_stored_draw_count_no_arm_could_store_is_refused(
+  tmp_path: Path, copulas: str, match: str
+) -> None:
+  """A count beyond the draws, below a score's two, or on no margin.
+
+  A count above ``n_draws`` would claim draws that were never made, and
+  one on a margin the copula stage does not run would go unnoticed.
+  """
+  with pytest.raises(ValueError, match=match):
+    load_config(_config(tmp_path, Path("data"), copulas=copulas))
+
+
+@pytest.mark.usefixtures("register_linear_gaussian_backend")
+def test_a_stored_draw_count_applies_to_the_main_designs_arms(
+  tmp_path: Path,
+) -> None:
+  """A margin's count thins its triple arms only; its 5d arms keep all.
+
+  And the counts enter the signature only when set, so the configs without
+  them keep theirs.
+  """
+  plain = load_config(_config(tmp_path, Path("data"), name="a.toml"))
+  config = load_config(
+    _config(
+      tmp_path,
+      Path("data"),
+      copulas='stored_draws_by_margin = { "emos-seasonal" = 3 }\n',
+      name="b.toml",
+    )
+  )
+  assert config.stored_draws_for("emos-seasonal", "gaussian") == 3
+  assert config.stored_draws_for("emos-seasonal", "gaussian@5d") == 8
+  assert config.stored_draws_for("linear-gaussian-all", "gaussian") == 8
+  assert plain.stored_draws_for("emos-seasonal", "gaussian") == 8
+  assert config.signature() != plain.signature()
+
+
 @pytest.mark.parametrize(
   "name", ["application_consolidated", "application_consolidated_smoke"]
 )
@@ -288,6 +338,12 @@ def test_the_shipped_consolidated_configs(name: str) -> None:
   assert not any(
     a.startswith("npcc-") for a in config.copula_arms_for("emos-seasonal")
   )
+  # All 200 draws stored on the main table's margins and for every 5d arm;
+  # the first 50 for the triple's arms on the six other margins.
+  for model in config.copula_models:
+    for arm in config.copula_arms_for(model):
+      full = model == "tabpfn-quantiles-all" or arm.endswith("@5d")
+      assert config.stored_draws_for(model, arm) == (200 if full else 50)
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +495,49 @@ def test_both_designs_run_on_the_same_margins_and_are_compared(
     row.loc[(0, model, "gaussian@5d"), "energy"]
     - row.loc[(0, model, "gaussian"), "energy"]
   )
+
+
+def test_a_thinned_arm_stores_the_first_draws_it_was_scored_on(
+  tmp_path: Path, register_linear_gaussian_backend: None
+) -> None:
+  """Storing fewer draws must change what is stored, never what is scored.
+
+  The same run with and without a stored count gives identical scores,
+  and the thinned arm's stored draws are the first ``k`` of each case's
+  draws in the unthinned run; the 5d arms on the same margins keep all.
+  """
+  del register_linear_gaussian_backend
+  data = tmp_path / "data"
+  write_synthetic(data, n_stations=1, step_days=7, seed=3, measured=True)
+  runs = {}
+  for name, copulas in (
+    ("full", ""),
+    ("thin", 'stored_draws_by_margin = { "emos-seasonal" = 3 }\n'),
+  ):
+    config = _config(
+      tmp_path, data, stations="[0]", copulas=copulas, name=f"{name}.toml"
+    )
+    run = tmp_path / name
+    for stage in ("margins", "copulas"):
+      assert main([stage, "--config", str(config), "--out", str(run)]) == 0
+    runs[name] = run
+  for arm in _ARMS:
+    unit = Path("stations/000/copulas/emos-seasonal") / arm
+    pd.testing.assert_frame_equal(
+      pd.read_parquet(runs["thin"] / unit / "scores.parquet"),
+      pd.read_parquet(runs["full"] / unit / "scores.parquet"),
+    )
+    full = pd.read_parquet(runs["full"] / unit / "draws.parquet")
+    thin = pd.read_parquet(runs["thin"] / unit / "draws.parquet")
+    info = json.loads((runs["thin"] / unit / "info.json").read_text())
+    if arm.endswith("@5d"):
+      pd.testing.assert_frame_equal(thin, full)
+      assert info["stored_draws"] == 8
+    else:
+      pd.testing.assert_frame_equal(
+        thin, full[full["draw"] < 3].reset_index(drop=True)
+      )
+      assert info["stored_draws"] == 3
 
 
 def test_a_mixtures_members_draws_are_not_stored(tmp_path: Path) -> None:

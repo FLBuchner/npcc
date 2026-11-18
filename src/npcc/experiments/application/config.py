@@ -311,6 +311,15 @@ class ApplicationConfig:
   quantile_dtype : str
       One of :data:`QUANTILE_DTYPES`: the dtype each margin's test
       quantiles are rounded to and stored in.
+  stored_draws : int or None
+      With ``save_draws``, how many of each test case's draws an arm stores,
+      its first ones; ``None`` for all ``n_draws``. The scores always use
+      every draw.
+  stored_draws_by_margin : mapping of str to int
+      For a copula stage's marginal model named here, how many draws per
+      case its arms of the main design store, over ``stored_draws``; its
+      arms of another design keep ``stored_draws`` (see
+      :meth:`stored_draws_for`). Empty by default.
   """
 
   data_dir: Path
@@ -339,6 +348,8 @@ class ApplicationConfig:
   save_draws: bool = False
   copula_designs: Mapping[str, CopulaDesign] = field(default_factory=dict)
   quantile_dtype: str = "float64"
+  stored_draws: int | None = None
+  stored_draws_by_margin: Mapping[str, int] = field(default_factory=dict)
 
   def __post_init__(self) -> None:
     """Refuse a configuration no run could honor."""
@@ -347,6 +358,11 @@ class ApplicationConfig:
     )
     object.__setattr__(
       self, "copula_designs", MappingProxyType(dict(self.copula_designs))
+    )
+    object.__setattr__(
+      self,
+      "stored_draws_by_margin",
+      MappingProxyType(dict(self.stored_draws_by_margin)),
     )
     object.__setattr__(
       self,
@@ -388,6 +404,7 @@ class ApplicationConfig:
     self._check_devices()
     self._check_modeled()
     self._check_designs()
+    self._check_stored_draws()
     if self.quantile_dtype not in QUANTILE_DTYPES:
       raise ValueError(
         f"quantile_dtype must be one of {list(QUANTILE_DTYPES)}; got "
@@ -551,6 +568,46 @@ class ApplicationConfig:
           f"{sorted(self.copula_designs)}; got {design!r}"
         )
 
+  def _check_stored_draws(self) -> None:
+    """Refuse a stored-draw count no arm could store, or a stray margin."""
+    counts = {"copulas.stored_draws": self.stored_draws} | {
+      f"copulas.stored_draws_by_margin.{m}": k
+      for m, k in self.stored_draws_by_margin.items()
+    }
+    for name, k in counts.items():
+      if k is not None and not 2 <= k <= self.n_draws:
+        raise ValueError(
+          f"{name} must lie between 2 and n_draws = {self.n_draws}; got {k}"
+        )
+    unknown = sorted(set(self.stored_draws_by_margin) - set(self.copula_models))
+    if unknown:
+      raise ValueError(
+        f"copulas.stored_draws_by_margin must name the copula stage's "
+        f"marginal models {list(self.copula_models)}; got {unknown}"
+      )
+
+  def stored_draws_for(self, model: str, arm: str) -> int:
+    """How many of each test case's draws an arm on a margin stores.
+
+    Parameters
+    ----------
+    model : str
+        The marginal model.
+    arm : str
+        The arm as configured, ``<arm>`` or ``<arm>@<design>``.
+
+    Returns
+    -------
+    int
+        :attr:`stored_draws_by_margin`'s entry for ``model`` for an arm of
+        the main design that has one; otherwise :attr:`stored_draws`, or
+        every draw, :attr:`n_draws`.
+    """
+    _, design = split_arm(arm)
+    if design is None and model in self.stored_draws_by_margin:
+      return self.stored_draws_by_margin[model]
+    return self.n_draws if self.stored_draws is None else self.stored_draws
+
   @property
   def margin_responses(self) -> tuple[str, ...]:
     """The responses the margins are fitted to, sorted as the data sorts them.
@@ -648,6 +705,12 @@ class ApplicationConfig:
       out["save_draws"] = True
     if self.quantile_dtype != "float64":
       out["quantile_dtype"] = self.quantile_dtype
+    if self.stored_draws is not None:
+      out["stored_draws"] = self.stored_draws
+    if self.stored_draws_by_margin:
+      out["stored_draws_by_margin"] = dict(
+        sorted(self.stored_draws_by_margin.items())
+      )
     if self.copula_designs:
       out["copula_designs"] = {
         name: {
@@ -820,6 +883,8 @@ class ApplicationConfig:
         for name in sorted(self.copula_designs)
       },
       "margin_responses": list(self.margin_responses),
+      "stored_draws": self.stored_draws,
+      "stored_draws_by_margin": dict(self.stored_draws_by_margin),
       **self._design(),
       "signature": self.signature(),
     }
@@ -870,6 +935,8 @@ _TABLES: dict[str, tuple[str, ...]] = {
     "mixture_k",
     "save_draws",
     "designs",
+    "stored_draws",
+    "stored_draws_by_margin",
   ),
 }
 #: The keys of ``[responses]`` that are settings rather than a response.
@@ -1071,6 +1138,21 @@ def load_config(path: str | Path) -> ApplicationConfig:
     options["quantile_dtype"] = margins["quantile_dtype"]
   if "designs" in copulas:
     options["copula_designs"] = _designs(copulas["designs"])
+  if "stored_draws" in copulas:
+    options["stored_draws"] = _int(
+      copulas["stored_draws"], "copulas.stored_draws"
+    )
+  if "stored_draws_by_margin" in copulas:
+    by_margin_draws = copulas["stored_draws_by_margin"]
+    if not isinstance(by_margin_draws, dict):
+      raise TypeError(
+        f"copulas.stored_draws_by_margin must be a table of counts by "
+        f"marginal model; got {by_margin_draws!r}"
+      )
+    options["stored_draws_by_margin"] = {
+      str(m): _int(k, f"copulas.stored_draws_by_margin.{m}")
+      for m, k in by_margin_draws.items()
+    }
   if "save_draws" in copulas:
     if not isinstance(copulas["save_draws"], bool):
       raise TypeError(

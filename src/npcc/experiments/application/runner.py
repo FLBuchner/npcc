@@ -508,6 +508,7 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             wall_seconds=perf_counter() - start,
             save_draws=config.save_draws,
             nll_column=None if design is None else f"joint_nll_{design}",
+            stored_draws=config.stored_draws_for(model, arm),
           )
           logger.info("station %d: %s %s stored", station, model, arm)
         release_gpu()
