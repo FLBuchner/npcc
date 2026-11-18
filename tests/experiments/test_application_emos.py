@@ -142,6 +142,10 @@ def test_the_fits_reproduce_his_on_a_fixed_sample() -> None:
   assert truncated.parameters["training_crps"] == pytest.approx(
     0.9287927005124663, rel=1e-10
   )
+  # The fourth coefficient is near zero, so a relative tolerance alone asks
+  # it for an absolute precision of 5e-9. Its stopping point moves by about
+  # 5e-8 with BLAS's thread count (1e-5 relative), while the objective agrees
+  # to 1e-10, so it is held to the others' absolute scale instead.
   np.testing.assert_allclose(
     [*truncated.theta, truncated.sigma],
     [
@@ -152,6 +156,7 @@ def test_the_fits_reproduce_his_on_a_fixed_sample() -> None:
       1.4100112377871126,
     ],
     rtol=1e-6,
+    atol=1e-6,
   )
 
   # The beta CRPS is flat at its minimum and its gradient a finite
