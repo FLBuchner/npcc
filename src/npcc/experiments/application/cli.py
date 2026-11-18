@@ -17,6 +17,7 @@ from npcc.experiments._study import _shard
 from npcc.experiments.application.config import load_config
 from npcc.experiments.application.data import fetch_data
 from npcc.experiments.application.runner import (
+  LowDiskSpaceError,
   RunOptions,
   evaluate,
   preflight,
@@ -133,6 +134,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="The device of every backend, over the configuration's.",
       )
+    if stage == "copulas":
+      sub.add_argument(
+        "--min-free-gb",
+        type=float,
+        default=None,
+        help=(
+          "Stop before any unit when the disk under --out holds less free "
+          "space than this, in GB, exiting with status 3; --resume then "
+          "continues from that unit."
+        ),
+      )
   return parser
 
 
@@ -177,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     shard=getattr(args, "shard", None),
     resume=getattr(args, "resume", False),
     device=getattr(args, "device", None),
+    min_free_gb=getattr(args, "min_free_gb", None),
   )
   match args.stage:
     case "preflight":
@@ -186,7 +199,11 @@ def main(argv: list[str] | None = None) -> int:
     case "margins":
       run_margins(config, options)
     case "copulas":
-      run_copulas(config, options)
+      try:
+        run_copulas(config, options)
+      except LowDiskSpaceError as exc:
+        print(f"npcc-application copulas: {exc}", file=sys.stderr)
+        return 3
     case "evaluate":
       for name in evaluate(config, options):
         print(args.out / "tables" / f"{name}.csv")

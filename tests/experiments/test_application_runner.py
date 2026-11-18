@@ -13,6 +13,7 @@ import json
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -229,6 +230,53 @@ def test_the_copula_stage_runs_each_arm_and_records_failures(
   gaussian = pooled.loc[pooled["arm"] == "gaussian"]
   assert (gaussian["joint_nll_gain"] > 0).all()
   assert (gaussian["n_stations"] == 3).all()
+
+
+def test_a_full_disk_stops_the_copula_stage_before_a_unit_and_resume_goes_on(
+  config_path: Path,
+  tmp_path: Path,
+  fake_copulas: FakeCopulas,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """A nearly full disk must stop the stage cleanly, never mid-unit.
+
+  The check runs before each unit, so the unit it stops at is neither fitted
+  nor written, and a ``--resume`` once space is back fits exactly the units
+  still missing. Without it, a long copula stage that fills the disk would
+  fail while writing and leave a partial unit behind.
+  """
+  out = tmp_path / "run"
+  assert _margins(config_path, out) == 0
+  free = {"gb": 10.0}
+  calls_before_full = 2
+
+  def disk_usage(path: Path) -> SimpleNamespace:
+    del path
+    if len(fake_copulas.calls) >= calls_before_full:
+      free["gb"] = min(free["gb"], 1.0)
+    return SimpleNamespace(free=free["gb"] * 1024**3)
+
+  monkeypatch.setattr(runner.shutil, "disk_usage", disk_usage)
+  copulas = ["copulas", "--config", str(config_path), "--out", str(out)]
+  assert main([*copulas, "--min-free-gb", "2"]) == 3
+  assert len(fake_copulas.calls) == calls_before_full
+  stored = {
+    (s, m, a)
+    for s in (0, 1, 2)
+    for m in MODELS
+    for a in ("independence", "gaussian")
+    if copula_status(out, s, m, a) is not None
+  }
+  assert len(stored) == calls_before_full
+
+  free["gb"] = 10.0
+  monkeypatch.setattr(
+    runner.shutil,
+    "disk_usage",
+    lambda path: SimpleNamespace(free=free["gb"] * 1024**3),
+  )
+  assert main([*copulas, "--min-free-gb", "2", "--resume"]) == 0
+  assert len(fake_copulas.calls) == 3 * len(MODELS) * 2
 
 
 def test_the_copula_stage_reads_only_its_own_marginal_sets(

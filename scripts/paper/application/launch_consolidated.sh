@@ -131,8 +131,14 @@ CPU_ARGS=(margins --config "$CONFIG" --out "$OUT" --models "${CPU_MODELS[@]}")
 beside margins margins_gpu "${GPU_ENV[@]}" "${APP[@]}" margins --config "$CONFIG" --out "$OUT" --models "${GPU_MODELS[@]}" || exit 1
 
 guard "the copula stage"
-CPU_ARGS=(copulas --config "$CONFIG" --out "$OUT" --copulas "${CLASSICAL_ARMS[@]}")
-beside copulas copulas_gpu "${GPU_ENV[@]}" "${APP[@]}" copulas --config "$CONFIG" --out "$OUT" --copulas "${NPCC_ARMS[@]}" || exit 1
+# Each copula process also checks the disk before every unit and exits with
+# status 3, that unit unwritten, below MIN_FREE_GB: the same command with
+# --resume then continues from there once space is freed.
+CPU_ARGS=(copulas --config "$CONFIG" --out "$OUT" --min-free-gb "$MIN_FREE_GB" --copulas "${CLASSICAL_ARMS[@]}")
+beside copulas copulas_gpu "${GPU_ENV[@]}" "${APP[@]}" copulas --config "$CONFIG" --out "$OUT" --min-free-gb "$MIN_FREE_GB" --copulas "${NPCC_ARMS[@]}" || {
+  log "copula stage stopped; a process exiting 3 found the disk below $MIN_FREE_GB GB (its log says which unit)"
+  exit 1
+}
 failed=$(find "$OUT/stations" -name failure.json | wc -l)
 log "copula stage: $failed failed units"
 

@@ -321,12 +321,13 @@ model, how many of each case's draws its arms of the main design store, the
 first ones; arms of another design, and margins it does not name, store
 `stored_draws` (all of them by default); each unit's `info.json` records
 its count under `stored_draws`. The consolidated config stores all 200 for
-the 13 arms on `tabpfn-quantiles-all` and the 5d arms, and the first 50 for
+the 13 arms on `tabpfn-quantiles-all` and the 5d arms, and the first 25 for
 the triple's 23 arms on the six other margins (independence, gaussian,
-boostcopula-all and the chain on all covariates): at about 190 MB per arm
-and 200 draws over 131 stations, about 3.6 GB of draws before compression,
-against 6.8 GB with all of them. The margins' 35 units per station, with
-float32 quantiles, take about 1.8 GB.
+boostcopula-all and the chain on all covariates). An arm storing all 200
+took 1.9 MB per station in the station-0 smoke, keys included, so the
+draws take about 4 GB on disk over 131 stations, against about 9 GB with
+all of them; the margins' 35 units per station, with float32 quantiles,
+took 16 MB there, about 2.1 GB over 131 stations.
 
 **Launching.** `launch_consolidated.sh` runs the whole design from a clean
 worktree at a named commit, into a new folder, with its provenance: the
@@ -335,7 +336,10 @@ TabPFN and TabICL on the GPU, one process, beside LightGBM on six CPU
 shards), the copula stage (the npcc arms on the GPU, one process, beside
 the classical arms on six CPU shards), `evaluate` and `paired_summary.py`.
 Before each stage it stops if the disk holds less than 2 GB free, or if its
-stop file exists.
+stop file exists. Within the copula stage, `copulas --min-free-gb 2` checks
+again before every unit and, below that, exits with status 3 before the
+unit is fitted or written, so the same command with `--resume` continues
+from it once space is freed.
 
 ## Running
 

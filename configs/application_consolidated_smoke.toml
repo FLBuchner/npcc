@@ -102,19 +102,19 @@ sample_batch_size = 20000
 # 5! = 120 at d = 5.
 mixture_k = 5
 # Each arm's draws of all five responses, per test case, are stored beside
-# its scores as draws.parquet (float32, zstd), about 1.45 MB per arm and
-# station at 200 draws before compression; a mixture's members are scored on
-# their own draws, which are not stored. Every score is computed from all
-# 200 draws before anything is stored, so the paper's numbers do not depend
-# on what is stored. All 200 are stored for every arm on
-# tabpfn-quantiles-all, the main table, and for every 5d arm; on the six
-# other margins, the triple's arms (independence, gaussian, boostcopula-all,
-# and the chain on all covariates) store each case's first 50, so the run's
-# draws take about 3.6 GB rather than 6.8 GB before compression.
+# its scores as draws.parquet (float32, zstd): 1.9 MB per arm and station at
+# 200 draws in the station-0 smoke, the row and draw keys included; a
+# mixture's members are scored on their own draws, which are not stored.
+# Every score is computed from all 200 draws before anything is stored, so
+# the paper's numbers do not depend on what is stored. All 200 are stored
+# for every arm on tabpfn-quantiles-all, the main table, and for every 5d
+# arm; on the six other margins, the triple's arms (independence, gaussian,
+# boostcopula-all, and the chain on all covariates) store each case's first
+# 25, so the run's draws take about 4 GB on disk rather than 9 GB.
 # scripts/paper/application/thin_draws.py keeps fewer, in place, if the disk
 # still fills.
 save_draws = true
-stored_draws_by_margin = { "emos-seasonal" = 50, "lightgbm-all" = 50, "lightgbm-emos" = 50, "tabpfn-quantiles-emos" = 50, "tabicl-all" = 50, "tabicl-emos" = 50 }
+stored_draws_by_margin = { "emos-seasonal" = 25, "lightgbm-all" = 25, "lightgbm-emos" = 25, "tabpfn-quantiles-emos" = 25, "tabicl-all" = 25, "tabicl-emos" = 25 }
 
 [copulas.arms_by_margin]
 "emos-seasonal" = [

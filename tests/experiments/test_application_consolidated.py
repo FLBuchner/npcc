@@ -339,11 +339,11 @@ def test_the_shipped_consolidated_configs(name: str) -> None:
     a.startswith("npcc-") for a in config.copula_arms_for("emos-seasonal")
   )
   # All 200 draws stored on the main table's margins and for every 5d arm;
-  # the first 50 for the triple's arms on the six other margins.
+  # the first 25 for the triple's arms on the six other margins.
   for model in config.copula_models:
     for arm in config.copula_arms_for(model):
       full = model == "tabpfn-quantiles-all" or arm.endswith("@5d")
-      assert config.stored_draws_for(model, arm) == (200 if full else 50)
+      assert config.stored_draws_for(model, arm) == (200 if full else 25)
 
 
 # ---------------------------------------------------------------------------

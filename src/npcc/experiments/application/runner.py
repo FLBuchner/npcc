@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import chain
@@ -92,6 +93,11 @@ class RunOptions:
       Skip the units a run of the same folder already wrote.
   device : str or None
       The device of every backend, over the configuration's.
+  min_free_gb : float or None
+      The copula stage stops before a unit when the disk under ``out`` has
+      less free space than this, in GB, leaving that unit unwritten, so a
+      ``--resume`` continues there once space is freed; ``None`` never
+      checks.
   """
 
   out: Path | None = None
@@ -101,6 +107,7 @@ class RunOptions:
   shard: tuple[int, int] | None = None
   resume: bool = False
   device: str | None = None
+  min_free_gb: float | None = None
 
   def __post_init__(self) -> None:
     """Refuse an impossible shard."""
@@ -127,7 +134,40 @@ class RunOptions:
       "shard": None if self.shard is None else list(self.shard),
       "resume": self.resume,
       "device": self.device,
+      "min_free_gb": self.min_free_gb,
     }
+
+
+class LowDiskSpaceError(OSError):
+  """The disk under a run folder holds less free space than a run allows."""
+
+
+def check_free_space(out: Path, min_free_gb: float | None, before: str) -> None:
+  """Refuse to start a unit when the disk under ``out`` is nearly full.
+
+  Parameters
+  ----------
+  out : pathlib.Path
+      The run folder.
+  min_free_gb : float or None
+      The least free space, in GB; ``None`` checks nothing.
+  before : str
+      The unit about to start, for the message.
+
+  Raises
+  ------
+  LowDiskSpaceError
+      If less than ``min_free_gb`` GB is free under ``out``.
+  """
+  if min_free_gb is None:
+    return
+  free_gb = shutil.disk_usage(out).free / 1024**3
+  if free_gb < min_free_gb:
+    raise LowDiskSpaceError(
+      f"the disk under {out} must hold at least {min_free_gb:g} GB free "
+      f"before {before}; got {free_gb:.2f} GB. Free space, then rerun the "
+      "same command with --resume to continue from this unit."
+    )
 
 
 def _out(options: RunOptions) -> Path:
@@ -462,6 +502,9 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             "station %d: %s %s already %s", station, model, arm, status
           )
           continue
+        check_free_space(
+          out, options.min_free_gb, f"station {station}'s {model} {arm}"
+        )
         base, design = split_arm(arm)
         if design not in sets:
           sets[design] = _marginal_set(config, out, station, model, design)
