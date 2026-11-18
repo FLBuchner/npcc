@@ -3,8 +3,12 @@
 Fixed before the full run's results were seen:
 
 (i) every copula arm's mean score over all test cases, one table per score:
-    the joint NLL of the modeled responses, the energy and variogram scores on
-    all responses, and each response's sample CRPS;
+    the joint NLL of the main design's modeled responses, the energy and
+    variogram scores on all responses and on each response subset, and each
+    response's sample CRPS. Another design's own log score
+    (``joint_nll_<design>``) is stored by the run but neither summarized nor
+    ranked: two of the five responses are functions of the other three, so
+    the five have no joint density;
 (ii) every arm against each reference arm, paired by station: the mean over
     stations of the difference of station means (arm - reference, so
     negative favors the arm), its 95% block bootstrap interval (below), its
@@ -15,10 +19,13 @@ Fixed before the full run's results were seen:
     covariates on the TabPFN margins. Every score is lower-is-better;
 (iii) where the run has arms of another design (``<arm>@<design>``), each
     against the same arm of the main design on the same margins, on the
-    scores both are drawn on: energy, variogram, each response's sample
-    CRPS, and the share of draws breaking each physical bound
-    (``tables/copulas_physical_validity.csv``). The log scores are left out:
-    the designs' densities are of different responses.
+    scores both are drawn on: energy, variogram, each response subset's
+    energy and variogram, each response's sample CRPS, and the share of
+    draws breaking each physical bound
+    (``tables/copulas_physical_validity.csv``). Of the log scores, only the
+    main design's enters, where an arm of another design has one: the
+    exact projection of its independence or Gaussian copula onto the main
+    design's modeled responses.
 
 The paired differences are given on every station and again without the
 stations ``--without`` names (station 106 by default, whose pressure shifts
@@ -84,12 +91,21 @@ BOOT_SEED = 2026
 COMPARISON = ("stations", "model", "arm", "reference", "score")
 
 
+#: The main design's log-score columns; ``joint_nll_<design>`` is another's.
+MAIN_LOG_SCORES = ("joint_nll", "joint_nll_modeled")
+
+
 def score_columns(by_station: pd.DataFrame) -> list[str]:
-  """The scores of a by-station table, in its column order."""
+  """The scores of a by-station table, in its column order.
+
+  Another design's own log score is left out: it is stored, not summarized.
+  """
   return [
     c
     for c in by_station.columns
-    if c not in (*KEYS, "n_cases") and not c.endswith(("_gain", "_skill"))
+    if c not in (*KEYS, "n_cases")
+    and not c.endswith(("_gain", "_skill"))
+    and (not c.startswith("joint_nll") or c in MAIN_LOG_SCORES)
   ]
 
 
@@ -228,8 +244,10 @@ def design_pairs(
   by_station : pandas.DataFrame
       One row per station, margins and arm, with each score's mean.
   scores : sequence of str
-      The score columns; the log scores (``joint_nll*``) are left out, as
-      the two designs' densities are of different responses.
+      The score columns. Of the log scores only the main design's
+      (:data:`MAIN_LOG_SCORES`) enters, and only where the other design's arm
+      has it: a projection onto the main design's modeled responses. Any
+      other log score is of different responses and is left out.
   validity : pandas.DataFrame, optional
       ``tables/copulas_physical_validity.csv``: its ``broken_*_share``
       columns are compared too.
@@ -248,7 +266,9 @@ def design_pairs(
   designed = by_station["arm"].map(lambda a: bool(design_of(a)[1]))
   if not designed.any():
     return pd.DataFrame(columns=columns)
-  sample = [s for s in scores if not s.startswith("joint_nll")]
+  sample = [
+    s for s in scores if not s.startswith("joint_nll") or s in MAIN_LOG_SCORES
+  ]
   table = by_station[[*ids, *sample]]
   if validity is not None:
     shares = [c for c in validity.columns if c.endswith(SHARE_SUFFIX)]

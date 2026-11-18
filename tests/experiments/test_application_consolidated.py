@@ -530,7 +530,10 @@ def test_both_designs_run_on_the_same_margins_and_are_compared(
   paired = pd.read_csv(run / "analysis" / "paired.csv")
   same = paired[paired["reference"] == "gaussian@5d (same margins)"]
   assert set(same["arm"]) == {"independence@5d"}
-  assert "joint_nll_5d" in set(same["score"])
+  # The 5d log score is stored, never summarized: the five responses have
+  # no joint density.
+  assert "joint_nll_5d" not in set(paired["score"])
+  assert "energy" in set(same["score"])
   cross = paired[
     paired["reference"].str.endswith("(main design, same margins)")
   ]
@@ -653,6 +656,23 @@ def test_subsets_and_projected_log_scores_compare_the_designs(
     )
   )
   assert "energy_trhp_skill" in row.columns
+
+  # (iii) compares the 5d arms with the triple's on the subset too, and on
+  # the log score where it is an exact projection, independence and
+  # Gaussian; never on the 5d log score.
+  _paired_summary().build(run, run / "analysis")
+  paired = pd.read_csv(run / "analysis" / "paired.csv")
+  cross = paired[
+    paired["reference"].str.endswith("(main design, same margins)")
+    & (paired["stations"] == "all")
+    & (paired["model"] == model)
+  ]
+  projected = cross[cross["score"] == "joint_nll_modeled"]
+  assert set(projected["arm"]) == {"independence@5d", "gaussian@5d"}
+  level = projected.loc[projected["arm"] == "independence@5d", "mean_diff"]
+  assert level.iloc[0] == pytest.approx(0.0, abs=1e-12)
+  assert {"energy_trhp", "variogram_trhp"} <= set(cross["score"])
+  assert "joint_nll_5d" not in set(paired["score"])
 
 
 @pytest.mark.usefixtures("register_linear_gaussian_backend")
