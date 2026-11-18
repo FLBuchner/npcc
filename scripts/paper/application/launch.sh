@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# The full grid, configs/application_full.toml (scripts/paper/application/
-# README.md, "The full grid"), from a clean worktree W at the commit WANT,
-# into the run folder OUT, in priority order, every unit resumable.
+# The weather application, configs/application.toml (scripts/paper/
+# application/README.md), from a clean worktree W at the commit WANT, into
+# the run folder OUT, in priority order, every unit resumable.
 #
 #   WANT=<sha> W=<worktree> OUT=<run folder> PY=<python> \
-#     setsid -f nohup bash scripts/paper/application/launch_full.sh \
-#     > <log> 2>&1
+#     setsid -f nohup bash scripts/paper/application/launch.sh > <log> 2>&1
 #
 # Optional:
-#   CONFIG       relative to W; configs/application_full.toml by default.
+#   CONFIG       relative to W; configs/application.toml by default.
+#   STATIONS     station ids, space-separated, over the configuration's
+#                (every station): STATIONS=0 is the station-0 smoke.
 #   RESUME       1 to continue a run folder a stopped launch left, every stage
 #                with --resume; 0 by default, which refuses an existing OUT.
 #   SETUP        a file sourced first, such as the cluster's module loads for
@@ -47,7 +48,8 @@ set -uo pipefail
 : "${W:?a clean worktree at WANT}"
 : "${OUT:?the run folder}"
 : "${PY:?the Python interpreter of the environment}"
-CONFIG=${CONFIG:-configs/application_full.toml}
+CONFIG=${CONFIG:-configs/application.toml}
+STATIONS=${STATIONS:-}
 RESUME=${RESUME:-0}
 SETUP=${SETUP:-}
 GPU_SHARDS=${GPU_SHARDS:-1}
@@ -95,7 +97,7 @@ got=$("$PY" -c "import npcc; print(npcc.__file__)")
 unset PYTORCH_CUDA_ALLOC_CONF
 mkdir -p "$OUT/logs"
 L=$OUT/logs
-cp "$SELF" "$L/launch_full.$(date +%Y%m%d-%H%M%S).sh"
+cp "$SELF" "$L/launch.$(date +%Y%m%d-%H%M%S).sh"
 log() { echo "$(date '+%F %T') $*" >> "$L/launcher.log"; }
 render() { local s; printf -v s '%q ' "$@"; echo "(cd $W && PYTHONPATH=$W/src ${s% })"; }
 pin() { [ -n "$1" ] && echo "taskset -c $1"; }
@@ -111,6 +113,8 @@ guard() {
   log "$1: $((free_kb / 1024 / 1024)) GB free"
 }
 APP=(-m npcc.experiments.application.cli)
+# shellcheck disable=SC2206
+PICK=(${STATIONS:+--stations $STATIONS})
 # shellcheck disable=SC2046
 CPU_ENV=(env CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 $(pin "$CPUS") nice -n 15 "$PY")
 # shellcheck disable=SC2046
@@ -147,7 +151,7 @@ pipeline() {
   local kind=$1 count=$2; shift 2
   local -a env_=("$@") triple five
   if [ "$kind" = gpu ]; then triple=("${GPU_TRIPLE[@]}"); five=("${GPU_5D[@]}"); else triple=("${CPU_TRIPLE[@]}"); five=("${CPU_5D[@]}"); fi
-  local base=(copulas --config "$CONFIG" --out "$OUT" --min-free-gb "$MIN_FREE_GB" --resume)
+  local base=(copulas --config "$CONFIG" --out "$OUT" "${PICK[@]}" --min-free-gb "$MIN_FREE_GB" --resume)
   stopped "${kind} phase a" && return 0
   sharded "copulas_${kind}_a" "$count" "${env_[@]}" "${APP[@]}" "${base[@]}" \
     --models tabpfn-quantiles-all --copulas "${triple[@]}" || return 1
@@ -160,19 +164,19 @@ pipeline() {
 }
 
 log "start at $(git rev-parse --short=7 HEAD) on $(hostname): $CONFIG into $OUT (RESUME=$RESUME)"
-echo "WANT=$WANT W=$W OUT=$OUT PY=$PY CONFIG=$CONFIG RESUME=$RESUME SETUP=$SETUP GPU_SHARDS=$GPU_SHARDS SHARDS=$SHARDS GPU_THREADS=$GPU_THREADS GPU_CPUS=$GPU_CPUS CPUS=$CPUS MIN_FREE_GB=$MIN_FREE_GB STOP=$STOP" >> "$L/launcher_settings.txt"
+echo "WANT=$WANT W=$W OUT=$OUT PY=$PY CONFIG=$CONFIG STATIONS=$STATIONS RESUME=$RESUME SETUP=$SETUP GPU_SHARDS=$GPU_SHARDS SHARDS=$SHARDS GPU_THREADS=$GPU_THREADS GPU_CPUS=$GPU_CPUS CPUS=$CPUS MIN_FREE_GB=$MIN_FREE_GB STOP=$STOP" >> "$L/launcher_settings.txt"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader >> "$L/launcher_settings.txt" 2>&1
 
 guard "preflight"
-run preflight "${CPU_ENV[@]}" "${APP[@]}" preflight --config "$CONFIG" || exit 1
+run preflight "${CPU_ENV[@]}" "${APP[@]}" preflight --config "$CONFIG" "${PICK[@]}" || exit 1
 
 guard "the EMOS margins"
-run margins_emos "${CPU_ENV[@]}" "${APP[@]}" margins --config "$CONFIG" --out "$OUT" "${AGAIN[@]}" --models emos-seasonal || exit 1
+run margins_emos "${CPU_ENV[@]}" "${APP[@]}" margins --config "$CONFIG" --out "$OUT" "${PICK[@]}" "${AGAIN[@]}" --models emos-seasonal || exit 1
 
 guard "the npcc margins"
-sharded margins_cpu "$SHARDS" "${CPU_ENV[@]}" "${APP[@]}" margins --config "$CONFIG" --out "$OUT" "${AGAIN[@]}" --models "${CPU_MODELS[@]}" &
+sharded margins_cpu "$SHARDS" "${CPU_ENV[@]}" "${APP[@]}" margins --config "$CONFIG" --out "$OUT" "${PICK[@]}" "${AGAIN[@]}" --models "${CPU_MODELS[@]}" &
 cpu_margins=$!
-sharded margins_gpu "$GPU_SHARDS" "${GPU_ENV[@]}" "${APP[@]}" margins --config "$CONFIG" --out "$OUT" "${AGAIN[@]}" --models "${GPU_MODELS[@]}"
+sharded margins_gpu "$GPU_SHARDS" "${GPU_ENV[@]}" "${APP[@]}" margins --config "$CONFIG" --out "$OUT" "${PICK[@]}" "${AGAIN[@]}" --models "${GPU_MODELS[@]}"
 rc=$?
 wait "$cpu_margins" || rc=1
 [ $rc -eq 0 ] || { log "margins failed"; exit 1; }
@@ -192,7 +196,7 @@ failed=$(find "$OUT/stations" -name failure.json | wc -l)
 log "copula stage: $failed failed units"
 
 guard "evaluate"
-run evaluate "${CPU_ENV[@]}" "${APP[@]}" evaluate --config "$CONFIG" --out "$OUT" || exit 1
+run evaluate "${CPU_ENV[@]}" "${APP[@]}" evaluate --config "$CONFIG" --out "$OUT" "${PICK[@]}" || exit 1
 run paired_summary "${CPU_ENV[@]}" scripts/paper/application/paired_summary.py --run "$OUT" --out "$OUT/analysis" || exit 1
 du -sh "$OUT" "$OUT/stations" > "$L/size.txt" 2>&1
 log "all done"

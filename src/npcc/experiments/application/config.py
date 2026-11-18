@@ -48,15 +48,6 @@ from npcc.experiments.config import EstimatorSpec, _parse_estimator
 EMOS_MODEL = "emos-seasonal"
 #: The covariate scopes a ``<backend>-<scope>`` marginal model may name.
 MARGIN_SCOPES: tuple[str, ...] = ("all", "emos")
-#: Which training PITs the copulas are fitted to: the margin fitted on every
-#: training case evaluated at them (``in_sample``), or each case's PIT from a
-#: margin fitted without its initialization year (``out_of_fold``).
-TRAIN_PITS: tuple[str, ...] = ("in_sample", "out_of_fold")
-#: The dtypes a margin's test quantiles may be stored in. Under ``float32``
-#: they are rounded to it as soon as they are predicted, before anything
-#: scores or stores them, so the copula stage, which reads them from the
-#: files, sees exactly what the margin stage scored.
-QUANTILE_DTYPES: tuple[str, ...] = ("float64", "float32")
 #: What separates a copula arm from its design, as in ``gaussian@5d``: an arm
 #: without it runs on ``[responses] modeled`` with ``derived`` drawn from it,
 #: one with it on the responses ``[copulas.designs.<name>]`` names.
@@ -262,9 +253,6 @@ class ApplicationConfig:
       The npcc estimators, at most one per backend.
   copula_arms : tuple of str
       The copula arms, checked against the copula stage's list when it runs.
-  copula_margins : tuple of str or None
-      The marginal models whose sets enter the copula stage, drawn from
-      ``models``; ``None`` for all of them (see :attr:`copula_models`).
   copula_arms_by_margin : mapping of str to tuple of str
       For a copula stage's marginal model named here, the only arms it runs,
       drawn from ``copula_arms``; a model not named runs every arm (see
@@ -297,11 +285,6 @@ class ApplicationConfig:
       The seed every fit's seed is derived from.
   batch_size : int or None
       The npcc backends' inference batch size; ``None`` for their default.
-  train_pits : str
-      One of :data:`TRAIN_PITS`: the training PITs the copulas are fitted
-      to. ``out_of_fold`` makes the margin stage also fit each marginal
-      model once per training year without that year's cases and store
-      their PITs beside the in-sample ones.
   save_draws : bool
       Whether the copula stage stores each arm's draws of every response,
       per test case, beside its scores; a mixture's members are scored on
@@ -311,18 +294,6 @@ class ApplicationConfig:
       ``<arm>@<name>`` runs on that design's responses rather than on
       ``modeled`` and ``derived``. The margins are fitted to every response
       any design models (:attr:`margin_responses`). Empty by default.
-  quantile_dtype : str
-      One of :data:`QUANTILE_DTYPES`: the dtype each margin's test
-      quantiles are rounded to and stored in.
-  stored_draws : int or None
-      With ``save_draws``, how many of each test case's draws an arm stores,
-      its first ones; ``None`` for all ``n_draws``. The scores always use
-      every draw.
-  stored_draws_by_margin : mapping of str to int
-      For a copula stage's marginal model named here, how many draws per
-      case its arms of the main design store, over ``stored_draws``; its
-      arms of another design keep ``stored_draws`` (see
-      :meth:`stored_draws_for`). Empty by default.
   score_subsets : mapping of str to tuple of str
       Response subsets, by name, on which every sampled copula result is
       also scored: ``energy_<name>`` and ``variogram_<name>``, from the same
@@ -346,7 +317,6 @@ class ApplicationConfig:
   responses: Mapping[str, ResponseSpec]
   estimators: tuple[EstimatorSpec, ...]
   copula_arms: tuple[str, ...]
-  copula_margins: tuple[str, ...] | None = None
   copula_arms_by_margin: Mapping[str, tuple[str, ...]] = field(
     default_factory=dict
   )
@@ -361,12 +331,8 @@ class ApplicationConfig:
   mixture_k: int = 5
   base_seed: int = 317
   batch_size: int | None = None
-  train_pits: str = "in_sample"
   save_draws: bool = False
   copula_designs: Mapping[str, CopulaDesign] = field(default_factory=dict)
-  quantile_dtype: str = "float64"
-  stored_draws: int | None = None
-  stored_draws_by_margin: Mapping[str, int] = field(default_factory=dict)
   score_subsets: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
   projected_log_score: bool = False
 
@@ -377,11 +343,6 @@ class ApplicationConfig:
     )
     object.__setattr__(
       self, "copula_designs", MappingProxyType(dict(self.copula_designs))
-    )
-    object.__setattr__(
-      self,
-      "stored_draws_by_margin",
-      MappingProxyType(dict(self.stored_draws_by_margin)),
     )
     object.__setattr__(
       self,
@@ -416,25 +377,11 @@ class ApplicationConfig:
         f"copula_arms must be non-empty names; got {list(self.copula_arms)}"
       )
     _unique("copula_arms", self.copula_arms)
-    if self.copula_margins is not None:
-      _unique("copula_margins", self.copula_margins)
-      unknown = [m for m in self.copula_margins if m not in self.models]
-      if unknown:
-        raise ValueError(
-          f"copula_margins must be drawn from the marginal models "
-          f"{list(self.models)}; got {unknown}"
-        )
     self._check_arms_by_margin()
     self._check_devices()
     self._check_modeled()
     self._check_designs()
-    self._check_stored_draws()
     self._check_score_subsets()
-    if self.quantile_dtype not in QUANTILE_DTYPES:
-      raise ValueError(
-        f"quantile_dtype must be one of {list(QUANTILE_DTYPES)}; got "
-        f"{self.quantile_dtype!r}"
-      )
     for name, low in (
       ("n_levels", 2),
       ("n_draws", 2),
@@ -447,10 +394,6 @@ class ApplicationConfig:
     if self.batch_size is not None and self.batch_size < 1:
       raise ValueError(
         f"batch_size must be positive or omitted; got {self.batch_size}"
-      )
-    if self.train_pits not in TRAIN_PITS:
-      raise ValueError(
-        f"train_pits must be one of {list(TRAIN_PITS)}; got {self.train_pits!r}"
       )
 
   def _check_estimators(self) -> None:
@@ -472,11 +415,11 @@ class ApplicationConfig:
 
   def _check_arms_by_margin(self) -> None:
     """Refuse a per-margin arm list that no copula stage could run."""
-    unknown = sorted(set(self.copula_arms_by_margin) - set(self.copula_models))
+    unknown = sorted(set(self.copula_arms_by_margin) - set(self.models))
     if unknown:
       raise ValueError(
         f"copulas.arms_by_margin must name the copula stage's marginal models "
-        f"{list(self.copula_models)}; got {unknown}"
+        f"{list(self.models)}; got {unknown}"
       )
     for model, arms in self.copula_arms_by_margin.items():
       if not arms:
@@ -593,24 +536,6 @@ class ApplicationConfig:
           f"{sorted(self.copula_designs)}; got {design!r}"
         )
 
-  def _check_stored_draws(self) -> None:
-    """Refuse a stored-draw count no arm could store, or a stray margin."""
-    counts = {"copulas.stored_draws": self.stored_draws} | {
-      f"copulas.stored_draws_by_margin.{m}": k
-      for m, k in self.stored_draws_by_margin.items()
-    }
-    for name, k in counts.items():
-      if k is not None and not 2 <= k <= self.n_draws:
-        raise ValueError(
-          f"{name} must lie between 2 and n_draws = {self.n_draws}; got {k}"
-        )
-    unknown = sorted(set(self.stored_draws_by_margin) - set(self.copula_models))
-    if unknown:
-      raise ValueError(
-        f"copulas.stored_draws_by_margin must name the copula stage's "
-        f"marginal models {list(self.copula_models)}; got {unknown}"
-      )
-
   def _check_score_subsets(self) -> None:
     """Refuse a subset no draw covers, or a projection no design allows."""
     for name, subset in self.score_subsets.items():
@@ -645,37 +570,13 @@ class ApplicationConfig:
             f"not model {missing}"
           )
 
-  def stored_draws_for(self, model: str, arm: str) -> int:
-    """How many of each test case's draws an arm on a margin stores.
-
-    Parameters
-    ----------
-    model : str
-        The marginal model.
-    arm : str
-        The arm as configured, ``<arm>`` or ``<arm>@<design>``.
-
-    Returns
-    -------
-    int
-        :attr:`stored_draws_by_margin`'s entry for ``model`` for an arm of
-        the main design that has one; otherwise :attr:`stored_draws`, or
-        every draw, :attr:`n_draws`.
-    """
-    _, design = split_arm(arm)
-    if design is None and model in self.stored_draws_by_margin:
-      return self.stored_draws_by_margin[model]
-    return self.n_draws if self.stored_draws is None else self.stored_draws
-
   @property
   def margin_responses(self) -> tuple[str, ...]:
     """The responses the margins are fitted to, sorted as the data sorts them.
 
-    Every response of the default design; otherwise every response the main
-    design or another design of the copula stage models.
+    Every response the main design or another design of the copula stage
+    models.
     """
-    if self.is_default_design:
-      return self.variables
     wanted = set(self.modeled)
     for design in self.copula_designs.values():
       wanted.update(design.modeled)
@@ -726,70 +627,9 @@ class ApplicationConfig:
     return tuple(v for v in self.variables if v in self.derived_responses)
 
   @property
-  def is_default_design(self) -> bool:
-    """Whether every response is modeled, as in FLBuchner's design."""
-    return self.modeled == self.variables and not self.derived
-
-  @property
   def derivation(self) -> Derivation:
     """The Magnus formula of the derivations."""
     return Derivation(self.magnus)
-
-  def _design(self) -> dict[str, object]:
-    """The modeled subset's settings, recorded only off the default design.
-
-    The default's signature and echo predate the option, so a run folder
-    the default started still resumes.
-    """
-    if self.is_default_design:
-      return {}
-    return {
-      "modeled": list(self.modeled),
-      "derived": list(self.derived),
-      "magnus": self.magnus,
-    }
-
-  def _outputs(self) -> dict[str, object]:
-    """The settings added since, each recorded only off its default.
-
-    The training PITs, the stored draws, the quantiles' dtype and the copula
-    stage's other designs: the defaults' signature predates them all, so a
-    run folder they started still resumes, and one that changes any does
-    not.
-    """
-    out: dict[str, object] = {}
-    if self.train_pits != "in_sample":
-      out["train_pits"] = self.train_pits
-    if self.save_draws:
-      out["save_draws"] = True
-    if self.quantile_dtype != "float64":
-      out["quantile_dtype"] = self.quantile_dtype
-    if self.stored_draws is not None:
-      out["stored_draws"] = self.stored_draws
-    if self.stored_draws_by_margin:
-      out["stored_draws_by_margin"] = dict(
-        sorted(self.stored_draws_by_margin.items())
-      )
-    if self.copula_designs:
-      out["copula_designs"] = {
-        name: {
-          "modeled": list(self.design(name).modeled),
-          "derived": list(self.design(name).derived),
-        }
-        for name in sorted(self.copula_designs)
-      }
-    if self.score_subsets:
-      out["score_subsets"] = {
-        k: list(v) for k, v in sorted(self.score_subsets.items())
-      }
-    if self.projected_log_score:
-      out["projected_log_score"] = True
-    return out
-
-  @property
-  def copula_models(self) -> tuple[str, ...]:
-    """The marginal models of the copula stage, in the configured order."""
-    return self.models if self.copula_margins is None else self.copula_margins
 
   def copula_arms_for(self, model: str) -> tuple[str, ...]:
     """The arms the copula stage runs on one marginal model's sets.
@@ -797,7 +637,7 @@ class ApplicationConfig:
     Parameters
     ----------
     model : str
-        One of :attr:`copula_models`.
+        One of :attr:`models`.
 
     Returns
     -------
@@ -810,10 +650,10 @@ class ApplicationConfig:
     ValueError
         If ``model`` is not a copula stage's marginal model.
     """
-    if model not in self.copula_models:
+    if model not in self.models:
       raise ValueError(
         f"model must be one of the copula stage's marginal models "
-        f"{list(self.copula_models)}; got {model!r}"
+        f"{list(self.models)}; got {model!r}"
       )
     chosen = self.copula_arms_by_margin.get(model, self.copula_arms)
     return tuple(a for a in self.copula_arms if a in chosen)
@@ -898,11 +738,28 @@ class ApplicationConfig:
       "sample_batch_size": self.sample_batch_size,
       "mixture_k": self.mixture_k,
       "base_seed": self.base_seed,
-      **self._design(),
-      **self._outputs(),
+      "modeled": list(self.modeled),
+      "derived": list(self.derived),
+      "magnus": self.magnus,
+      "save_draws": self.save_draws,
+      "copula_designs": self._designs_echo(),
+      "score_subsets": {
+        k: list(v) for k, v in sorted(self.score_subsets.items())
+      },
+      "projected_log_score": self.projected_log_score,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
+
+  def _designs_echo(self) -> dict[str, dict[str, list[str]]]:
+    """Each other design's modeled and derived responses, by name."""
+    return {
+      name: {
+        "modeled": list(self.design(name).modeled),
+        "derived": list(self.design(name).derived),
+      }
+      for name in sorted(self.copula_designs)
+    }
 
   def echo(self) -> dict[str, object]:
     """The resolved configuration, as JSON-able values.
@@ -924,9 +781,8 @@ class ApplicationConfig:
         for e in self.estimators
       ],
       "copula_arms": list(self.copula_arms),
-      "copula_margins": list(self.copula_models),
       "copula_arms_by_margin": {
-        m: list(self.copula_arms_for(m)) for m in self.copula_models
+        m: list(self.copula_arms_for(m)) for m in self.models
       },
       "verify_data": self.verify_data,
       "data_sha256": dict(DATA_SHA256) if self.verify_data else None,
@@ -937,22 +793,14 @@ class ApplicationConfig:
       "mixture_k": self.mixture_k,
       "base_seed": self.base_seed,
       "batch_size": self.batch_size,
-      "train_pits": self.train_pits,
       "save_draws": self.save_draws,
-      "quantile_dtype": self.quantile_dtype,
-      "copula_designs": {
-        name: {
-          "modeled": list(self.design(name).modeled),
-          "derived": list(self.design(name).derived),
-        }
-        for name in sorted(self.copula_designs)
-      },
+      "modeled": list(self.modeled),
+      "derived": list(self.derived),
+      "magnus": self.magnus,
+      "copula_designs": self._designs_echo(),
       "margin_responses": list(self.margin_responses),
-      "stored_draws": self.stored_draws,
-      "stored_draws_by_margin": dict(self.stored_draws_by_margin),
       "score_subsets": {k: list(v) for k, v in self.score_subsets.items()},
       "projected_log_score": self.projected_log_score,
-      **self._design(),
       "signature": self.signature(),
     }
 
@@ -990,20 +838,15 @@ _TABLES: dict[str, tuple[str, ...]] = {
     "models",
     "n_levels",
     "batch_size",
-    "train_pits",
-    "quantile_dtype",
   ),
   "copulas": (
     "arms",
-    "margins",
     "arms_by_margin",
     "n_draws",
     "sample_batch_size",
     "mixture_k",
     "save_draws",
     "designs",
-    "stored_draws",
-    "stored_draws_by_margin",
     "subsets",
     "projected_log_score",
   ),
@@ -1191,37 +1034,8 @@ def load_config(path: str | Path) -> ApplicationConfig:
         f"data.verify must be true or false; got {data['verify']!r}"
       )
     options["verify_data"] = data["verify"]
-  if "train_pits" in margins:
-    if not isinstance(margins["train_pits"], str):
-      raise TypeError(
-        f"margins.train_pits must be one of {list(TRAIN_PITS)}; got "
-        f"{margins['train_pits']!r}"
-      )
-    options["train_pits"] = margins["train_pits"]
-  if "quantile_dtype" in margins:
-    if not isinstance(margins["quantile_dtype"], str):
-      raise TypeError(
-        f"margins.quantile_dtype must be one of {list(QUANTILE_DTYPES)}; got "
-        f"{margins['quantile_dtype']!r}"
-      )
-    options["quantile_dtype"] = margins["quantile_dtype"]
   if "designs" in copulas:
     options["copula_designs"] = _designs(copulas["designs"])
-  if "stored_draws" in copulas:
-    options["stored_draws"] = _int(
-      copulas["stored_draws"], "copulas.stored_draws"
-    )
-  if "stored_draws_by_margin" in copulas:
-    by_margin_draws = copulas["stored_draws_by_margin"]
-    if not isinstance(by_margin_draws, dict):
-      raise TypeError(
-        f"copulas.stored_draws_by_margin must be a table of counts by "
-        f"marginal model; got {by_margin_draws!r}"
-      )
-    options["stored_draws_by_margin"] = {
-      str(m): _int(k, f"copulas.stored_draws_by_margin.{m}")
-      for m, k in by_margin_draws.items()
-    }
   if "subsets" in copulas:
     subsets = copulas["subsets"]
     if not isinstance(subsets, dict):
@@ -1246,8 +1060,6 @@ def load_config(path: str | Path) -> ApplicationConfig:
         f"{copulas['save_draws']!r}"
       )
     options["save_draws"] = copulas["save_draws"]
-  if "margins" in copulas:
-    options["copula_margins"] = _strings(copulas["margins"], "copulas.margins")
   if "arms_by_margin" in copulas:
     by_margin = copulas["arms_by_margin"]
     if not isinstance(by_margin, dict):

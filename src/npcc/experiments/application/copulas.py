@@ -16,10 +16,6 @@ covariates are passed as they are.
 - ``boostcopula-<scope>``, boostCopula's boosted conditional R-vine, its
   structure, families and calibration selected and fitted in R by
   :data:`BOOSTCOPULA_SCRIPT` at the package's defaults, for d >= 2 variables;
-- ``npcc-random-<backend>-<scope>``, a
-  :class:`~npcc.core.vinecop.RosenblattVinecop` in the non-simplified context
-  on one uniformly random R-vine structure per station, the same for every
-  marginal model and backend;
 - ``npcc-mixture-<backend>-<scope>``, E10's mixture
   (:mod:`~npcc.experiments.vine_runner`): ``mixture_k`` non-simplified vines
   on the same margins, the first on the structure
@@ -164,7 +160,7 @@ COPULA_ARMS: tuple[str, ...] = (
   *(f"boostcopula-{scope}" for scope in SCOPES),
   *(
     f"npcc-{kind}-{backend}-{scope}"
-    for kind in ("random", "mixture", "chain")
+    for kind in ("mixture", "chain")
     for backend in BACKENDS
     for scope in SCOPES
   ),
@@ -622,9 +618,7 @@ def run_copula_arm(
         sample_batch_size=sample_batch_size,
         info=_npcc_info(spec, parsed, ms, columns, sample_batch_size),
       )
-      if parsed.kind == "npcc-random":
-        results = [vines.random(arm)]
-      elif parsed.kind == "npcc-chain":
+      if parsed.kind == "npcc-chain":
         results = vines.chain(arm, mixture_k)
       else:
         results = vines.mixture(arm, mixture_k)
@@ -1056,24 +1050,6 @@ class _Vines:
       )
       out[start:stop] = to_numpy(draws, dtype=np.float64)
     return out.reshape(n, n_draws, d)
-
-  def random(self, arm: str) -> CopulaResult:
-    """The vine on the station's uniformly random structure."""
-    ms = self.inputs.ms
-    structure_seed = derive_seed(
-      self.inputs.seed, "random-structure", ms.station
-    )
-    structure = pv.RVineStructure.sample(
-      len(ms.variables), seeds=[structure_seed]
-    )
-    logcop, uniforms, timings = self.fit(arm, structure)
-    info = {
-      **self.info,
-      "structure": _matrix(structure),
-      "structure_seed": structure_seed,
-      "fit_seed": derive_seed(*self.inputs.salt(arm), "fit"),
-    }
-    return _score(arm, self.inputs, logcop, uniforms, timings, info)
 
   def mixture(self, arm: str, k: int) -> list[CopulaResult]:
     """The mixture of ``k`` vines, then each member on its own.

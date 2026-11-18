@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
-# Baobab, on the job's GPU node: the Python env and boostCopula's R library
-# on the node's own disk. Importing torch from BeeGFS scratch is
+# Baobab, on the GPU node of an interactive allocation (`ssh <node>` lands in
+# it): the code, the Python env and boostCopula's R library on the node's own
+# disk, /scratch/$USER-npcc. Importing torch from BeeGFS scratch is
 # metadata-bound and crawls (6 MB read in 7 minutes on 2026-11-18), and the
-# login node's R build crawled too; the node's disk does both in minutes.
-# The same lock and extras as every run of this repository; `uv` is a copy
-# of the local machine's binary, in $A/bin.
+# login node's R build crawled too; the node's disk does both in minutes, but
+# may not outlive the allocation, so a new allocation runs this again.
+#
+# Before: the code as a git bundle (`git bundle create npcc.bundle <branch>`;
+# the repository is private and the cluster has no GitHub credentials), the
+# local `uv` binary in ~/scratch/npcc-app/bin/, and the data, with their
+# SHA-256, in ~/scratch/npcc-data/meteoswiss_zanetta2023/. The same lock and
+# extras as every run of this repository.
 set -euo pipefail
 B=${B:-$HOME/scratch}
 A=$B/npcc-app
 N=${N:-/scratch/$USER-npcc}
 mkdir -p "$N"
+[ -e "$HOME/npcc-data" ] || ln -s "$B/npcc-data" "$HOME/npcc-data"
 export UV_CACHE_DIR=$N/uv-cache UV_PYTHON_INSTALL_DIR=$N/python
 echo "== $(date '+%F %T') code on $(hostname)"
 [ -d "$N/npcc" ] || git clone -q "$A/npcc.bundle" "$N/npcc"

@@ -217,12 +217,6 @@ def _models(config: ApplicationConfig, options: RunOptions) -> tuple[str, ...]:
   return _subset("models", options.models, config.models)
 
 
-def _copula_models(
-  config: ApplicationConfig, options: RunOptions
-) -> tuple[str, ...]:
-  return _subset("models", options.models, config.copula_models)
-
-
 def _arms(config: ApplicationConfig, options: RunOptions) -> tuple[str, ...]:
   return _subset("copulas", options.arms, config.copula_arms)
 
@@ -378,10 +372,9 @@ def preflight(config: ApplicationConfig, options: RunOptions) -> list[str]:
         f"got {exc}"
       ) from exc
     lines.append(f"copula arms: {', '.join(arms)}")
-    lines.append(f"copula margins: {', '.join(config.copula_models)}")
     lines.extend(
       f"copula arms on {m}: {', '.join(config.copula_arms_for(m))}"
-      for m in config.copula_models
+      for m in config.models
       if m in config.copula_arms_by_margin
     )
     if any(a.startswith("boostcopula") for a in arms):
@@ -463,7 +456,7 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
   out = _out(options)
   arms = _arms(config, options)
   _check_arms(arms)
-  units = _arms_by_model(config, _copula_models(config, options), arms)
+  units = _arms_by_model(config, _models(config, options), arms)
   stations = _stations(config, options, from_data=False)
   if not options.resume:
     done = [
@@ -562,7 +555,6 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             wall_seconds=perf_counter() - start,
             save_draws=config.save_draws,
             nll_column=None if design is None else f"joint_nll_{design}",
-            stored_draws=config.stored_draws_for(model, arm),
           )
           logger.info("station %d: %s %s stored", station, model, arm)
         release_gpu()
@@ -575,20 +567,12 @@ def _marginal_set(
   model: str,
   design: str | None,
 ) -> MarginalSet:
-  """What an arm of ``design`` reads from one stored margin unit.
-
-  Without other designs, the unit's own responses, as every earlier run
-  read them; with them, the design's responses, every unit having fitted
-  all of them.
-  """
-  if not config.copula_designs:
-    return read_marginal_set(out, station, model, train_pits=config.train_pits)
+  """What an arm of ``design`` reads from one stored margin unit."""
   chosen = config.design(design)
   return read_marginal_set(
     out,
     station,
     model,
-    train_pits=config.train_pits,
     modeled=chosen.modeled,
     derived=chosen.derived,
     derivation=config.derivation,
@@ -721,13 +705,12 @@ def evaluate(config: ApplicationConfig, options: RunOptions) -> list[str]:
   residual = _residuals(config, out, stations)
   if not residual.empty:
     tables["derivation_residuals"] = residual
-  copula_models = [m for m in config.copula_models if m in models]
   ran = any(
     (station_dir(out, s) / "copulas" / m).is_dir()
     for s in stations
-    for m in copula_models
+    for m in models
   )
-  units = _arms_by_model(config, copula_models, _arms(config, options))
+  units = _arms_by_model(config, models, _arms(config, options))
   if ran and units:
     copula = _read_copula_units(out, stations, units)
     cases = copula["scores"]

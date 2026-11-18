@@ -480,7 +480,6 @@ def read_marginal_set(
   station: int,
   model: str,
   *,
-  train_pits: str = "in_sample",
   modeled: Sequence[str] | None = None,
   derived: Sequence[str] | None = None,
   derivation: Derivation | None = None,
@@ -495,9 +494,6 @@ def read_marginal_set(
       The station id.
   model : str
       The marginal model.
-  train_pits : {"in_sample", "out_of_fold"}, default="in_sample"
-      Which training PITs the set carries: the stored ``pit`` of the
-      training rows, or their ``pit_out_of_fold``.
   modeled : sequence of str, optional
       The responses the set carries, a subset of those the unit fitted, as
       a copula design names them; the unit's own list when omitted.
@@ -510,18 +506,15 @@ def read_marginal_set(
   Returns
   -------
   MarginalSet
-      What a copula arm reads, its responses in the data's order.
+      What a copula arm reads, its responses in the data's order, with the
+      out-of-fold training PITs.
 
   Raises
   ------
   ValueError
-      If ``train_pits`` is ``"out_of_fold"`` and the unit stored none, or
-      ``modeled`` names a response the unit did not fit.
+      If the unit stored no out-of-fold training PITs, or ``modeled`` names
+      a response the unit did not fit.
   """
-  if train_pits not in ("in_sample", "out_of_fold"):
-    raise ValueError(
-      f"train_pits must be 'in_sample' or 'out_of_fold'; got {train_pits!r}"
-    )
   unit = margin_dir(out, station, model)
   if not unit.exists():
     raise FileNotFoundError(
@@ -531,8 +524,6 @@ def read_marginal_set(
   data = read_station_data(out, station)
   info = json.loads((unit / "info.json").read_text())
   levels = np.asarray(info["levels"], dtype=np.float64)
-  # A unit of the default design records neither list: it models every
-  # response and derives none.
   fitted = tuple(info.get("modeled", data.variables))
   if modeled is None:
     modeled = fitted
@@ -551,13 +542,11 @@ def read_marginal_set(
   modeled_columns = [data.column(v) for v in modeled]
   derived_columns = [data.column(v) for v in derived]
   predictions = pd.read_parquet(unit / "predictions.parquet")
-  if train_pits == "out_of_fold" and "pit_out_of_fold" not in predictions:
+  if "pit_out_of_fold" not in predictions:
     raise ValueError(
       f"station {station}'s {model} unit must store out-of-fold training "
-      f"PITs for train_pits = 'out_of_fold'; {unit} has none. Fit its "
-      "margins with train_pits = 'out_of_fold'"
+      f"PITs, which the copulas are fitted to; {unit} has none"
     )
-  train_column = "pit" if train_pits == "in_sample" else "pit_out_of_fold"
   columns = quantile_columns(len(levels))
   per_split: dict[str, list[np.ndarray]] = {"pit_train": [], "pit_test": []}
   logpdf: list[np.ndarray] = []
@@ -573,7 +562,7 @@ def read_marginal_set(
           f"station {station}'s {model} {split} predictions of {variable} "
           f"must align with its stored cases; they do not"
         )
-      pit = train_column if split == "train" else "pit"
+      pit = "pit_out_of_fold" if split == "train" else "pit"
       per_split[f"pit_{split}"].append(part[pit].to_numpy(np.float64))
       if split == "test":
         logpdf.append(part["logpdf"].to_numpy(np.float64))
@@ -598,7 +587,6 @@ def read_marginal_set(
     derivation=derivation,
     y_derived_train=data.y_train[:, derived_columns],
     y_derived_test=data.y_test[:, derived_columns],
-    train_pits=train_pits,
   )
 
 
@@ -719,7 +707,6 @@ def write_copula(
   wall_seconds: float,
   save_draws: bool = False,
   nll_column: str | None = None,
-  stored_draws: int | None = None,
 ) -> None:
   """Write one copula arm's results on one marginal set, as a unit.
 
@@ -748,10 +735,6 @@ def write_copula(
       design of the copula stage. When omitted, ``joint_nll_modeled`` with
       derived responses, whose log score covers the modeled ones only, and
       ``joint_nll`` otherwise.
-  stored_draws : int, optional
-      With ``save_draws``, how many of each test case's draws to store, the
-      first ones; all of them when omitted. The scores, computed before,
-      use every draw. The count is recorded in ``info.json``.
   """
   n_test = len(ms.y_test)
   if np.shape(rows) != (n_test,):
@@ -849,7 +832,6 @@ def write_copula(
     "arm": arm,
     "seed": seed,
     "wall_seconds": wall_seconds,
-    "train_pits": ms.train_pits,
     # What the energy and variogram scores divide each response by.
     "scales": {
       v: float(s)
@@ -878,7 +860,6 @@ def write_copula(
       arm,
       [r for r in results if r.arm == arm],
       rows=rows,
-      keep=stored_draws,
     )
     if save_draws
     else None
@@ -921,7 +902,6 @@ def draws_frame(
   results: Sequence[CopulaResultLike],
   *,
   rows: np.ndarray,
-  keep: int | None = None,
 ) -> pd.DataFrame:
   """Every sampled result's draws, one row per test case and draw.
 
@@ -941,9 +921,6 @@ def draws_frame(
       What the arm returned; each sampled one carries ``draws``.
   rows : numpy.ndarray, shape (n_test,)
       The test cases' rows in the input files.
-  keep : int, optional
-      Only each case's first ``keep`` draws, ``0`` to ``keep - 1``; all of
-      them when omitted.
 
   Returns
   -------
@@ -974,13 +951,6 @@ def draws_frame(
         f"{result.arm}'s draws must hold the {len(variables)} responses "
         f"{list(variables)}; got {draws.shape[2]}"
       )
-    if keep is not None:
-      if not 1 <= keep <= draws.shape[1]:
-        raise ValueError(
-          f"keep must lie between 1 and the {draws.shape[1]} draws per case "
-          f"of {result.arm}; got {keep}"
-        )
-      draws = draws[:, :keep]
     n_draws = draws.shape[1]
     flat = draws.reshape(n_test * n_draws, len(variables)).astype(np.float32)
     frames.append(
