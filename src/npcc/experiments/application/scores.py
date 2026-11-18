@@ -529,3 +529,72 @@ def summarize_timings(timings: pd.DataFrame, by: Sequence[str]) -> pd.DataFrame:
     .reset_index()
   )
   return cast("pd.DataFrame", summary)
+
+
+#: The PIT columns :func:`pit_uniformity` reads, by the PITs they hold.
+PIT_KINDS: dict[str, tuple[str, str]] = {
+  "train_in_sample": ("train", "pit"),
+  "train_out_of_fold": ("train", "pit_out_of_fold"),
+  "test": ("test", "pit"),
+}
+
+
+def _uniformity(pit: np.ndarray) -> dict[str, float]:
+  """How far a sample of PITs is from uniform."""
+  u = np.sort(pit)
+  n = len(u)
+  ranks = np.arange(1, n + 1) / n
+  return {
+    "n": float(n),
+    "sd": float(u.std()),
+    "central_50": float(np.mean((u > 0.25) & (u < 0.75))),
+    "outer_10": float(np.mean((u < 0.05) | (u > 0.95))),
+    "ks": float(np.max(np.maximum(ranks - u, u - (ranks - 1.0 / n)))),
+  }
+
+
+def pit_uniformity(predictions: pd.DataFrame) -> pd.DataFrame:
+  """How uniform each marginal model's PITs are, per response and kind.
+
+  Uniform PITs have standard deviation ``1 / sqrt(12) = 0.2887``, half of
+  them in (0.25, 0.75) and a tenth below 0.05 or above 0.95. A margin
+  evaluated at its own training cases scores them closer than new ones, so
+  its in-sample PITs crowd the middle; the out-of-fold ones should not.
+
+  Parameters
+  ----------
+  predictions : pandas.DataFrame
+      The margins' stored predictions: ``station``, ``model``, ``variable``,
+      ``split``, ``pit``, and ``pit_out_of_fold`` where it was computed.
+
+  Returns
+  -------
+  pandas.DataFrame
+      One row per ``(model, variable, kind)``, ``kind`` a key of
+      :data:`PIT_KINDS` the input holds: over every station's cases pooled,
+      ``n``, ``sd``, ``central_50``, ``outer_10`` and ``ks``, the
+      Kolmogorov-Smirnov distance to uniform; and ``median_station_sd``,
+      the median over stations of each station's standard deviation.
+  """
+  rows = []
+  for kind, (split, column) in PIT_KINDS.items():
+    if column not in predictions:
+      continue
+    part = predictions.loc[predictions["split"] == split]
+    for (model, variable), group in part.groupby(
+      ["model", "variable"], sort=True
+    ):
+      pit = group[column].to_numpy(dtype=np.float64)
+      if np.isnan(pit).all():
+        continue
+      by_station = group.groupby("station")[column].std(ddof=0)
+      rows.append(
+        {
+          "model": model,
+          "variable": variable,
+          "kind": kind,
+          **_uniformity(pit),
+          "median_station_sd": float(by_station.median()),
+        }
+      )
+  return pd.DataFrame(rows)

@@ -474,7 +474,9 @@ def write_margin(
     (temporary / "info.json").write_text(_json(dict(info)))
 
 
-def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
+def read_marginal_set(
+  out: Path, station: int, model: str, *, train_pits: str = "in_sample"
+) -> MarginalSet:
   """One station's saved predictions from one marginal model.
 
   Parameters
@@ -485,12 +487,24 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
       The station id.
   model : str
       The marginal model.
+  train_pits : {"in_sample", "out_of_fold"}, default="in_sample"
+      Which training PITs the set carries: the stored ``pit`` of the
+      training rows, or their ``pit_out_of_fold``.
 
   Returns
   -------
   MarginalSet
       What a copula arm reads.
+
+  Raises
+  ------
+  ValueError
+      If ``train_pits`` is ``"out_of_fold"`` and the unit stored none.
   """
+  if train_pits not in ("in_sample", "out_of_fold"):
+    raise ValueError(
+      f"train_pits must be 'in_sample' or 'out_of_fold'; got {train_pits!r}"
+    )
   unit = margin_dir(out, station, model)
   if not unit.exists():
     raise FileNotFoundError(
@@ -508,6 +522,13 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
   modeled_columns = [data.column(v) for v in modeled]
   derived_columns = [data.column(v) for v in derived]
   predictions = pd.read_parquet(unit / "predictions.parquet")
+  if train_pits == "out_of_fold" and "pit_out_of_fold" not in predictions:
+    raise ValueError(
+      f"station {station}'s {model} unit must store out-of-fold training "
+      f"PITs for train_pits = 'out_of_fold'; {unit} has none. Fit its "
+      "margins with train_pits = 'out_of_fold'"
+    )
+  train_column = "pit" if train_pits == "in_sample" else "pit_out_of_fold"
   columns = quantile_columns(len(levels))
   per_split: dict[str, list[np.ndarray]] = {"pit_train": [], "pit_test": []}
   logpdf: list[np.ndarray] = []
@@ -523,7 +544,8 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
           f"station {station}'s {model} {split} predictions of {variable} "
           f"must align with its stored cases; they do not"
         )
-      per_split[f"pit_{split}"].append(part["pit"].to_numpy(np.float64))
+      pit = train_column if split == "train" else "pit"
+      per_split[f"pit_{split}"].append(part[pit].to_numpy(np.float64))
       if split == "test":
         logpdf.append(part["logpdf"].to_numpy(np.float64))
         quantiles.append(part[columns].to_numpy(np.float64))
@@ -547,6 +569,7 @@ def read_marginal_set(out: Path, station: int, model: str) -> MarginalSet:
     derivation=derivation,
     y_derived_train=data.y_train[:, derived_columns],
     y_derived_test=data.y_test[:, derived_columns],
+    train_pits=train_pits,
   )
 
 
@@ -761,6 +784,7 @@ def write_copula(
     "arm": arm,
     "seed": seed,
     "wall_seconds": wall_seconds,
+    "train_pits": ms.train_pits,
     **(
       {"modeled": list(ms.variables), "derived": list(ms.derived)}
       if ms.derived

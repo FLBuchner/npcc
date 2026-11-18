@@ -91,6 +91,28 @@ keeps its logit transform, its 100 -> 99.95 boundary nudge and its beta
 EMOS. The copulas are fitted to their PITs (d = 3). `configs/application.toml`,
 the five-response design, is unchanged, though nothing runs it.
 
+**Training PITs.** A copula is fitted to the training cases' PITs and
+scored at the test cases'. A margin evaluated at the cases it was fitted to
+places them closer to its predictions than new ones, so its in-sample PITs
+crowd the middle of [0, 1]. In the full run at dc09eaf, pooled over the 131
+stations, TabPFN's in-sample training PITs had an SD of 0.261 to 0.268 per
+response, 55.6 to 57.7 % of them in (0.25, 0.75) and 4.9 to 6.1 % in the
+outer tenth, against 0.289, 50 % and 10 % for uniform PITs and for its
+held-out test PITs; EMOS's SDs were within 0.002 of uniform. With
+`[margins] train_pits = "out_of_fold"`, the margin stage also fits each
+model once per training year on the cases initialized in the other years
+and stores, beside the in-sample `pit` of each training row, its
+`pit_out_of_fold` from the model that did not see it; the copula stage
+reads the out-of-fold ones. The test predictions are still those of the
+model fitted on every training case, with the same seed, so they do not
+change. Each fold's seed, case count and seconds are in the unit's
+`info.json`, and the stages `fold_fit` and `fold_pit_train` in its
+timings. `evaluate` writes `tables/margins_pit_uniformity.csv`: per model,
+response and kind of PIT (training in sample, training out of fold, test),
+the pooled SD, the shares in (0.25, 0.75) and in the outer tenth, the
+Kolmogorov-Smirnov distance to uniform, and the median over stations of
+each station's SD.
+
 **Derived responses.** Each copula draw of `(T, RH, p)`, mapped through the
 margins' quantiles, gives a draw of `Td` and `w` by the formulas above.
 
@@ -227,7 +249,8 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   inverted `Td` on `Td`'s own branch, so its derived `Td` draws and its
   `derivation_residuals.csv` (a Td residual SD of at most 0.014 C at any
   station, largest residual 0.16 C) carry that convention's error, which
-  the data's own convention (above) removes.
+  the data's own convention (above) removes. Its copulas were fitted to
+  in-sample training PITs (*Training PITs*, above).
 - `results/application_triple_smoke_2026-11-12`: its station-0 smoke run,
   at 781314c. `checks/order_dependence.csv` (CRPS of T 0.981 against 1.304)
   is cited at the paper's 7b101a7; `checks/README.txt` says how each check

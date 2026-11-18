@@ -28,6 +28,7 @@ from pathlib import Path
 from time import perf_counter
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from npcc.core.errors import MissingBackendDependencyError
 from npcc.experiments._study import derive_seed, release_gpu
@@ -42,6 +43,7 @@ from npcc.experiments.application.margins import build_predictor, fit_station
 from npcc.experiments.application.scores import (
   copula_tables,
   marginal_tables,
+  pit_uniformity,
   summarize_timings,
 )
 from npcc.experiments.application.store import (
@@ -446,7 +448,7 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
   for station in stations:
     rows = read_station_data(out, station).row_test
     for model, model_arms in units.items():
-      ms = read_marginal_set(out, station, model)
+      ms = read_marginal_set(out, station, model, train_pits=config.train_pits)
       for arm in model_arms:
         status = copula_status(out, station, model, arm)
         if status is not None:
@@ -515,6 +517,21 @@ def _bounds(
             }
           )
   return pd.DataFrame(rows)
+
+
+def _pit_columns(
+  out: Path, stations: Sequence[int], models: Sequence[str]
+) -> pd.DataFrame:
+  """Every margin unit's stored PITs, without its quantiles."""
+  frames = []
+  for station in stations:
+    for model in models:
+      path = margin_dir(out, station, model) / "predictions.parquet"
+      names = set(pq.read_schema(path).names)
+      wanted = ["station", "model", "variable", "split", "pit"]
+      wanted += [c for c in ("pit_out_of_fold",) if c in names]
+      frames.append(pd.read_parquet(path, columns=wanted))
+  return pd.concat(frames, ignore_index=True)
 
 
 def _residuals(
@@ -591,6 +608,9 @@ def evaluate(config: ApplicationConfig, options: RunOptions) -> list[str]:
       ["station", "model", "stage"], as_index=False
     )["seconds"].sum(),
   }
+  tables["margins_pit_uniformity"] = pit_uniformity(
+    _pit_columns(out, stations, models)
+  )
   bounds = _bounds(out, stations, models)
   if not bounds.empty:
     tables["bounds_by_station"] = bounds

@@ -35,8 +35,8 @@ class MarginalSet:
   time_train, time_test : numpy.ndarray of datetime64[ns]
       The valid time of each case.
   pit_train, pit_test : numpy.ndarray, shape (n_train, d) and (n_test, d)
-      The marginal CDF at the observation: in-sample on the training cases,
-      held out on the test cases. Not clipped.
+      The marginal CDF at the observation: on the training cases as
+      ``train_pits`` says, held out on the test cases. Not clipped.
   logpdf_test : numpy.ndarray, shape (n_test, d)
       The marginal log-density at each test observation, on the response's
       original scale.
@@ -53,6 +53,10 @@ class MarginalSet:
       The Magnus formula and dew-point clip the derived responses use.
   y_derived_train, y_derived_test : numpy.ndarray, shape (n_train, k) and (n_test, k)
       Their observations, which the joint forecast is scored against.
+  train_pits : str
+      ``"in_sample"``, the training PITs of the margin fitted on every
+      training case, or ``"out_of_fold"``, each from the margin fitted
+      without the case's initialization year.
   """
 
   station: int
@@ -74,6 +78,7 @@ class MarginalSet:
   derivation: Derivation = field(default_factory=Derivation)
   y_derived_train: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))
   y_derived_test: np.ndarray = field(default_factory=lambda: np.empty((0, 0)))
+  train_pits: str = "in_sample"
 
   def __post_init__(self) -> None:
     """Refuse arrays that do not line up."""

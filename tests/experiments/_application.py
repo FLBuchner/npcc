@@ -182,6 +182,8 @@ class FakeCopulas:
         "mixture_k": mixture_k,
         "seed": seed,
         "device": device,
+        "train_pits": ms.train_pits,
+        "pit_train": ms.pit_train.copy(),
       }
     )
     if (ms.station, ms.model, arm) in self.fail:

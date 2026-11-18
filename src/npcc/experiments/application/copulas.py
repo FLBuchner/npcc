@@ -2,8 +2,9 @@
 
 Every arm reads one :class:`~npcc.experiments.application.marginal_set.
 MarginalSet`, one station's margins from one marginal model, and nothing
-else. It is fitted to the training probability integral transforms and
-evaluated at the test ones, each clipped into ``[PIT_CLIP, 1 - PIT_CLIP]``:
+else. It is fitted to the training probability integral transforms, in
+sample or out of fold as the set carries them, and evaluated at the test
+ones, each clipped into ``[PIT_CLIP, 1 - PIT_CLIP]``:
 a saved CDF can reach 0 or 1 exactly, which no copula argument may be. The
 covariates are passed as they are.
 

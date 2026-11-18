@@ -24,6 +24,13 @@ min_cases = 20
 # all the covariates.
 models = ["emos-seasonal", "tabpfn-quantiles-all"]
 n_levels = 199
+# The copulas' training PITs come from margins fitted without the case's
+# initialization year, leave one year out over the four training years. A
+# margin evaluated at its own training cases crowds their PITs toward 0.5:
+# in the full run at dc09eaf, TabPFN's in-sample training PITs had SD 0.26
+# to 0.27 against a uniform 0.289, EMOS's 0.288. The test predictions stay
+# those of the margin fitted on every training case.
+train_pits = "out_of_fold"
 
 # The measured triple. T, RH and p are measured, stored exactly on a 0.1
 # grid; the dew point and the mixing ratio are computed from them

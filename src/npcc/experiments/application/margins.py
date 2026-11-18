@@ -8,6 +8,11 @@ quantile table and the default ``eps``. Either is fitted on the training
 cases, on the response's model scale, and returns:
 
 - the PIT of every training case (in sample) and test case, through ``cdf``;
+- with ``train_pits = "out_of_fold"``, also every training case's
+  out-of-fold PIT: the model is fitted once more per training year, on the
+  cases initialized in the other years, and evaluated at that year's cases
+  (:func:`out_of_fold_pits`). The test predictions stay those of the model
+  fitted on every training case;
 - the test log-density on the original scale, which for a rescaled response
   loses ``log(scale)``;
 - the test quantiles at the configured levels, through the public ``icdf``,
@@ -21,8 +26,9 @@ quantiles nondecreasing; anything else is refused rather than stored.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
+from functools import partial
 from time import perf_counter
 from typing import Protocol, TypeVar
 
@@ -182,7 +188,7 @@ class MarginFit:
   variable : str
       The response.
   pit_train, pit_test : numpy.ndarray, shape (n_train,) and (n_test,)
-      The CDF at each case's observation.
+      The CDF at each case's observation, in sample on the training cases.
   logpdf_test : numpy.ndarray, shape (n_test,)
       The log-density at each test observation, on the original scale.
   quantiles_test : numpy.ndarray, shape (n_test, L)
@@ -191,6 +197,9 @@ class MarginFit:
       Seconds per stage.
   info : dict of str to object
       JSON-able: the seed, the estimator or the EMOS fit, the covariates.
+  pit_train_out_of_fold : numpy.ndarray or None, shape (n_train,)
+      Each training case's PIT under the model fitted without its
+      initialization year; ``None`` unless the configuration asks for it.
   """
 
   variable: str
@@ -200,6 +209,7 @@ class MarginFit:
   quantiles_test: np.ndarray
   timings: dict[str, float] = field(default_factory=dict)
   info: dict[str, object] = field(default_factory=dict)
+  pit_train_out_of_fold: np.ndarray | None = None
 
 
 def _synchronize() -> None:
@@ -263,14 +273,17 @@ def build_predictor(
 
 def _check_outputs(fit: MarginFit, context: str) -> None:
   """Refuse predictions no score or copula can use."""
-  for name in ("pit_train", "pit_test", "logpdf_test", "quantiles_test"):
+  pits = ["pit_train", "pit_test"]
+  if fit.pit_train_out_of_fold is not None:
+    pits.append("pit_train_out_of_fold")
+  for name in (*pits, "logpdf_test", "quantiles_test"):
     values = getattr(fit, name)
     if not np.isfinite(values).all():
       raise ValueError(
         f"{context}'s {name} must be finite; got "
         f"{int((~np.isfinite(values)).sum())} non-finite values"
       )
-  for name in ("pit_train", "pit_test"):
+  for name in pits:
     values = getattr(fit, name)
     if np.any((values < 0.0) | (values > 1.0)):
       raise ValueError(f"{context}'s {name} must lie in [0, 1]")
@@ -280,6 +293,108 @@ def _check_outputs(fit: MarginFit, context: str) -> None:
       f"{context}'s quantiles must be nondecreasing along the levels; "
       f"{int(decreasing.any(axis=1).sum())} test cases are not"
     )
+
+
+def training_years(data: StationData, lead_hours: int) -> np.ndarray:
+  """The initialization year of every training case, the folds' key.
+
+  A case's stored time is its valid time, ``lead_hours`` after its
+  initialization, so a forecast initialized on 31 December is still its
+  year's.
+
+  Parameters
+  ----------
+  data : StationData
+      The station's cases.
+  lead_hours : int
+      The forecast lead.
+
+  Returns
+  -------
+  numpy.ndarray of int, shape (n_train,)
+      The calendar year of each training case's initialization.
+  """
+  init = data.time_train.astype("datetime64[ns]") - np.timedelta64(
+    lead_hours, "h"
+  )
+  return init.astype("datetime64[Y]").astype(np.int64) + 1970
+
+
+def out_of_fold_pits(
+  build: Callable[[], Predictor],
+  y: np.ndarray,
+  x: np.ndarray,
+  years: np.ndarray,
+  *,
+  seeds: Mapping[int, int],
+  timings: dict[str, float],
+) -> tuple[np.ndarray, dict[str, object]]:
+  """Each training case's PIT under a model fitted without its year.
+
+  Leave one year out: for every training year, a fresh model is fitted on
+  the cases of the other years and evaluated at that year's cases. A model
+  evaluated at the cases it was fitted to is closer to them than to a new
+  case, so its PITs crowd the middle of [0, 1] -- an in-context learner's
+  most of all, since it holds the case itself. A copula fitted to them
+  learns margins narrower than the test PITs it is scored on.
+
+  Parameters
+  ----------
+  build : callable
+      Returns a fresh, unfitted model.
+  y : numpy.ndarray, shape (n_train,)
+      The training responses on the model scale.
+  x : numpy.ndarray, shape (n_train, p)
+      Their covariates.
+  years : numpy.ndarray of int, shape (n_train,)
+      Each case's fold (:func:`training_years`).
+  seeds : mapping of int to int
+      The torch seed set before each year's fit.
+  timings : dict of str to float
+      Gains ``fold_fit`` and ``fold_pit_train``, summed over the folds.
+
+  Returns
+  -------
+  pit : numpy.ndarray, shape (n_train,)
+      The out-of-fold PITs.
+  info : dict of str to object
+      JSON-able: the folds, each one's case count, seed and seconds.
+
+  Raises
+  ------
+  ValueError
+      If the training cases span fewer than two years, which leaves no fold
+      anything to be fitted on.
+  """
+  folds = np.unique(years)
+  if len(folds) < 2:
+    raise ValueError(
+      f"the training cases must span at least two years to leave one out; "
+      f"got {folds.tolist()}"
+    )
+  pit = np.full(len(y), np.nan)
+  records = []
+  timings["fold_fit"] = 0.0
+  timings["fold_pit_train"] = 0.0
+  for year in folds.tolist():
+    held = years == year
+    torch.manual_seed(seeds[year])
+    stage: dict[str, float] = {}
+    predictor = build()
+    _timed(stage, "fit", partial(predictor.fit, y[~held], x=x[~held]))
+    pit[held] = _timed(stage, "pit", partial(predictor.cdf, y[held], x=x[held]))
+    timings["fold_fit"] += stage["fit"]
+    timings["fold_pit_train"] += stage["pit"]
+    records.append(
+      {
+        "year": int(year),
+        "n_held_out": int(held.sum()),
+        "seed": seeds[year],
+        "fit_seconds": stage["fit"],
+        "pit_seconds": stage["pit"],
+      }
+    )
+  return pit, {"folds": records}
 
 
 def fit_margin(
@@ -293,7 +408,10 @@ def fit_margin(
   """Fit one marginal model to one response at one station, and predict.
 
   Its torch seed is derived from the base seed, the station, the model and
-  the response, so a fit does not depend on what ran before it.
+  the response, so a fit does not depend on what ran before it. With
+  ``train_pits = "out_of_fold"`` it is fitted once more per training year
+  (:func:`out_of_fold_pits`), after the fit on every training case, each
+  with its own seed, also salted with ``"fold"`` and the year.
 
   Parameters
   ----------
@@ -360,6 +478,31 @@ def fit_margin(
     "quantiles_test",
     lambda: predictor.quantiles(config.levels, x=x_test),
   )
+  pit_oof: np.ndarray | None = None
+  folds: dict[str, object] = {}
+  if config.train_pits == "out_of_fold":
+    years = training_years(data, config.selection.lead_hours)
+    pit_oof, folds = out_of_fold_pits(
+      lambda: build_predictor(
+        model, response, config=config, feature_names=names, device=device
+      ),
+      y_train,
+      x_train,
+      years,
+      seeds={
+        int(year): derive_seed(
+          config.base_seed,
+          "margin",
+          data.station,
+          model.name,
+          variable,
+          "fold",
+          int(year),
+        )
+        for year in np.unique(years)
+      },
+      timings=timings,
+    )
   info: dict[str, object] = {
     "seed": seed,
     "features": names,
@@ -369,6 +512,7 @@ def fit_margin(
       "boundary_nudge": response.boundary_nudge,
     },
     **bounds,
+    **({"out_of_fold": folds} if folds else {}),
   }
   if isinstance(predictor, EMOS):
     info["emos"] = {"class": type(predictor).__name__, **predictor.parameters}
@@ -389,6 +533,9 @@ def fit_margin(
     quantiles_test=np.asarray(quantiles, dtype=np.float64) * response.scale,
     timings=timings,
     info=info,
+    pit_train_out_of_fold=(
+      None if pit_oof is None else np.asarray(pit_oof, dtype=np.float64)
+    ),
   )
   _check_outputs(fit, f"station {data.station}'s {model.name} {variable}")
   return fit
@@ -453,6 +600,13 @@ def fit_station(
     )
     fit = fit_margin(data, model, variable, config=config, device=device)
     observed = data.y_test[:, data.column(variable)]
+    # The out-of-fold column is written only where it was computed, so a
+    # unit of a run without it keeps its earlier layout.
+    oof = (
+      {}
+      if fit.pit_train_out_of_fold is None
+      else {"pit_out_of_fold": fit.pit_train_out_of_fold}
+    )
     common = {
       "station": data.station,
       "model": model.name,
@@ -466,6 +620,7 @@ def fit_station(
           "row": data.row_train,
           "time": data.time_train,
           "pit": fit.pit_train,
+          **oof,
           "logpdf": np.nan,
           **dict.fromkeys(q_columns, np.nan),
         }
@@ -479,6 +634,7 @@ def fit_station(
           "row": data.row_test,
           "time": data.time_test,
           "pit": fit.pit_test,
+          **dict.fromkeys(oof, np.nan),
           "logpdf": fit.logpdf_test,
           **dict(zip(q_columns, fit.quantiles_test.T, strict=True)),
         }
@@ -513,6 +669,7 @@ def fit_station(
     info={
       "levels": levels.tolist(),
       "variables": details,
+      "train_pits": config.train_pits,
       **(
         {}
         if config.is_default_design

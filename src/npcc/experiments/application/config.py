@@ -47,6 +47,10 @@ from npcc.experiments.config import EstimatorSpec, _parse_estimator
 EMOS_MODEL = "emos-seasonal"
 #: The covariate scopes a ``<backend>-<scope>`` marginal model may name.
 MARGIN_SCOPES: tuple[str, ...] = ("all", "emos")
+#: Which training PITs the copulas are fitted to: the margin fitted on every
+#: training case evaluated at them (``in_sample``), or each case's PIT from a
+#: margin fitted without its initialization year (``out_of_fold``).
+TRAIN_PITS: tuple[str, ...] = ("in_sample", "out_of_fold")
 
 _SUPPORTS: dict[str, tuple[float, float]] = {
   "identity": (-math.inf, math.inf),
@@ -230,6 +234,11 @@ class ApplicationConfig:
       The seed every fit's seed is derived from.
   batch_size : int or None
       The npcc backends' inference batch size; ``None`` for their default.
+  train_pits : str
+      One of :data:`TRAIN_PITS`: the training PITs the copulas are fitted
+      to. ``out_of_fold`` makes the margin stage also fit each marginal
+      model once per training year without that year's cases and store
+      their PITs beside the in-sample ones.
   """
 
   data_dir: Path
@@ -254,6 +263,7 @@ class ApplicationConfig:
   mixture_k: int = 5
   base_seed: int = 317
   batch_size: int | None = None
+  train_pits: str = "in_sample"
 
   def __post_init__(self) -> None:
     """Refuse a configuration no run could honor."""
@@ -311,6 +321,10 @@ class ApplicationConfig:
     if self.batch_size is not None and self.batch_size < 1:
       raise ValueError(
         f"batch_size must be positive or omitted; got {self.batch_size}"
+      )
+    if self.train_pits not in TRAIN_PITS:
+      raise ValueError(
+        f"train_pits must be one of {list(TRAIN_PITS)}; got {self.train_pits!r}"
       )
 
   def _check_estimators(self) -> None:
@@ -442,6 +456,17 @@ class ApplicationConfig:
       "magnus": self.magnus,
     }
 
+  def _outputs(self) -> dict[str, object]:
+    """The training PITs, recorded off their default.
+
+    The default's signature predates the setting, so a run folder it
+    started still resumes, and one that changes it does not.
+    """
+    out: dict[str, object] = {}
+    if self.train_pits != "in_sample":
+      out["train_pits"] = self.train_pits
+    return out
+
   @property
   def copula_models(self) -> tuple[str, ...]:
     """The marginal models of the copula stage, in the configured order."""
@@ -555,6 +580,7 @@ class ApplicationConfig:
       "mixture_k": self.mixture_k,
       "base_seed": self.base_seed,
       **self._design(),
+      **self._outputs(),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
@@ -592,6 +618,7 @@ class ApplicationConfig:
       "mixture_k": self.mixture_k,
       "base_seed": self.base_seed,
       "batch_size": self.batch_size,
+      "train_pits": self.train_pits,
       **self._design(),
       "signature": self.signature(),
     }
@@ -626,7 +653,7 @@ _TABLES: dict[str, tuple[str, ...]] = {
     "min_cases",
     "verify",
   ),
-  "margins": ("models", "n_levels", "batch_size"),
+  "margins": ("models", "n_levels", "batch_size", "train_pits"),
   "copulas": (
     "arms",
     "margins",
@@ -787,6 +814,13 @@ def load_config(path: str | Path) -> ApplicationConfig:
         f"data.verify must be true or false; got {data['verify']!r}"
       )
     options["verify_data"] = data["verify"]
+  if "train_pits" in margins:
+    if not isinstance(margins["train_pits"], str):
+      raise TypeError(
+        f"margins.train_pits must be one of {list(TRAIN_PITS)}; got "
+        f"{margins['train_pits']!r}"
+      )
+    options["train_pits"] = margins["train_pits"]
   if "margins" in copulas:
     options["copula_margins"] = _strings(copulas["margins"], "copulas.margins")
   if "arms_by_margin" in copulas:
