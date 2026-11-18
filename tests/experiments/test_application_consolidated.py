@@ -353,6 +353,66 @@ def test_the_shipped_consolidated_configs(name: str) -> None:
       assert config.stored_draws_for(model, arm) == (200 if full else 25)
 
 
+@pytest.mark.parametrize("name", ["application_full", "application_full_smoke"])
+def test_the_shipped_full_grid_configs(name: str) -> None:
+  """The full grid as decided: every copula on every margin, in both designs.
+
+  Its margins are the consolidated run's; every margin, EMOS's included,
+  runs the three classical arms and the chain with each npcc backend in
+  both designs, the main table adds its own arms, 500 draws are stored per
+  case, and both designs are scored on (T, RH, p) with the exact projected
+  log score of the 5d independence and Gaussian arms.
+  """
+  config = load_config(_ROOT / "configs" / f"{name}.toml")
+  consolidated = load_config(
+    _ROOT / "configs" / "application_consolidated.toml"
+  )
+  for setting in (
+    "models",
+    "modeled",
+    "derived",
+    "margin_responses",
+    "train_pits",
+    "quantile_dtype",
+    "estimators",
+    "responses",
+    "base_seed",
+    "mixture_k",
+  ):
+    assert getattr(config, setting) == getattr(consolidated, setting), setting
+  assert config.stations == ((0,) if "smoke" in name else None)
+  assert config.n_draws == 500
+  assert config.save_draws
+  common = (
+    "independence",
+    "gaussian",
+    "boostcopula-all",
+    "npcc-chain-tabpfn-quantiles-all",
+    "npcc-chain-tabicl-all",
+    "npcc-chain-lightgbm-all",
+  )
+  both = (*common, *(f"{a}@5d" for a in common))
+  anchor = (
+    *common[:3],
+    "boostcopula-time",
+    "npcc-mixture-tabpfn-quantiles-all",
+    "npcc-mixture-tabpfn-quantiles-time",
+    "npcc-chain-tabpfn-quantiles-all",
+    "npcc-chain-tabpfn-quantiles-time",
+    "npcc-chain-tabicl-all",
+    "npcc-chain-lightgbm-all",
+    *(f"{a}@5d" for a in common),
+  )
+  for model in config.copula_models:
+    expected = anchor if model == "tabpfn-quantiles-all" else both
+    assert config.copula_arms_for(model) == expected
+    for arm in expected:
+      assert config.stored_draws_for(model, arm) == 500
+  assert sum(len(config.copula_arms_for(m)) for m in config.copula_models) == 88
+  assert dict(config.score_subsets) == {"trhp": _TRIPLE}
+  assert config.projected_log_score
+
+
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------

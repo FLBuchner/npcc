@@ -341,6 +341,68 @@ again before every unit and, below that, exits with status 3 before the
 unit is fitted or written, so the same command with `--resume` continues
 from it once space is freed.
 
+## The full grid
+
+`configs/application_full.toml` (and its station-0 smoke,
+`application_full_smoke.toml`) is the run section 4's numbers come from. It
+keeps the consolidated design's margins, responses and estimators, and runs
+every copula on every margin in both designs, as FLBuchner's PR #6 does,
+with his 500 draws per case, all stored:
+
+- **Arms.** On each of the seven margins and in both designs: independence,
+  gaussian, boostcopula-all, and the chain with TabPFN, TabICL and LightGBM
+  inside on all covariates (`npcc-chain-{tabpfn-quantiles,tabicl,lightgbm}-all`).
+  On tabpfn-quantiles-all, the main table also has boostcopula-time, the
+  npcc mixtures on all covariates and on the day of year, and the chain on
+  the day of year. 88 arms per station. The npcc copulas run on the EMOS
+  margins too, as in PR #6, with the caveat in *The consolidated design*:
+  fitted to PITs that are not uniform given the covariates, a
+  covariate-dependent copula partly recalibrates the margins.
+- **Scores on (T, RH, p).** `[copulas] subsets = { trhp = [...] }` scores
+  every sampled result on the triple's modeled responses as well:
+  `energy_trhp` and `variogram_trhp`, the full scores' estimators on those
+  columns of the same draws, divided by the same training standard
+  deviations. Every design draws every response, so the triple and the 5d
+  design compare on all five and on these three.
+- **Projected log scores.** With `[copulas] projected_log_score = true`,
+  `independence@5d` and `gaussian@5d` also store the log density of
+  `(T, RH, p)` under their own five-variable model, in `joint_nll_modeled`,
+  the triple's column: both projections are exact (a Gaussian copula's onto
+  a subset is the Gaussian copula of its correlation's submatrix), so these
+  two compare with the triple's log score. The npcc and boostCopula arms
+  have no exact projection, and no such score. `joint_nll_5d` is stored but
+  neither summarized nor ranked.
+- **Closed-form EMOS CRPS.** Every EMOS margin unit's `scores.parquet` also
+  has `crps_closed_form`, the CRPS of its normal, truncated normal or beta
+  predictive in closed form, on the response's own scale, at the
+  observation. The margin tables average it beside `crps`, as a check of the
+  quantile CRPS's approximation; no skill reads it, so every margin's CRPSS
+  uses one estimator.
+- **Size and time.** At 500 draws an arm's `draws.parquet` takes 4.9 MB per
+  station (measured at station 0), so about 56 GB over 131 stations. At
+  station 0 on one CPU thread, the chain with LightGBM inside took 29 s in
+  the triple and 56 s in 5d, and boostCopula in 5d 88 s.
+
+**Launching.** `launch_full.sh` runs it from a clean worktree at a named
+commit, in priority order, so the most needed numbers come first and a
+second job can finish what a first one's wall time cut short:
+
+1. the margins (EMOS first, which stores every station's cases; then TabPFN
+   and TabICL in the GPU processes beside LightGBM on CPU shards);
+2. the copula stage, as a GPU pipeline (the npcc arms with TabPFN or TabICL
+   inside) and a CPU pipeline (independence, gaussian, boostCopula, and the
+   chain with LightGBM inside) side by side, each in three phases:
+   (a) tabpfn-quantiles-all in the triple, the main table; (b) its 5d arms,
+   and emos-seasonal in both designs, the 5d comparison; (c) the rest. Every
+   copula process runs with `--resume`, so a phase skips what an earlier one
+   stored;
+3. `evaluate` and `paired_summary.py`.
+
+`RESUME=1` continues a run folder a stopped launch left, every stage with
+`--resume`; `SETUP` names a file sourced first, such as a cluster's module
+loads for R; `GPU_SHARDS` and `SHARDS` set how many GPU and CPU processes run
+side by side. The stop file and the disk guards are `launch_consolidated.sh`'s.
+
 ## Running
 
 ```bash
