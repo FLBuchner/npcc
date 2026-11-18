@@ -373,6 +373,19 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   the paper's table;
 - `plot_rolling_tau.py --run <run> --station 0`: rolling Kendall's tau of the
   observations and of each margin's training PITs;
+- `dependence.py --run <run>`: FLBuchner's Kendall's tau within covariate
+  bins (npcc-paper PR #6), on the out-of-fold training PITs
+  (`pit_out_of_fold`) of `tabpfn-quantiles-all` and `emos-seasonal`
+  (`--models`), per station and pair of the run's modeled responses. Two
+  binnings per pair, 5 bins each (`--bins`): the day of year of the
+  valid time, in bins of equal width over days 1 to 366, one calendar for
+  every station; and quantile bins of the station's training cases of the
+  ensemble mean of the pair's first response (`coe:<response>_ensavg`;
+  `--covariate` names one for every pair). A bin of fewer than 30 cases
+  (`--min-pairs`) has no tau. Not on the observations: within a bin the
+  margins still move with the other covariates. Writes
+  `reports/binned_tau/binned_kendall_tau.csv`, and per pair a plot of the
+  median over stations by bin, quartiles shaded (`.png` and one `.pdf`);
 - `paired_summary.py --run <run>`: the triple's primary summaries, fixed
   before its full run's results were seen, in `<run>/analysis/`.
   `pooled_means.csv` and `.md` hold each arm's mean score over all test
