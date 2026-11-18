@@ -49,6 +49,7 @@ from npcc.experiments.application.margins import build_predictor, fit_station
 from npcc.experiments.application.scores import (
   copula_tables,
   marginal_tables,
+  nonfinite_log_scores,
   physical_validity,
   pit_uniformity,
   summarize_timings,
@@ -534,6 +535,11 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             projected_column=(
               "joint_nll_modeled" if config.derived else "joint_nll"
             ),
+            # Another design's joint log score is stored and compared
+            # nowhere, so a density that underflows at a case leaves it
+            # infinite there rather than failing the unit, whose draws
+            # every score that is compared comes from.
+            finite_log_score=design is None,
           )
           if design is not None:
             # The fit and its seeds are the base arm's, so an arm and its
@@ -562,6 +568,7 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             wall_seconds=perf_counter() - start,
             save_draws=config.save_draws,
             nll_column=None if design is None else f"joint_nll_{design}",
+            finite_log_score=design is None,
             stored_draws=config.stored_draws_for(model, arm),
           )
           logger.info("station %d: %s %s stored", station, model, arm)
@@ -680,7 +687,9 @@ def evaluate(config: ApplicationConfig, options: RunOptions) -> list[str]:
   where the copula stage has run: the same for each arm against
   independence on its own margins, with every failed unit, and the timings.
   An arm that failed at any selected station is left out of every copula
-  table but the failures, so the arms compared cover the same cases.
+  table but the failures, so the arms compared cover the same cases. Each
+  unit of another design also has its count of non-finite log scores
+  (:func:`~npcc.experiments.application.scores.nonfinite_log_scores`).
 
   Parameters
   ----------
@@ -732,6 +741,9 @@ def evaluate(config: ApplicationConfig, options: RunOptions) -> list[str]:
     copula = _read_copula_units(out, stations, units)
     cases = copula["scores"]
     failures = copula["failures"]
+    nonfinite = nonfinite_log_scores(cases)
+    if not nonfinite.empty:
+      tables["copulas_nonfinite_log_scores"] = nonfinite
     if not failures.empty:
       failed = set(zip(failures["model"], failures["arm"], strict=True))
       keep = [

@@ -266,7 +266,13 @@ mixture members included (`<arm>-m<k>@5d`). A design's log score has its own
 column, `joint_nll_<name>`, so the triple's `joint_nll_modeled` and the five
 responses' `joint_nll_5d` never share one; the latter stays in the files but
 is not ranked, since two of the five responses are functions of the other
-three and the five have no joint density. A 5d arm is scored like the
+three and the five have no joint density. Nor does it fail a unit: it is
+stored as the arm computed it, `inf` where the density underflows (a
+boostCopula vine multiplies its pair densities, and a pair copula fitted to
+the dew point and the mixing ratio is nearly singular), and
+`tables/copulas_nonfinite_log_scores.csv` counts such cases per unit. The
+draws, every score drawn from them and a projected log score must still be
+finite. A 5d arm is scored like the
 triple's on everything drawn: energy and variogram on the five responses,
 each divided by the same training standard deviation; each response's
 sample CRPS; and the physical checks, which its draws, unlike the triple's,
