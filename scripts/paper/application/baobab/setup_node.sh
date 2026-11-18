@@ -24,6 +24,8 @@ module load GCC/15.2.0 CMake/4.2.1 R/4.6.1
 export R_LIBS_USER=$N/R/4.6
 mkdir -p "$R_LIBS_USER"
 Rscript -e 'install.packages(c("RcppEigen","colorspace","RcppParallel","Rfast","VineCopula"), lib=Sys.getenv("R_LIBS_USER"), repos="https://cloud.r-project.org", Ncpus=4, quiet=TRUE)'
-Rscript -e 'remotes::install_github("jobstdavid/boostCopula@746b19152ab71517c4e0dce6d651c9c43705efe9", lib=Sys.getenv("R_LIBS_USER"), upgrade="never", quiet=TRUE)'
+# Its dependencies are installed above: remotes would otherwise try the
+# module's read-only library for them.
+Rscript -e "remotes::install_github('jobstdavid/boostCopula@746b19152ab71517c4e0dce6d651c9c43705efe9', lib='$R_LIBS_USER', upgrade='never', dependencies=FALSE, quiet=TRUE)"
 Rscript -e 'for (p in c("boostCopula","VineCopula","Rfast","RcppParallel","RcppEigen","Rcpp")) cat(p, as.character(packageVersion(p)), "\n"); cat(R.version.string, "\n")' | tee "$N/r_versions.txt"
 echo "== $(date '+%F %T') done"
