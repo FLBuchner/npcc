@@ -444,16 +444,39 @@ def station_ids(directory: Path) -> tuple[int, ...]:
   return tuple(int(i) for i in ids)
 
 
-def _lead_hours(values: np.ndarray) -> np.ndarray:
-  """The lead in hours, whether stored as a number or decoded as a duration."""
+def lead_in_hours(values: np.ndarray) -> np.ndarray:
+  """The lead in hours, whether stored as a number or decoded as a duration.
+
+  Parameters
+  ----------
+  values : numpy.ndarray
+      The ``t`` coordinate of ``x.nc`` or ``y.nc``.
+
+  Returns
+  -------
+  numpy.ndarray
+      The leads as floats, in hours.
+  """
   values = np.asarray(values)
   if values.dtype.kind == "m":
     return values / np.timedelta64(1, "h")
   return values.astype(float)
 
 
-def _check_aligned(x: xr.Dataset, y: xr.Dataset) -> None:
-  """Refuse two files whose rows are not the same forecasts."""
+def check_aligned(x: xr.Dataset, y: xr.Dataset) -> None:
+  """Refuse two files whose rows are not the same forecasts.
+
+  Parameters
+  ----------
+  x, y : xarray.Dataset
+      ``x.nc`` and ``y.nc``, open.
+
+  Raises
+  ------
+  ValueError
+      If their row counts differ, or a row's ``station_id``,
+      ``forecast_reference_time`` or ``t`` does (each where ``y`` has it).
+  """
   if x.sizes["s"] != y.sizes["s"]:
     raise ValueError(
       f"x.nc and y.nc must have the same rows; got {x.sizes['s']} and "
@@ -506,14 +529,14 @@ def load_station(
     xr.open_dataset(directory / "x.nc", engine=_ENGINE) as x,
     xr.open_dataset(directory / "y.nc", engine=_ENGINE) as y,
   ):
-    _check_aligned(x, y)
+    check_aligned(x, y)
     ref = np.asarray(x["forecast_reference_time"].values).astype(
       "datetime64[ns]"
     )
     hour = ref - ref.astype("datetime64[D]")
     eligible = (
       (np.asarray(x["station_id"].values) == station)
-      & (_lead_hours(x["t"].values) == selection.lead_hours)
+      & (lead_in_hours(x["t"].values) == selection.lead_hours)
       & (hour == np.timedelta64(selection.init_hour, "h"))
     )
     all_names = sorted(str(n) for n in x.data_vars)

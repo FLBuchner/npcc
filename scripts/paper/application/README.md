@@ -387,6 +387,21 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   with `gaussian` of its own design, and also with the same arm of the main
   design on its margins, on the scores both draw and the physical checks'
   shares. `paired_by_station.csv` holds each station's difference;
+- `eda_physical_consistency.py --data <dir> --out <dir>`: reads `x.nc` and
+  `y.nc`, not a run; FLBuchner's EDA of npcc-paper PR #6 on the formulas
+  above. Every station and date at a 24 h lead from 00:00 UTC, observed
+  and as ensemble means: coverage; the bounds (`Td > T` exactly and by
+  more than 0.001 C, RH in [0, 100], `w >= 0`, `p > e`, finiteness); the
+  residuals of RH and `w`, recorded less derived from `(T, Td, p)`, by
+  station and pooled, and their shares within descriptive tolerances; and
+  the residuals with `e_s(Td)`'s constants picked by `Td`'s own sign. CSVs,
+  `case_residuals.csv.gz` and `physical_consistency.pdf`. On the published
+  files: 297,918 cases at 131 stations, initialized 2016-06-01 to
+  2022-10-01; the observed `Td` exceeds `T` in 4,464 cases, by at most
+  3.81e-6 C (one float32 step), never by 0.001 C; no RH, `w` or `p` out of
+  bounds; RH and `w` recovered to 5.1e-5 points and 5.2e-6 g/kg. With
+  `Td`'s own sign, the RH residuals reach 0.085 points on the 40,630
+  observed cases where `T` and `Td` straddle 0;
 - `pressure_shift.py --run <run>`: `<run>/checks/pressure_shift.csv`, per
   station, the observed surface pressure less the forecast's ensemble mean:
   its mean on each split, and the largest single step in it over time, dated.
