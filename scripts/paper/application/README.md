@@ -379,14 +379,27 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   cases, one table per score. `paired.csv` holds each arm against the
   Gaussian copula on its own margins and against the npcc mixture on all
   covariates on the TabPFN margins: the mean over stations of the
-  difference of station means (negative favors the arm), its standard error
-  across stations, and the stations where the arm is lower, higher or level;
-  on every station and again without station 106, whose pressure error
-  steps by about 5 hPa late in its training period (`pressure_shift.py`).
-  With arms of another design (*The consolidated design*), each is compared
-  with `gaussian` of its own design, and also with the same arm of the main
-  design on its margins, on the scores both draw and the physical checks'
-  shares. `paired_by_station.csv` holds each station's difference;
+  difference of station means (negative favors the arm), its 95% interval
+  (`boot_low`, `boot_high`), its standard error across stations, and the
+  stations where the arm is lower, higher or level; on every station and
+  again without station 106, whose pressure error steps by about 5 hPa late
+  in its training period (`pressure_shift.py`). With arms of another design
+  (*The consolidated design*), each is compared with `gaussian` of its own
+  design, and also with the same arm of the main design on its margins, on
+  the scores both draw and the physical checks' shares.
+  `paired_by_station.csv` holds each station's difference, and `paired.md`
+  each comparison's difference with its interval. The interval is
+  FLBuchner's hierarchical circular-block bootstrap (npcc-paper PR #6) with
+  the blocks on the calendar: 500 replicates, each drawing circular blocks
+  of `round(n_dates ** (1/3))` consecutive test dates, the same dates at
+  every station since stations share the weather on a date, and the
+  stations with replacement; its statistic is the mean over the stations
+  drawn of each one's mean difference over the dates drawn, and the
+  interval the 2.5 % and 97.5 % quantiles, from seed 2026
+  (`scores.date_block_interval`). It reads each test case's scores from
+  the copula units and refuses units whose means are not the tables'. In
+  the chain run, the intervals are a median 1.6 times as wide as 1.96
+  standard errors either side;
 - `eda_physical_consistency.py --data <dir> --out <dir>`: reads `x.nc` and
   `y.nc`, not a run; FLBuchner's EDA of npcc-paper PR #6 on the formulas
   above. Every station and date at a 24 h lead from 00:00 UTC, observed
