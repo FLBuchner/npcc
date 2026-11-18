@@ -133,32 +133,36 @@ CRPS and log score.
 
 **Stored draws.** With `[copulas] save_draws = true`, each copula unit,
 `stations/<NNN>/copulas/<model>/<arm>/`, also holds `draws.parquet`: the
-draws every sampled result was scored on, readable with any Parquet reader
-(pandas, pyarrow, R's arrow), without npcc. One row per result, test case
-and draw:
+draws the arm was scored on, readable with any Parquet reader (pandas,
+pyarrow, R's arrow), without npcc. A mixture's members are scored on their
+own draws, but only the mixture's are stored. One row per test case and
+draw:
 
 | column | type | meaning |
 |---|---|---|
 | `station` | int32 | the station id |
 | `model` | string | the marginal model, e.g. `tabpfn-quantiles-all` |
 | `run_arm` | string | the arm as run, e.g. `npcc-mixture-tabpfn-quantiles-all` |
-| `arm` | string | the result: the arm, or a mixture member `<arm>-m<k>` |
+| `arm` | string | the arm, as `run_arm` |
 | `row` | int64 | the test case's row in `x.nc` and `y.nc`, as in `scores.parquet` |
 | `draw` | int32 | the draw, `0` to `n_draws - 1` |
 | `obs:air_temperature`, ... | float32 | one column per response, named as in `y.nc`, on its own scale (C, percent, hPa, g/kg): the modeled ones, then the derived ones |
 
-A chain mixture's orders draw only their share of the mixture's draws and
-have no rows of their own; the mixture's rows hold them all. The per-case
-scores are in `scores.parquet` beside it, one row per result and test case:
+A chain mixture's orders draw only their share of the mixture's draws; the
+mixture's rows hold them all. The per-case scores are in `scores.parquet`
+beside it, one row per result (the arm, and each member) and test case:
 `logcop`, `joint_nll_modeled`, `energy`, `variogram` and `crps_<response>`
 for each of the five. The unit's `info.json` gives, under `scales`, what
 the energy and variogram scores divide each response by (its training
 standard deviation, `ddof = 0`), and `stations/<NNN>/data/cases.parquet`
-the observations. At 363 test cases and 200 draws, a sampled result takes about
-1.45 MB per station before compression; the full triple design's 18
-sampled results (4 arms on EMOS; 4 classical arms, 2 mixtures with their 6
-members and 2 chains on TabPFN) at 131 stations about 3.4 GB, a little less
-compressed, since float noise compresses poorly.
+the observations. At 363 test cases and 200 draws, an arm takes about
+1.45 MB per station before compression, about 190 MB over 131 stations, a
+little less compressed, since float noise compresses poorly.
+`thin_draws.py --run <run> --arms <arm> ... --keep <k>` keeps the first `k`
+draws per case of the arms named, in place, if a run's disk fills: the
+scores, computed from every draw before they were stored, do not change;
+each thinned unit gets a `draws_thinned.json` and the run's
+`logs/draws_thinned.jsonl` a line.
 
 **Physical validity.** Every sampled result's draws are checked, as
 FLBuchner's `physics.py` checks them: a dew point above the air temperature
@@ -229,6 +233,94 @@ d >= 2, starting from an initial matrix of the same pattern as FLBuchner's
 5 x 5, which it reproduces at d = 5. The matrix only supplies the formulas;
 boostCopula selects its own structure and families from that start.
 
+## The consolidated design
+
+`configs/application_consolidated.toml` (and its station-0 smoke,
+`application_consolidated_smoke.toml`) is the paper's rerun of section 4. It
+consolidates FLBuchner's design in npcc-paper PR #6 -- the comparison of a
+copula on all five responses with one on three, the seven margins, the
+per-case draws and the physical diagnostics -- with the triple's above:
+the measured triple stays the main design, and the five-variable copulas
+show how much accuracy a physically possible model gives up.
+
+**Two designs in one run.** `[responses] modeled` and `derived` give the
+main design, the triple. `[copulas.designs.<name>]` gives another by its
+modeled and derived responses; the consolidated config has one, `5d`, which
+models all five and derives none:
+
+```toml
+[copulas.designs.5d]
+modeled = ["obs:air_temperature", "obs:dew_point_temperature",
+  "obs:relative_humidity", "obs:surface_air_pressure",
+  "obs:water_vapor_mixing_ratio"]
+derived = []
+```
+
+An arm named `<arm>@<name>` runs on that design: `gaussian@5d` is the
+Gaussian copula on all five responses. The margins are fitted once, to every
+response some design models (here all five), and every arm reads its
+design's columns of the same stored units. An arm and its other design's
+share their seeds, so their comparison sees the same random numbers. A
+unit, a table row and a stored draw carry the design in the arm's name,
+mixture members included (`<arm>-m<k>@5d`). A design's log score has its own
+column, `joint_nll_<name>`, so the triple's `joint_nll_modeled` and the five
+responses' `joint_nll_5d` never share one; the latter stays in the files but
+is not ranked, since two of the five responses are functions of the other
+three and the five have no joint density. A 5d arm is scored like the
+triple's on everything drawn: energy and variogram on the five responses,
+each divided by the same training standard deviation; each response's
+sample CRPS; and the physical checks, which its draws, unlike the triple's,
+can break. In the copula tables, a 5d arm's skills and log-score gains are
+against `independence@5d` on its margins.
+
+**Float32 quantiles.** `[margins] quantile_dtype = "float32"` rounds each
+margin's test quantiles to float32 as soon as they are predicted, before
+the marginal scores are computed or the unit is stored, and stores them as
+float32 in `predictions.parquet` (the `q_*` columns), half the disk of
+float64. The copula stage reads them from the files, so the quantiles the
+margin stage scored, the stored ones and the ones the copulas' draws are
+mapped through are the same numbers, and a rerun of the copula stage from
+the stored files reproduces every score. The default, `"float64"`, is
+every earlier run's.
+
+**Arms.** Per marginal model and design, as decided before the run:
+
+| margins | triple | 5d |
+|---|---|---|
+| emos-seasonal | independence, gaussian, boostcopula-all | independence, gaussian |
+| lightgbm-all, lightgbm-emos, tabpfn-quantiles-emos, tabicl-all, tabicl-emos | independence, gaussian, boostcopula-all, npcc-chain-tabpfn-quantiles-all | |
+| tabpfn-quantiles-all | independence, gaussian, boostcopula-all, boostcopula-time, npcc-mixture-tabpfn-quantiles-all and -time (each member scored), npcc-chain-tabpfn-quantiles-all and -time | independence, gaussian, npcc-chain-tabpfn-quantiles-all |
+
+The chain stays off the EMOS margins for the reason in section 4: fitted to
+PITs that are not uniform given the covariates, a covariate-dependent copula
+partly recalibrates the margins, and which response keeps its margin then
+depends on the order it is drawn in. Every margin is E1's estimator for its
+backend on all five responses (TabPFN v3 with the probit transform at
+softmax temperature 1.0; `tabicl-probit`; `lightgbm-probit`), with
+out-of-fold training PITs; 200 draws per test case, stored per arm.
+
+**Summaries, fixed before the run.** `paired_summary.py` on the run, every
+score lower-is-better, paired by station, on every station and without
+station 106:
+
+1. every arm's pooled mean of every score;
+2. every arm against `gaussian` on the same margins and design
+   (`gaussian@5d` for a 5d arm), and against the anchor,
+   `npcc-mixture-tabpfn-quantiles-all` on `tabpfn-quantiles-all`;
+3. each 5d arm against the same arm of the triple on the same margins
+   (`independence` and `gaussian` on `emos-seasonal` and
+   `tabpfn-quantiles-all`; `npcc-chain-tabpfn-quantiles-all` on
+   `tabpfn-quantiles-all`), on energy, variogram, each response's sample
+   CRPS and each physical check's share of draws, from
+   `tables/copulas_physical_validity.csv`; never on the log score.
+
+**Size.** 36 stored arms (on the triple, 21 classical arms on the seven
+margins, 6 chains on the npcc margins, and boostCopula on time, 2 mixtures
+and the chain on time on `tabpfn-quantiles-all`; on 5d, 4 classical arms
+and the chain) at about 190 MB each over 131 stations make about 6.8 GB of
+draws before compression; the margins' 35 units per station, with float32
+quantiles, about 1.8 GB.
+
 ## Running
 
 ```bash
@@ -240,7 +332,9 @@ npcc-application evaluate  --config configs/application.toml --out results/appli
 
 The triple design runs the same stages on `configs/application_triple.toml`
 into its own folder; `configs/application_smoke_triple.toml` is its station-0
-smoke.
+smoke. The consolidated design runs them on
+`configs/application_consolidated.toml`, with
+`configs/application_consolidated_smoke.toml` its station-0 smoke.
 
 `margins` and `copulas` take `--shard I/K` (every K-th station from the I-th,
 one process each) and `--resume`; `--stations`, `--models` and `--copulas`
@@ -269,7 +363,10 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   across stations, and the stations where the arm is lower, higher or level;
   on every station and again without station 106, whose pressure error
   steps by about 5 hPa late in its training period (`pressure_shift.py`).
-  `paired_by_station.csv` holds each station's difference;
+  With arms of another design (*The consolidated design*), each is compared
+  with `gaussian` of its own design, and also with the same arm of the main
+  design on its margins, on the scores both draw and the physical checks'
+  shares. `paired_by_station.csv` holds each station's difference;
 - `pressure_shift.py --run <run>`: `<run>/checks/pressure_shift.csv`, per
   station, the observed surface pressure less the forecast's ensemble mean:
   its mean on each split, and the largest single step in it over time, dated.

@@ -1,0 +1,176 @@
+# The station-0 smoke run of configs/application_consolidated.toml: the same
+# margins, designs, arms and settings, at station 0 alone, so every margin's
+# and arm's cost, and the disk its draws take, are seen once before the full
+# run. Its design and its summaries are the full run's; see that file.
+#   npcc-application margins  --config configs/application_consolidated_smoke.toml --out <folder>
+#   npcc-application copulas  --config configs/application_consolidated_smoke.toml --out <folder>
+#   npcc-application evaluate --config configs/application_consolidated_smoke.toml --out <folder>
+
+base_seed = 317
+
+[data]
+dir = "~/npcc-data/meteoswiss_zanetta2023"
+verify = true
+stations = [0]
+lead_hours = 24
+init_hour = 0
+train = [2017-01-01, 2020-12-31]
+test = [2021-01-01, 2021-12-31]
+min_cases = 20
+
+[margins]
+# Seasonal EMOS, against which the CRPSS is read, and each npcc backend on
+# all the covariates or on seasonal EMOS's (the target's ensemble mean and
+# the day of year), as PR #6 and configs/application.toml have them.
+models = [
+  "emos-seasonal",
+  "lightgbm-all",
+  "lightgbm-emos",
+  "tabpfn-quantiles-all",
+  "tabpfn-quantiles-emos",
+  "tabicl-all",
+  "tabicl-emos",
+]
+n_levels = 199
+# The copulas' training PITs come from margins fitted without the case's
+# initialization year, leave one year out over the four training years. A
+# margin evaluated at its own training cases crowds their PITs toward 0.5:
+# in the triple's full run (dc09eaf), TabPFN's in-sample training PITs had
+# SD 0.26 to 0.27 against a uniform 0.289. The test predictions stay those of
+# the margin fitted on every training case; evaluate's
+# tables/margins_pit_uniformity.csv compares both kinds of training PIT.
+train_pits = "out_of_fold"
+# Rounded to float32 as soon as they are predicted, then scored and stored:
+# 7 significant digits, ample for data on a 0.1 grid, and half the disk. The
+# copula stage reads the stored values, so a rerun from the files reproduces
+# every score.
+quantile_dtype = "float32"
+
+# The main design: the measured triple. T, RH and p are measured, stored
+# exactly on a 0.1 grid; the dew point and the mixing ratio are computed from
+# them (npcc.experiments.application.derived), so the triple's arms derive
+# them from every draw. The 5d design below also fits a copula to them, so
+# their margins are fitted too. RH keeps FLBuchner's logit transform,
+# 100 -> 99.95 boundary nudge and beta EMOS.
+[responses]
+modeled = ["obs:air_temperature", "obs:relative_humidity", "obs:surface_air_pressure"]
+derived = ["obs:dew_point_temperature", "obs:water_vapor_mixing_ratio"]
+# MeteoSwiss's piecewise Magnus formula, as Zanetta et al. (2023) use it, the
+# coefficient set chosen by the air temperature's sign for both vapor
+# pressures, which reproduces the stored dew point to float32 precision.
+magnus = "meteoswiss"
+"obs:air_temperature" = { transform = "identity" }
+"obs:dew_point_temperature" = { transform = "identity" }
+"obs:relative_humidity" = { transform = "logit", scale = 100.0, boundary_nudge = 0.05 }
+"obs:surface_air_pressure" = { transform = "identity" }
+"obs:water_vapor_mixing_ratio" = { transform = "log" }
+
+# The arms, per margins and design:
+# - the triple, every margin: independence, gaussian, boostcopula-all;
+# - the triple, the six npcc margins: the chain rule on TabPFN with all
+#   covariates. It stays off the EMOS margins: fitted to PITs that are not
+#   uniform given the covariates, as EMOS's are, a covariate-dependent copula
+#   partly recalibrates the margins, and which response keeps its margin then
+#   depends on the order it is drawn in (section 4; checks/ in
+#   results/application_triple_smoke_2026-11-12);
+# - the triple, tabpfn-quantiles-all, the main table: boostcopula-time, the
+#   npcc mixtures on all covariates and on the day of year (every structure
+#   at d = 3, each member also scored), and the chain on the day of year;
+# - 5d, emos-seasonal and tabpfn-quantiles-all: independence, gaussian;
+# - 5d, tabpfn-quantiles-all: the chain rule on TabPFN with all covariates.
+# An arm and its 5d counterpart share their seeds, so their comparison sees
+# the same random numbers.
+[copulas]
+arms = [
+  "independence",
+  "gaussian",
+  "boostcopula-all",
+  "boostcopula-time",
+  "npcc-mixture-tabpfn-quantiles-all",
+  "npcc-mixture-tabpfn-quantiles-time",
+  "npcc-chain-tabpfn-quantiles-all",
+  "npcc-chain-tabpfn-quantiles-time",
+  "independence@5d",
+  "gaussian@5d",
+  "npcc-chain-tabpfn-quantiles-all@5d",
+]
+n_draws = 200
+# 20000 rows per sampling call, as in the triple's full run.
+sample_batch_size = 20000
+# A mixture's members, at most the 3 structures there are at d = 3; and the
+# chain's number of distinct variable orders, 5 of 3! = 6 at d = 3 and of
+# 5! = 120 at d = 5.
+mixture_k = 5
+# Each arm's draws of all five responses, per test case, are stored beside
+# its scores as draws.parquet (float32, zstd), about 1.45 MB per arm and
+# station before compression; a mixture's members are scored on their own
+# draws, which are not stored. scripts/paper/application/thin_draws.py keeps
+# the first k per case if the disk fills.
+save_draws = true
+
+[copulas.arms_by_margin]
+"emos-seasonal" = [
+  "independence",
+  "gaussian",
+  "boostcopula-all",
+  "independence@5d",
+  "gaussian@5d",
+]
+"lightgbm-all" = ["independence", "gaussian", "boostcopula-all", "npcc-chain-tabpfn-quantiles-all"]
+"lightgbm-emos" = ["independence", "gaussian", "boostcopula-all", "npcc-chain-tabpfn-quantiles-all"]
+"tabpfn-quantiles-all" = [
+  "independence",
+  "gaussian",
+  "boostcopula-all",
+  "boostcopula-time",
+  "npcc-mixture-tabpfn-quantiles-all",
+  "npcc-mixture-tabpfn-quantiles-time",
+  "npcc-chain-tabpfn-quantiles-all",
+  "npcc-chain-tabpfn-quantiles-time",
+  "independence@5d",
+  "gaussian@5d",
+  "npcc-chain-tabpfn-quantiles-all@5d",
+]
+"tabpfn-quantiles-emos" = ["independence", "gaussian", "boostcopula-all", "npcc-chain-tabpfn-quantiles-all"]
+"tabicl-all" = ["independence", "gaussian", "boostcopula-all", "npcc-chain-tabpfn-quantiles-all"]
+"tabicl-emos" = ["independence", "gaussian", "boostcopula-all", "npcc-chain-tabpfn-quantiles-all"]
+
+# The 5d design: every response modeled, none derived.
+[copulas.designs.5d]
+modeled = [
+  "obs:air_temperature",
+  "obs:dew_point_temperature",
+  "obs:relative_humidity",
+  "obs:surface_air_pressure",
+  "obs:water_vapor_mixing_ratio",
+]
+derived = []
+
+# `--device` overrides every entry. A backend left out picks its own: CUDA
+# where there is one.
+[devices]
+lightgbm = "cpu"
+tabpfn-quantiles = "cuda"
+tabicl = "cuda"
+
+# E1's entries, copied verbatim from configs/study.toml, so a label means the
+# same backend configuration in both; tests/experiments/
+# test_application_config.py pins their estimator_id to E1's. A margin uses
+# an entry's backend and backend_kwargs on its response's transform; a copula
+# uses the entry whole.
+
+[[estimators]]
+label = "tabpfn-quantiles-v3-probit"
+backend = "tabpfn-quantiles"
+transform = "probit"
+backend_kwargs = { model_version = "v3", model_kwargs = { softmax_temperature = 1.0 } }
+
+[[estimators]]
+label = "tabicl-probit"
+backend = "tabicl"
+transform = "probit"
+
+[[estimators]]
+label = "lightgbm-probit"
+backend = "lightgbm"
+transform = "probit"

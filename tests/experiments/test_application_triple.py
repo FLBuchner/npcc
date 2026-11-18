@@ -261,13 +261,14 @@ def test_the_triple_config_reads_its_design(tmp_path: Path) -> None:
   "name", ["application_triple", "application_smoke_triple"]
 )
 def test_the_shipped_triple_configs(name: str) -> None:
-  """The measured triple, with each run's margins and arms.
+  """The measured triple, with each run's margins and arms, as they ran.
 
   The full run must not fit an npcc copula, vine or chain, to the EMOS
   margins, whose PITs are not uniform given the covariates; the smoke run
   fitted every vine arm to both, and its config must still say so. Both
-  fit the copulas to out-of-fold training PITs, never in-sample ones,
-  and store every scored result's draws.
+  configs are those of the cited runs, so they keep the runs' signatures,
+  their in-sample training PITs and no stored draws; the rerun's settings
+  are configs/application_consolidated.toml's.
   """
   config = load_config(_ROOT / "configs" / f"{name}.toml")
 
@@ -305,8 +306,17 @@ def test_the_shipped_triple_configs(name: str) -> None:
   assert config.responses[RELATIVE_HUMIDITY].boundary_nudge == 0.05
   assert config.device_for("tabpfn-quantiles") == "cuda"
   assert config.stations == ((0,) if "smoke" in name else None)
-  assert config.train_pits == "out_of_fold"
-  assert config.save_draws
+  assert config.train_pits == "in_sample"
+  assert not config.save_draws
+  assert config.quantile_dtype == "float64"
+  assert not config.copula_designs
+  # The manifests of results/application_triple_2026-11-12 and
+  # results/application_triple_smoke_2026-11-12.
+  assert config.signature() == (
+    "7214cb7cbf2d7afa003cc2ab429088fc90423ddfc366ebdba34a37f89f8a0a82"
+    if "smoke" in name
+    else "982d1b254a5db768eefaf11b93de4d4ecd95f40fedfe616e6dde090025b8681b"
+  )
 
 
 @pytest.mark.usefixtures("register_linear_gaussian_backend")
