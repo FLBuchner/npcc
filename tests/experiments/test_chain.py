@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import cast
 
+import numpy as np
 import pytest
 import torch
 
@@ -15,7 +16,7 @@ from npcc.core import (
   Transform,
   create_backend,
 )
-from npcc.experiments.chain import ChainCopula, draw_order
+from npcc.experiments.chain import ChainCopula, draw_order, draw_orders
 
 
 def _controls(
@@ -193,3 +194,23 @@ def test_a_fit_checks_its_seeds_and_its_data(
   bad[0, 1] = 1.0
   with pytest.raises(ValueError, match="strictly inside"):
     chain.fit(bad, x=x)
+
+
+def test_draw_orders_redraws_a_repeat_from_its_own_seed() -> None:
+  """A repeat is drawn again from its seed's generator; d below 2 is refused.
+
+  So an order stays a function of its seed and of the orders before it, and
+  a set of seeds whose first draws differ gives draw_order's orders.
+  """
+  seeds = [11, 12, 11]
+  orders = draw_orders(5, seeds)
+  assert orders[:2] == [draw_order(5, 11), draw_order(5, 12)]
+  rng = np.random.default_rng(11)
+  rng.permutation(5)
+  again = [int(v) + 1 for v in rng.permutation(5)]
+  assert orders[2] == (again if again not in orders[:2] else orders[2])
+  assert len({tuple(o) for o in orders}) == 3
+  assert draw_orders(4, [1, 2, 3]) == [draw_order(4, s) for s in (1, 2, 3)]
+  assert len(draw_orders(2, [1, 2, 3, 4])) == 2
+  with pytest.raises(ValueError, match="at least 2"):
+    draw_orders(1, [1])

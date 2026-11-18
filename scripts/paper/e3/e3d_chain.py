@@ -15,10 +15,12 @@ copula density can be written down by the chain rule along a variable order
 and no structure (``npcc.experiments.chain.ChainCopula``). There is no ``x``
 here, so the features are the earlier scores alone.
 
-**Orders.** Per cell, ``--k`` (5) orders drawn uniformly from the ``d!``
-permutations (``npcc.experiments.chain.draw_order``), order ``j`` from the
-seed ``derive_seed("E3d", "chain", design, d, seed, j)``. They are a function
-of the cell alone, so every estimator and process mixes the same ones.
+**Orders.** Per cell, ``min(--k, d!)`` distinct orders (``--k`` is 5) drawn
+uniformly from the ``d!`` permutations
+(``npcc.experiments.chain.draw_orders``), order ``j`` from the seed
+``derive_seed("E3d", "chain", design, d, seed, j)``, drawn again from the
+same generator where it repeats an earlier order. They are a function of the
+cell alone, so every estimator and process mixes the same ones.
 
 **Estimator.** ``--estimator``, an E1 label read from E1's config by
 ``e3_npcc.spec`` (TabPFN v3 at the probit transform by default). Factor ``f``
@@ -82,7 +84,7 @@ from npcc.experiments._study import (
   release_gpu,
   reset_gpu_peaks,
 )
-from npcc.experiments.chain import ChainCopula, draw_order
+from npcc.experiments.chain import ChainCopula, draw_orders
 from npcc.experiments.config import EstimatorSpec
 
 #: Orders per mixture, as in the vine study's ``chain`` arm.
@@ -94,11 +96,12 @@ ESTIMATOR = "tabpfn-quantiles-v3-probit"
 def orders_for(
   design: str, d: int, seed: int, k: int
 ) -> tuple[list[list[int]], list[int]]:
-  """The cell's ``k`` variable orders, and the seed each was drawn from."""
+  """The cell's ``min(k, d!)`` distinct orders, and the seed of each."""
   seeds = [
     derive_seed("E3d", "chain", design, d, seed, j) for j in range(1, k + 1)
   ]
-  return [draw_order(d, s) for s in seeds], seeds
+  orders = draw_orders(d, seeds)
+  return orders, seeds[: len(orders)]
 
 
 def factor_seeds(
@@ -220,7 +223,7 @@ def run_cell(
     logs.append(lp)
     members.append(member)
     print(
-      f"chain {key} order {j}/{k} {order}: excess "
+      f"chain {key} order {j}/{len(orders)} {order}: excess "
       f"{member['excess_nll']:.4f} fit {fit_s:.1f} s inf {inference_s:.1f} s",
       flush=True,
     )
@@ -243,8 +246,8 @@ def run_cell(
     "n_test": int(te.shape[0]),
     "method": cell_dir.name,
     "role": "chain",
-    "k": k,
-    "n_factors": k * (d - 1),
+    "k": len(orders),
+    "n_factors": len(orders) * (d - 1),
     "structure": "none: chain-rule densities along uniformly random orders",
     "orders": json.dumps(orders),
     "order_seeds": json.dumps(order_seeds),
