@@ -289,16 +289,19 @@ def selected_vs_random_table(
       truth_wins = truth_total = 0
       for _, c in g.groupby("seed"):
         sel = c[c["kind"] == "selected"].iloc[0]
-        tru = c[c["kind"] == "truth"].iloc[0]
-        sel_vine, tru_vine = edges_of(sel["matrix"]), edges_of(tru["matrix"])
+        truth = c[c["kind"] == "truth"].iloc[0]
+        sel_vine, truth_vine = (
+          edges_of(sel["matrix"]),
+          edges_of(truth["matrix"]),
+        )
         for o in c[c["kind"] == kind].itertuples(index=False):
           vine = edges_of(str(o.matrix))
           if vine != sel_vine:
             total += 1
             wins += int(sel["heldout_loglik"] > o.heldout_loglik)
-          if vine != tru_vine:
+          if vine != truth_vine:
             truth_total += 1
-            truth_wins += int(tru["heldout_loglik"] > o.heldout_loglik)
+            truth_wins += int(truth["heldout_loglik"] > o.heldout_loglik)
       row[f"selected_above_{kind}_share"] = wins / total if total else math.nan
       row[f"selected_vs_{kind}_pairs"] = total
       row[f"truth_above_{kind}_share"] = (
