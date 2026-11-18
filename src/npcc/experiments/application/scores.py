@@ -36,8 +36,6 @@ from npcc.experiments.application.config import (
 NOMINAL_COVERAGE: tuple[float, ...] = (0.5, 0.8, 0.9, 0.95)
 #: The copula arm skills are relative to.
 INDEPENDENCE = "independence"
-#: Every per-case copula score column.
-COPULA_SCORES: tuple[str, ...] = ("joint_nll", "energy", "variogram")
 
 
 def coverage_column(nominal: float) -> str:
