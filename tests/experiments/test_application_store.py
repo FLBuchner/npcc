@@ -316,14 +316,16 @@ def test_an_order_scored_by_its_log_score_alone_is_stored_with_nan(
     seed=3,
     device=None,
   )
-  write = {"rows": station.row_test, "seed": 3, "wall_seconds": 0.1}
+  rows = station.row_test
   with pytest.raises(ValueError, match="energy must be finite"):
     write_copula(
       tmp_path,
       ms,
       arm,
       [mixture, dataclasses.replace(order, sampled=True)],
-      **write,
+      rows=rows,
+      seed=3,
+      wall_seconds=0.1,
     )
   with pytest.raises(ValueError, match="energy must be nan"):
     write_copula(
@@ -331,9 +333,13 @@ def test_an_order_scored_by_its_log_score_alone_is_stored_with_nan(
       ms,
       arm,
       [mixture, dataclasses.replace(order, energy=mixture.energy)],
-      **write,
+      rows=rows,
+      seed=3,
+      wall_seconds=0.1,
     )
-  write_copula(tmp_path, ms, arm, [mixture, order], **write)
+  write_copula(
+    tmp_path, ms, arm, [mixture, order], rows=rows, seed=3, wall_seconds=0.1
+  )
   scores = read_copula_tables(tmp_path, [1], ["linear-gaussian-all"], [arm])[
     "scores"
   ].set_index("arm")

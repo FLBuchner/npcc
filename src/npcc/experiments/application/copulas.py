@@ -216,6 +216,10 @@ class CopulaResult:
       Whether the sample scores come from draws of this copula; ``False``
       for a chain mixture's order, scored by its log score alone, whose
       ``energy`` and ``variogram`` are ``nan``.
+  draws : numpy.ndarray or None, shape (n_test, n_draws, d + k)
+      The draws the sample scores were computed from, on each response's
+      own scale: the ``d`` modeled responses, then the ``k`` derived ones;
+      ``None`` for a result that draws nothing of its own.
   """
 
   arm: str
@@ -227,6 +231,7 @@ class CopulaResult:
   info: dict[str, object]
   sample_crps: dict[str, np.ndarray] = field(default_factory=dict)
   sampled: bool = True
+  draws: np.ndarray | None = None
 
 
 class CopulaFailure(ValueError):
@@ -711,6 +716,7 @@ def _score(
     timings=timings,
     info=info,
     sample_crps=sample_crps,
+    draws=draws,
   )
 
 

@@ -266,7 +266,8 @@ def test_the_shipped_triple_configs(name: str) -> None:
   The full run must not fit an npcc copula, vine or chain, to the EMOS
   margins, whose PITs are not uniform given the covariates; the smoke run
   fitted every vine arm to both, and its config must still say so. Both
-  fit the copulas to out-of-fold training PITs, never in-sample ones.
+  fit the copulas to out-of-fold training PITs, never in-sample ones,
+  and store every scored result's draws.
   """
   config = load_config(_ROOT / "configs" / f"{name}.toml")
 
@@ -305,6 +306,7 @@ def test_the_shipped_triple_configs(name: str) -> None:
   assert config.device_for("tabpfn-quantiles") == "cuda"
   assert config.stations == ((0,) if "smoke" in name else None)
   assert config.train_pits == "out_of_fold"
+  assert config.save_draws
 
 
 @pytest.mark.usefixtures("register_linear_gaussian_backend")

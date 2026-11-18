@@ -486,6 +486,7 @@ def run_copulas(config: ApplicationConfig, options: RunOptions) -> None:
             rows=rows,
             seed=seed,
             wall_seconds=perf_counter() - start,
+            save_draws=config.save_draws,
           )
           logger.info("station %d: %s %s stored", station, model, arm)
         release_gpu()

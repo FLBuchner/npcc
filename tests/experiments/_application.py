@@ -126,6 +126,7 @@ class FakeCopulaResult:
   info: dict[str, object] = field(default_factory=dict)
   sample_crps: dict[str, np.ndarray] = field(default_factory=dict)
   sampled: bool = True
+  draws: np.ndarray | None = None
 
 
 class FakeCopulaFailure(ValueError):

@@ -239,6 +239,9 @@ class ApplicationConfig:
       to. ``out_of_fold`` makes the margin stage also fit each marginal
       model once per training year without that year's cases and store
       their PITs beside the in-sample ones.
+  save_draws : bool
+      Whether the copula stage stores every scored result's draws of every
+      response, per test case, beside its scores.
   """
 
   data_dir: Path
@@ -264,6 +267,7 @@ class ApplicationConfig:
   base_seed: int = 317
   batch_size: int | None = None
   train_pits: str = "in_sample"
+  save_draws: bool = False
 
   def __post_init__(self) -> None:
     """Refuse a configuration no run could honor."""
@@ -457,14 +461,16 @@ class ApplicationConfig:
     }
 
   def _outputs(self) -> dict[str, object]:
-    """The training PITs, recorded off their default.
+    """The training PITs and the stored draws, recorded off their defaults.
 
-    The default's signature predates the setting, so a run folder it
-    started still resumes, and one that changes it does not.
+    The defaults' signature predates both settings, so a run folder they
+    started still resumes, and one that changes either does not.
     """
     out: dict[str, object] = {}
     if self.train_pits != "in_sample":
       out["train_pits"] = self.train_pits
+    if self.save_draws:
+      out["save_draws"] = True
     return out
 
   @property
@@ -619,6 +625,7 @@ class ApplicationConfig:
       "base_seed": self.base_seed,
       "batch_size": self.batch_size,
       "train_pits": self.train_pits,
+      "save_draws": self.save_draws,
       **self._design(),
       "signature": self.signature(),
     }
@@ -661,6 +668,7 @@ _TABLES: dict[str, tuple[str, ...]] = {
     "n_draws",
     "sample_batch_size",
     "mixture_k",
+    "save_draws",
   ),
 }
 #: The keys of ``[responses]`` that are settings rather than a response.
@@ -821,6 +829,13 @@ def load_config(path: str | Path) -> ApplicationConfig:
         f"{margins['train_pits']!r}"
       )
     options["train_pits"] = margins["train_pits"]
+  if "save_draws" in copulas:
+    if not isinstance(copulas["save_draws"], bool):
+      raise TypeError(
+        f"copulas.save_draws must be true or false; got "
+        f"{copulas['save_draws']!r}"
+      )
+    options["save_draws"] = copulas["save_draws"]
   if "margins" in copulas:
     options["copula_margins"] = _strings(copulas["margins"], "copulas.margins")
   if "arms_by_margin" in copulas:

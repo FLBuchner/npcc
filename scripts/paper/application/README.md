@@ -131,6 +131,35 @@ margins' quantiles, gives a draw of `Td` and `w` by the formulas above.
 The marginal stage scores the three modeled margins as before: quantile
 CRPS and log score.
 
+**Stored draws.** With `[copulas] save_draws = true`, each copula unit,
+`stations/<NNN>/copulas/<model>/<arm>/`, also holds `draws.parquet`: the
+draws every sampled result was scored on, readable with any Parquet reader
+(pandas, pyarrow, R's arrow), without npcc. One row per result, test case
+and draw:
+
+| column | type | meaning |
+|---|---|---|
+| `station` | int32 | the station id |
+| `model` | string | the marginal model, e.g. `tabpfn-quantiles-all` |
+| `run_arm` | string | the arm as run, e.g. `npcc-mixture-tabpfn-quantiles-all` |
+| `arm` | string | the result: the arm, or a mixture member `<arm>-m<k>` |
+| `row` | int64 | the test case's row in `x.nc` and `y.nc`, as in `scores.parquet` |
+| `draw` | int32 | the draw, `0` to `n_draws - 1` |
+| `obs:air_temperature`, ... | float32 | one column per response, named as in `y.nc`, on its own scale (C, percent, hPa, g/kg): the modeled ones, then the derived ones |
+
+A chain mixture's orders draw only their share of the mixture's draws and
+have no rows of their own; the mixture's rows hold them all. The per-case
+scores are in `scores.parquet` beside it, one row per result and test case:
+`logcop`, `joint_nll_modeled`, `energy`, `variogram` and `crps_<response>`
+for each of the five. The unit's `info.json` gives, under `scales`, what
+the energy and variogram scores divide each response by (its training
+standard deviation, `ddof = 0`), and `stations/<NNN>/data/cases.parquet`
+the observations. At 363 test cases and 200 draws, a sampled result takes about
+1.45 MB per station before compression; the full triple design's 18
+sampled results (4 arms on EMOS; 4 classical arms, 2 mixtures with their 6
+members and 2 chains on TabPFN) at 131 stations about 3.4 GB, a little less
+compressed, since float noise compresses poorly.
+
 **RH = 100.** The cases with RH exactly 100 (or 0) are moved to 99.95 (or
 0.05) by the boundary nudge, as in FLBuchner's code. Their counts, per
 station, split and marginal model, are stored with each margin unit and

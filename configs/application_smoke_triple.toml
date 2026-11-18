@@ -64,6 +64,11 @@ arms = [
 n_draws = 200
 sample_batch_size = 5000
 mixture_k = 5
+# Every scored result's draws of all five responses, per test case, are
+# stored beside its scores as draws.parquet (float32, zstd): 363 test cases
+# x 200 draws x 5 responses x 4 bytes, about 1.45 MB per sampled result and
+# station before compression.
+save_draws = true
 
 # `--device` overrides every entry. A backend left out picks its own: CUDA
 # where there is one.

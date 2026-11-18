@@ -10,7 +10,8 @@ One folder per run::
       stations/<NNN>/
         data/                  cases.parquet: the station's cases
         margins/<model>/       predictions, scores, timings, info.json
-        copulas/<model>/<arm>/ scores, timings, info.json; or failure.json
+        copulas/<model>/<arm>/ scores, timings, info.json, and draws where
+                               the run stores them; or failure.json
       tables/                  what ``evaluate`` writes
 
 Each directory under ``stations/`` is a unit: written whole into a hidden
@@ -688,6 +689,7 @@ def write_copula(
   rows: np.ndarray,
   seed: int,
   wall_seconds: float,
+  save_draws: bool = False,
 ) -> None:
   """Write one copula arm's results on one marginal set, as a unit.
 
@@ -708,6 +710,9 @@ def write_copula(
       The seed it was given.
   wall_seconds : float
       How long the call took.
+  save_draws : bool, default=False
+      Whether to also write ``draws.parquet``, every sampled result's draws
+      (:func:`draws_frame`).
   """
   n_test = len(ms.y_test)
   if np.shape(rows) != (n_test,):
@@ -785,6 +790,19 @@ def write_copula(
     "seed": seed,
     "wall_seconds": wall_seconds,
     "train_pits": ms.train_pits,
+    # What the energy and variogram scores divide each response by.
+    "scales": {
+      v: float(s)
+      for v, s in zip(
+        (*ms.variables, *ms.derived),
+        np.concatenate(
+          [np.std(ms.y_train, axis=0), np.std(ms.y_derived_train, axis=0)]
+        )
+        if ms.derived
+        else np.std(ms.y_train, axis=0),
+        strict=True,
+      )
+    },
     **(
       {"modeled": list(ms.variables), "derived": list(ms.derived)}
       if ms.derived
@@ -794,12 +812,90 @@ def write_copula(
       r.arm: {"timings": dict(r.timings), "info": dict(r.info)} for r in results
     },
   }
+  draws = draws_frame(ms, arm, results, rows=rows) if save_draws else None
   with _unit(copula_dir(out, ms.station, ms.model, arm)) as temporary:
     pd.concat(frames, ignore_index=True).to_parquet(
       temporary / "scores.parquet", index=False
     )
     pd.DataFrame(timings).to_parquet(temporary / "timings.parquet", index=False)
+    if draws is not None:
+      draws.to_parquet(
+        temporary / "draws.parquet", index=False, compression="zstd"
+      )
     (temporary / "info.json").write_text(_json(info))
+
+
+def draws_frame(
+  ms: MarginalSet,
+  arm: str,
+  results: Sequence[CopulaResultLike],
+  *,
+  rows: np.ndarray,
+) -> pd.DataFrame:
+  """Every sampled result's draws, one row per test case and draw.
+
+  The columns are ``station``, ``model``, ``run_arm``, ``arm``, ``row`` (the
+  test case's row in the input files, as in ``scores.parquet``), ``draw``
+  (``0`` to ``n_draws - 1``), then one ``float32`` column per response,
+  named as in ``y.nc``: the modeled ones, then the derived ones. A result
+  that draws nothing of its own, a chain mixture's order, has no rows.
+
+  Parameters
+  ----------
+  ms : MarginalSet
+      The margins the arm was fitted on.
+  arm : str
+      The arm as run.
+  results : sequence of CopulaResult
+      What the arm returned; each sampled one carries ``draws``.
+  rows : numpy.ndarray, shape (n_test,)
+      The test cases' rows in the input files.
+
+  Returns
+  -------
+  pandas.DataFrame
+      The draws, in result, case and draw order.
+
+  Raises
+  ------
+  ValueError
+      If a sampled result carries no draws, or draws of another shape than
+      ``(n_test, n_draws, d + k)``.
+  """
+  variables = (*ms.variables, *ms.derived)
+  n_test = len(ms.y_test)
+  frames = []
+  for result in results:
+    if not getattr(result, "sampled", True):
+      continue
+    draws = getattr(result, "draws", None)
+    if draws is None or draws.ndim != 3 or draws.shape[0] != n_test:
+      raise ValueError(
+        f"{result.arm}'s draws must have shape (n_test={n_test}, n_draws, "
+        f"{len(variables)}) to be stored; got "
+        f"{None if draws is None else draws.shape}"
+      )
+    if draws.shape[2] != len(variables):
+      raise ValueError(
+        f"{result.arm}'s draws must hold the {len(variables)} responses "
+        f"{list(variables)}; got {draws.shape[2]}"
+      )
+    n_draws = draws.shape[1]
+    flat = draws.reshape(n_test * n_draws, len(variables)).astype(np.float32)
+    frames.append(
+      pd.DataFrame(
+        {
+          "station": np.int32(ms.station),
+          "model": ms.model,
+          "run_arm": arm,
+          "arm": result.arm,
+          "row": np.repeat(np.asarray(rows, dtype=np.int64), n_draws),
+          "draw": np.tile(np.arange(n_draws, dtype=np.int32), n_test),
+          **{v: flat[:, j] for j, v in enumerate(variables)},
+        }
+      )
+    )
+  return pd.concat(frames, ignore_index=True)
 
 
 def write_copula_failure(
