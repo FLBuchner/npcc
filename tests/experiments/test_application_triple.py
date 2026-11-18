@@ -86,29 +86,73 @@ def test_meteoswiss_magnus_gives_the_hand_values_on_both_sides_of_zero() -> (
 
 
 @pytest.mark.parametrize("name", ["meteoswiss", "sonntag1990"])
-def test_the_dew_point_inverts_the_formula_across_zero(name: str) -> None:
-  """The inverse takes the branch of Td's own sign, also just around 0 C.
+def test_the_dew_point_inverts_the_formula_at_saturation(name: str) -> None:
+  """At RH = 100 the dew point is the air temperature, on either side of 0.
 
-  MeteoSwiss's two branches overlap: ``e_s`` jumps from 6.108 just below 0
-  to 6.107 at 0, so a vapor pressure in between has a dew point on each
-  side, 0.0023 C apart at most; the inverse takes the one at or above 0.
+  A piecewise inverse that took other constants than ``e_s(T)`` did would
+  move it, by up to 0.0023 C just below 0.
   """
   formula = MAGNUS[name]
-  t = np.array([-30.0, -5.0, -0.3, -0.01, 0.0, 1e-6, 0.3, 5.0, 35.0])
+  t = np.array([-30.0, -5.0, -0.3, -0.01, -1e-6, 0.0, 1e-6, 0.3, 5.0, 35.0])
   np.testing.assert_allclose(
-    formula.dew_point(formula.saturation_vapor_pressure(t)), t, atol=1e-9
+    formula.dew_point(formula.saturation_vapor_pressure(t), t), t, atol=1e-9
   )
-  near = np.array([-1e-3, -1e-6])
-  back = formula.dew_point(formula.saturation_vapor_pressure(near))
-  np.testing.assert_allclose(back, near, atol=2.5e-3)
-  td = dew_point(np.array([2.0, 2.0]), np.array([100.0, 60.0]), formula)
-  assert td[0] == pytest.approx(2.0, abs=1e-12)
-  assert td[1] < 0.0
   np.testing.assert_allclose(
-    formula.saturation_vapor_pressure(td[1:]),
-    0.6 * formula.saturation_vapor_pressure(np.array([2.0])),
+    dew_point(t, np.full_like(t, 100.0), formula), t, atol=1e-9
+  )
+
+
+def test_the_dew_point_takes_the_air_temperatures_constants() -> None:
+  """A dew point below 0 under air above it keeps the warm constants.
+
+  That is how MeteoSwiss computed the data's Td. Inverting on the dew
+  point's own branch instead, with the cold constants, puts it 0.0045 C
+  lower at T = 2 C and RH = 60 %, and 0.027 C lower at T = 0.5 C and
+  RH = 30 %: residuals of up to 0.24 C against the stored data.
+
+  By hand, with the warm constants throughout: ``e = 0.6 x 6.107
+  exp(34.736 / 240.83) = 4.23271`` hPa, ``g = ln(e / 6.107) = -0.366593``,
+  ``Td = 238.83 g / (17.368 - g) = -4.93685`` C; at T = 0.5 C and RH = 30 %,
+  -15.0455 C; and at T = -2 C and RH = 60 %, with the cold constants
+  throughout, -8.71923 C.
+  """
+  td = dew_point(np.array([2.0, 0.5, -2.0]), np.array([60.0, 30.0, 60.0]))
+  np.testing.assert_allclose(td, [-4.93685, -15.0455, -8.71923], atol=1e-4)
+  np.testing.assert_allclose(
+    METEOSWISS.saturation_vapor_pressure(td, np.array([2.0, 0.5, -2.0])),
+    vapor_pressure(np.array([2.0, 0.5, -2.0]), np.array([60.0, 30.0, 60.0])),
     rtol=1e-12,
   )
+  own_branch = METEOSWISS.dew_point(
+    vapor_pressure(np.array([2.0]), np.array([60.0])), td[:1]
+  )
+  assert float(td[0] - own_branch[0]) == pytest.approx(0.0045, abs=1e-4)
+
+
+def test_the_derivation_reproduces_the_stored_dew_point() -> None:
+  """MeteoSwiss's Td is the derivation of its T and RH, to float32 precision.
+
+  A coefficient convention other than the data's leaves residuals of up to
+  0.24 C where T and Td straddle 0 C; the data's leaves float32 rounding,
+  about 1e-5 C. Skipped without the data.
+  """
+  path = Path("~/npcc-data/meteoswiss_zanetta2023/y.nc").expanduser()
+  if not path.exists():
+    pytest.skip(f"the MeteoSwiss data is not at {path}")
+  xr = pytest.importorskip("xarray")
+  with xr.open_dataset(path) as y:
+    rows = slice(None, None, 97)
+    t, rh, td = (
+      y[name].values[rows].astype(np.float64)
+      for name in (TEMPERATURE, RELATIVE_HUMIDITY, DEW_POINT)
+    )
+  ok = np.isfinite(t) & np.isfinite(rh) & np.isfinite(td) & (rh > 0)
+  t, rh, td = t[ok], rh[ok], td[ok]
+  straddle = (t >= 0) != (td >= 0)
+  assert straddle.sum() > 1000
+  residual = dew_point(t, rh) - td
+  assert np.abs(residual).max() < 1e-4
+  assert np.abs(residual[straddle]).max() < 1e-4
 
 
 def test_the_mixing_ratio_gives_the_hand_value() -> None:

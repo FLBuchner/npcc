@@ -12,8 +12,12 @@ mixing ratio ``w`` are computed from them:
 The Magnus formula is one object, :class:`Magnus`, chosen by name
 (:data:`MAGNUS`): MeteoSwiss's piecewise formula, one set of constants at
 and above 0 degrees Celsius and one below, as Zanetta et al. (2023,
-arXiv:2212.04487) use, and Sonntag's (1990), one set everywhere. Since
-``RH <= 100``, ``Td <= T`` follows.
+arXiv:2212.04487) use, and Sonntag's (1990), one set everywhere. A
+piecewise formula picks its set by the sign of the air temperature ``T``,
+for ``e_s(T)`` and for the inverse giving ``Td`` alike, as the data was
+computed: with that rule the stored ``Td`` is recovered from the stored
+``T`` and ``RH`` to float32 precision. Since ``RH <= 100``, ``Td <= T``
+follows.
 
 Five responses with two of them functions of the other three have no joint
 density, so the application can model the measured triple and derive the
@@ -63,19 +67,30 @@ class Magnus:
   c: float
   below: tuple[float, float, float] | None = None
 
-  def _pieces(
-    self,
-  ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    above = (self.a, self.b, self.c)
-    return above, self.below or above
+  def _constants(self, switch: np.ndarray) -> tuple[np.ndarray, ...]:
+    """``(a, b, c)`` elementwise, the set below 0 where ``switch < 0``."""
+    switch = np.asarray(switch, dtype=np.float64)
+    if self.below is None:
+      return tuple(np.full_like(switch, v) for v in (self.a, self.b, self.c))
+    warm = switch >= 0.0
+    return tuple(
+      np.where(warm, above, below)
+      for above, below in zip((self.a, self.b, self.c), self.below, strict=True)
+    )
 
-  def saturation_vapor_pressure(self, t: np.ndarray) -> np.ndarray:
+  def saturation_vapor_pressure(
+    self, t: np.ndarray, switch: np.ndarray | None = None
+  ) -> np.ndarray:
     """``e_s(t)`` in hPa.
 
     Parameters
     ----------
     t : numpy.ndarray
         Temperature in degrees Celsius.
+    switch : numpy.ndarray, optional
+        The temperature whose sign picks a piecewise formula's constants;
+        ``t`` itself by default. The vapor pressure at the dew point,
+        ``e_s(Td)``, takes the air temperature's.
 
     Returns
     -------
@@ -83,25 +98,24 @@ class Magnus:
         The saturation vapor pressure over water.
     """
     t = np.asarray(t, dtype=np.float64)
-    (a, b, c), (a2, b2, c2) = self._pieces()
-    out = c * np.exp(a * t / (b + t))
-    if self.below is not None:
-      out = np.where(t >= 0.0, out, c2 * np.exp(a2 * t / (b2 + t)))
-    return out
+    a, b, c = self._constants(t if switch is None else switch)
+    return c * np.exp(a * t / (b + t))
 
-  def dew_point(self, e: np.ndarray) -> np.ndarray:
-    """The temperature whose ``e_s`` is ``e``: the inverse of the formula.
+  def dew_point(self, e: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """The dew point whose ``e_s`` is ``e``: the inverse of the formula.
 
-    For a piecewise formula, the branch is the one whose result has its own
-    sign. MeteoSwiss's branches overlap, ``e_s`` jumping from 6.108 just
-    below 0 to 6.107 at 0, so an ``e`` in between has a dew point on each
-    side, 0.0023 degrees Celsius apart at most; the one at or above 0 is
-    taken.
+    A piecewise formula inverts with the constants of the air temperature's
+    sign, those its ``e = RH / 100 e_s(T)`` was computed with, so a dew
+    point below 0 at an air temperature above it keeps the warm constants.
+    That is how the MeteoSwiss data's dew point was computed.
 
     Parameters
     ----------
     e : numpy.ndarray
         Vapor pressure in hPa.
+    t : numpy.ndarray
+        The air temperature in degrees Celsius, whose sign picks a piecewise
+        formula's constants.
 
     Returns
     -------
@@ -109,13 +123,9 @@ class Magnus:
         The dew point in degrees Celsius.
     """
     e = np.asarray(e, dtype=np.float64)
-    (a, b, c), (a2, b2, c2) = self._pieces()
+    a, b, c = self._constants(t)
     g = np.log(e / c)
-    t = b * g / (a - g)
-    if self.below is not None:
-      g2 = np.log(e / c2)
-      t = np.where(t >= 0.0, t, b2 * g2 / (a2 - g2))
-    return t
+    return b * g / (a - g)
 
 
 #: Sonntag (1990), Zeitschrift fuer Meteorologie 40, 340-344.
@@ -232,7 +242,7 @@ def dew_point(
   numpy.ndarray
       ``Td``, at most ``T`` where ``RH <= 100``.
   """
-  return magnus.dew_point(vapor_pressure(t, rh, magnus))
+  return magnus.dew_point(vapor_pressure(t, rh, magnus), t)
 
 
 def mixing_ratio(

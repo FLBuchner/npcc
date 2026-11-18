@@ -52,20 +52,23 @@ grid: they are computed from the other three,
   `e_s(t) = c exp(a t / (b + t))`, `a, b, c = 17.368, 238.83, 6.107` hPa at
   and above 0 C and `17.856, 245.52, 6.108` below, as Zanetta et al. (2023)
   use;
-- `Td = e_s^-1(e)`, on the branch of `Td`'s own sign;
+- `Td = e_s^-1(e)`, with the constants of `T`'s sign, as for `e_s(T)`;
 - `w = 1000 * 0.622 e / (p - e)` g/kg.
 
-In the forward direction, `Td -> RH, w`, the data matches to an RH residual
-SD of 0.008 points (max 0.085) and a `w` residual SD of 0.00046 g/kg (max
-0.0049). The inverse direction, `(T, RH, p) -> Td, w`, which the triple
-uses, on each station's training cases in the full run: a Td residual SD of
-at most 0.014 C at any station (largest residual 0.16 C) and a `w` residual
-SD below 1e-6 g/kg (largest 6e-6). `npcc-application preflight` prints both
-per station, and `evaluate` writes them, over the training cases only, to
-`tables/derivation_residuals.csv`. The constants
-are in `src/npcc/experiments/application/derived.py`, one `Magnus` object
-per set; `[responses] magnus` names it (Sonntag's 1990 set is the other).
-Since `RH <= 100`, `Td <= T` follows.
+Both constant sets are picked by the sign of the air temperature `T`, also
+where `Td` is on the other side of 0. That is how the data was computed:
+on all 23.8 million rows of `y.nc`, `(T, RH) -> Td` recovers the stored
+`Td` with a residual SD of 1.3e-6 C (largest 8.6e-6, float32 rounding), and
+`(T, Td, p) -> RH, w` the stored RH to 5e-5 points and `w` to 7e-6 g/kg.
+Inverting on `Td`'s own branch instead leaves residuals of up to 0.24 C on
+the 15.9 % of rows where `T` and `Td` straddle 0. The test
+`test_the_derivation_reproduces_the_stored_dew_point` pins the round trip
+on the data. `npcc-application preflight` prints the residuals per station,
+and `evaluate` writes them, over the training cases only, to
+`tables/derivation_residuals.csv`. The constants are in
+`src/npcc/experiments/application/derived.py`, one `Magnus` object per set;
+`[responses] magnus` names it (Sonntag's 1990 set is the other). Since
+`RH <= 100`, `Td <= T` follows.
 
 **Why a five-variable log score is not defined.** The five responses lie on
 a three-dimensional surface of five-dimensional space, so their joint
@@ -220,7 +223,11 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   `margins_by_station.csv`, `bounds_by_station.csv`,
   `derivation_residuals.csv` and `copulas_timings.csv`, and `env.txt`.
   `checks/pressure_shift.csv` is `pressure_shift.py`'s, added at b27acaa
-  (its `provenance.txt`), and cited at the paper's 5e9e545.
+  (its `provenance.txt`), and cited at the paper's 5e9e545. Its code
+  inverted `Td` on `Td`'s own branch, so its derived `Td` draws and its
+  `derivation_residuals.csv` (a Td residual SD of at most 0.014 C at any
+  station, largest residual 0.16 C) carry that convention's error, which
+  the data's own convention (above) removes.
 - `results/application_triple_smoke_2026-11-12`: its station-0 smoke run,
   at 781314c. `checks/order_dependence.csv` (CRPS of T 0.981 against 1.304)
   is cited at the paper's 7b101a7; `checks/README.txt` says how each check
