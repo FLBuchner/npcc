@@ -186,7 +186,23 @@ each station's difference.
 
 Each reads a finished run folder (or the data) and fits nothing:
 
-<!-- report.py and dependence.py usage: filled in when the scripts merge -->
+- `report.py --run <run> [--station 0]`: `reports/report.pdf`, the margins
+  (scores and skills against seasonal EMOS per response, PIT histograms and
+  coverage, every station and then one) and the copulas (each arm against
+  independence on its own margins and design), and `reports/copula_table.csv`,
+  the paper's table: every score's pooled mean with its skill, and the gain
+  on the main log score;
+- `dependence.py binned --run <run>`: Kendall's tau within covariate bins
+  (PR #6), on the out-of-fold training PITs of `tabpfn-quantiles-all` and
+  `emos-seasonal` (`--models`), per station and pair of the modeled
+  responses, in 5 bins (`--bins`) of the day of year and of the ensemble
+  mean of the pair's first response (`--covariate`); a bin of fewer than 30
+  cases (`--min-pairs`) has no tau. Not on the observations: within a bin
+  the margins still move with the other covariates. Into
+  `reports/binned_tau/`;
+- `dependence.py rolling --run <run> [--station 0] [--window 30]`: rolling
+  Kendall's tau of the observations and of the same margins' out-of-fold
+  training PITs, into `reports/rolling_tau_<NNN>_<window>/`;
 - `eda_physical_consistency.py --data <dir> --out <dir>`: FLBuchner's EDA of
   the raw data (PR #6): coverage, the bounds, and the residuals of RH and
   `w` against the formulas above, also with `e_s(Td)`'s constants picked by

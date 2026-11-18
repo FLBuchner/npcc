@@ -13,7 +13,6 @@ import pandas as pd
 import pytest
 
 from npcc.experiments.application.cli import main
-from npcc.experiments.application.marginal_set import MarginalSet
 from tests.experiments._application import (
   MODELS,
   FakeCopulas,
@@ -80,9 +79,6 @@ def test_the_report_reads_a_finished_run_and_fits_nothing(
   monkeypatch.setitem(
     sys.modules, "npcc.experiments.application.copulas", copulas.module()
   )
-  # The helper's fake stage records `ms.train_pits`, which MarginalSet does
-  # not have: its training PITs are out of fold, with no attribute to say so.
-  monkeypatch.setattr(MarginalSet, "train_pits", "out_of_fold", raising=False)
   text = config_text(
     write_data(tmp_path / "data"), arms=_ARMS, stations="[0, 1]"
   )
