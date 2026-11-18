@@ -291,6 +291,7 @@ class _Inputs:
   subsets: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
   project_onto: tuple[str, ...] | None = None
   projected_column: str = "joint_nll_modeled"
+  finite_log_score: bool = True
 
   @property
   def draws_shape(self) -> tuple[int, int, int]:
@@ -514,6 +515,7 @@ def run_copula_arm(
   subsets: Mapping[str, Sequence[str]] | None = None,
   project_onto: Sequence[str] | None = None,
   projected_column: str = "joint_nll_modeled",
+  finite_log_score: bool = True,
 ) -> list[CopulaResult]:
   """Fit one copula arm to a marginal set and score it on its test cases.
 
@@ -553,6 +555,12 @@ def run_copula_arm(
   projected_column : str, default="joint_nll_modeled"
       The column of that log score: the main design's, which it compares
       with.
+  finite_log_score : bool, default=True
+      Whether the joint log score must be finite at every test case for the
+      arm to be scored. The main design's is compared, so it must; another
+      design's is stored as it comes out, ``inf`` where the copula density
+      underflows, since nothing compares it. The draws and every score
+      drawn from them, and a projected log score, must be finite either way.
 
   Returns
   -------
@@ -585,6 +593,7 @@ def run_copula_arm(
     subsets=subsets or {},
     project_onto=project_onto,
     projected_column=projected_column,
+    finite_log_score=finite_log_score,
   )
   logger.info("station %d, %s: fitting %s", ms.station, ms.model, arm)
   if parsed.kind == "independence":
@@ -642,6 +651,7 @@ def _inputs(
   subsets: Mapping[str, Sequence[str]] | None = None,
   project_onto: Sequence[str] | None = None,
   projected_column: str = "joint_nll_modeled",
+  finite_log_score: bool = True,
 ) -> _Inputs:
   """Refuse a marginal set no arm can be scored on; clip its transforms."""
   drawn = (*ms.variables, *ms.derived)
@@ -694,6 +704,7 @@ def _inputs(
     subsets={k: tuple(v) for k, v in (subsets or {}).items()},
     project_onto=None if project_onto is None else tuple(project_onto),
     projected_column=projected_column,
+    finite_log_score=finite_log_score,
   )
 
 
@@ -763,7 +774,7 @@ def _score(
       )
   nll = joint_nll(logcop, ms.logpdf_test)
   bad = np.flatnonzero(~np.isfinite(nll))
-  if bad.size:
+  if bad.size and inputs.finite_log_score:
     raise CopulaFailure(
       f"{name}'s joint log-likelihood must be finite; got non-finite values "
       f"at {bad.size} test cases",
@@ -840,7 +851,7 @@ def _log_score_only(
   t0 = perf_counter()
   nll = joint_nll(logcop, ms.logpdf_test)
   bad = np.flatnonzero(~np.isfinite(nll))
-  if bad.size:
+  if bad.size and inputs.finite_log_score:
     raise CopulaFailure(
       f"{name}'s joint log-likelihood must be finite; got non-finite values "
       f"at {bad.size} test cases",
@@ -1345,7 +1356,7 @@ def _boostcopula(
 
   pdf = density["pdf"].to_numpy(dtype=np.float64)
   bad = np.flatnonzero(~(np.isfinite(pdf) & (pdf > 0)))
-  if bad.size:
+  if bad.size and inputs.finite_log_score:
     raise CopulaFailure(
       f"{label}'s density must be finite and positive; got others at "
       f"{bad.size} test cases",
@@ -1370,10 +1381,15 @@ def _boostcopula(
     "script": script,
     "script_sha256": hashlib.sha256(Path(script).read_bytes()).hexdigest(),
   }
+  # boostCopula multiplies its pair densities, so a density that underflows
+  # is 0 and its log -inf; NA or a negative one gives nan. Only another
+  # design's arm gets here with either.
+  with np.errstate(divide="ignore", invalid="ignore"):
+    logcop = np.log(pdf)
   return _score(
     name,
     inputs,
-    np.log(pdf),
+    logcop,
     uniforms.reshape(len(test), inputs.n_draws, d),
     timings,
     info,

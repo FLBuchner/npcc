@@ -109,7 +109,13 @@ def python_rscript(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(_external, "RSCRIPT", sys.executable)
 
 
-def _run(arm: str, ms: MarginalSet, *, n_draws: int = 4) -> list[CopulaResult]:
+def _run(
+  arm: str,
+  ms: MarginalSet,
+  *,
+  n_draws: int = 4,
+  finite_log_score: bool = True,
+) -> list[CopulaResult]:
   return run_copula_arm(
     arm,
     ms,
@@ -119,6 +125,7 @@ def _run(arm: str, ms: MarginalSet, *, n_draws: int = 4) -> list[CopulaResult]:
     mixture_k=1,
     seed=1,
     device=None,
+    finite_log_score=finite_log_score,
   )
 
 
@@ -238,6 +245,34 @@ def test_a_density_that_is_not_positive_fails_with_its_case(
   with pytest.raises(CopulaFailure, match="density") as info:
     _run("boostcopula-all", gaussian_set(d=5))
   assert info.value.indices == (2,)
+
+
+@pytest.mark.parametrize(("pdf", "nll"), [("NA", np.nan), ("0", np.inf)])
+def test_another_designs_density_may_underflow_without_failing_the_arm(
+  python_rscript: None,
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+  pdf: str,
+  nll: float,
+) -> None:
+  """A log score nothing compares must not throw the arm's draws away.
+
+  boostCopula multiplies its pair densities, so on five responses, two of
+  them nearly functions of the others, the product underflows to 0 at a
+  case far in a tail. Another design's arm keeps that case's log score as
+  it came out and every other score, all of them computed from the draws.
+  """
+  _mutated(tmp_path, monkeypatch, f'density[2]["pdf"] = "{pdf}"')
+  ms = gaussian_set(d=5)
+  (result,) = _run("boostcopula-all", ms, finite_log_score=False)
+  expected = np.zeros(len(ms.y_test))
+  expected[2] = nll
+  np.testing.assert_array_equal(np.isfinite(result.joint_nll), expected == 0)
+  np.testing.assert_array_equal(result.joint_nll[2], nll)
+  assert (
+    np.isfinite(result.energy).all() and np.isfinite(result.variogram).all()
+  )
+  assert result.draws is not None and np.isfinite(result.draws).all()
 
 
 @pytest.mark.parametrize(

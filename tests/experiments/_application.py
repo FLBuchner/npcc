@@ -161,6 +161,7 @@ class FakeCopulas:
     subsets: Mapping[str, Sequence[str]] | None = None,
     project_onto: Sequence[str] | None = None,
     projected_column: str = "joint_nll_modeled",
+    finite_log_score: bool = True,
   ) -> list[FakeCopulaResult]:
     """Independence scores, or a little better for any other arm.
 
@@ -168,8 +169,9 @@ class FakeCopulas:
     log score alone, as the real stage returns a chain mixture's orders.
     With ``sample_crps``, every result gains a CRPS of every response, as
     the real stage estimates them for an arm of another design. The response
-    subsets and the projection are the real stage's to score; this records
-    them with the call and scores neither.
+    subsets, the projection and whether the log score must be finite are
+    the real stage's to honor; this records them with the call and honors
+    none.
     """
     self.calls.append(
       {
@@ -188,6 +190,7 @@ class FakeCopulas:
         "variables": ms.variables,
         "derived": ms.derived,
         "sample_crps": sample_crps,
+        "finite_log_score": finite_log_score,
       }
     )
     if (ms.station, ms.model, arm) in self.fail:

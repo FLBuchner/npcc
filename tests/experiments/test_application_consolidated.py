@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -19,6 +20,8 @@ import pandas as pd
 import pytest
 from scipy.stats import multivariate_normal, norm
 
+from npcc.experiments import _external
+from npcc.experiments.application import runner
 from npcc.experiments.application.cli import main
 from npcc.experiments.application.config import (
   CopulaDesign,
@@ -350,6 +353,73 @@ def test_both_designs_run_on_the_same_margins_and_are_compared(
     row.loc[(0, model, "gaussian@5d"), "energy"]
     - row.loc[(0, model, "gaussian"), "energy"]
   )
+
+
+def test_a_5d_density_that_underflows_fails_no_unit_of_its_design(
+  tmp_path: Path,
+  register_linear_gaussian_backend: None,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """A density of 0 fails the triple's unit and is only counted in the 5d's.
+
+  The triple's log score is compared, so a case where it is infinite fails
+  its unit. The 5d log score is compared nowhere, so the 5d unit is stored
+  with ``inf`` at that case, evaluate counts it, and its draws are
+  compared as any other arm's.
+  """
+  del register_linear_gaussian_backend
+  from npcc.experiments.application import copulas as arms_module
+  from tests.experiments.test_application_copulas_boost import _write_stand_in
+
+  script = _write_stand_in(tmp_path, 'density[2]["pdf"] = "0"')
+  monkeypatch.setattr(_external, "RSCRIPT", sys.executable)
+  monkeypatch.setattr(arms_module, "BOOSTCOPULA_SCRIPT", str(script))
+  monkeypatch.setattr(runner, "check_boostcopula", lambda: "R stand-in")
+  data = tmp_path / "data"
+  write_synthetic(data, n_stations=2, step_days=7, seed=3, measured=True)
+  arms = (*_ARMS, "boostcopula-all", "boostcopula-all@5d")
+  config = _config(tmp_path, data, arms=arms)
+  run = tmp_path / "run"
+  for stage in ("margins", "copulas", "evaluate"):
+    assert main([stage, "--config", str(config), "--out", str(run)]) == 0
+
+  model = "emos-seasonal"
+  units = run / "stations" / "000" / "copulas" / model
+  failure = json.loads((units / "boostcopula-all" / "failure.json").read_text())
+  assert "density must be finite and positive" in failure["reason"]
+  five = pd.read_parquet(units / "boostcopula-all@5d" / "scores.parquet")
+  assert np.isinf(five["joint_nll_5d"].to_numpy()).sum() == 1
+  assert np.isfinite(five[["energy", "variogram"]].to_numpy()).all()
+
+  counts = pd.read_csv(
+    run / "tables" / "copulas_nonfinite_log_scores.csv"
+  ).set_index(["station", "model", "arm"])
+  assert counts.loc[(0, model, "boostcopula-all@5d"), "n_nonfinite"] == 1
+  assert counts.loc[(0, model, "gaussian@5d"), "n_nonfinite"] == 0
+  assert set(counts.index.get_level_values("arm")) == {
+    "independence@5d",
+    "gaussian@5d",
+    "boostcopula-all@5d",
+  }
+  by_station = pd.read_csv(run / "tables" / "copulas_by_station.csv")
+  assert "boostcopula-all@5d" in set(by_station["arm"])
+  assert "boostcopula-all" not in set(by_station["arm"])
+
+  ps = _paired_summary()
+  ps.build(run, run / "analysis")
+  paired = pd.read_csv(run / "analysis" / "paired.csv")
+  boost = paired[paired["arm"] == "boostcopula-all@5d"]
+  assert "energy" in set(boost["score"])
+  assert not boost["score"].str.startswith("joint_nll").any()
+
+  path = _ROOT / "scripts" / "paper" / "application" / "report.py"
+  spec = importlib.util.spec_from_file_location("application_report", path)
+  assert spec is not None and spec.loader is not None
+  report = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(report)
+  assert report.main(["--run", str(run), "--station", "0"]) == 0
+  table = pd.read_csv(run / "reports" / "copula_table.csv")
+  assert "boostcopula-all@5d" in set(table["arm"])
 
 
 def test_subsets_and_projected_log_scores_compare_the_designs(

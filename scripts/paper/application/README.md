@@ -87,7 +87,12 @@ test PITs.
   so no draw breaks a physical bound. Its log score is `joint_nll_modeled`.
 - *5d* (arms named `<arm>@5d`): copulas on all five responses, as in
   PR #6. Its log score, `joint_nll_5d`, is stored but neither summarized
-  nor ranked. An arm and its 5d counterpart share their seeds.
+  nor ranked, and fails no unit: it is stored as the arm computed it,
+  `inf` where the density underflows (boostCopula multiplies its pair
+  densities, and its pair copula of `Td` and `w` is nearly singular), and
+  `tables/copulas_nonfinite_log_scores.csv` counts such cases per unit.
+  The draws and every score drawn from them must still be finite. An arm
+  and its 5d counterpart share their seeds.
 
 **Arms**, on every margin and in both designs: independence, Gaussian,
 boostCopula on all covariates (`r_methods/fit_boostcopula_vine.R`), and the

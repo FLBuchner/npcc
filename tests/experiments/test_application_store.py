@@ -349,6 +349,69 @@ def test_an_order_scored_by_its_log_score_alone_is_stored_with_nan(
   assert scores["joint_nll"].notna().all()
 
 
+def test_only_another_designs_log_score_may_be_stored_non_finite(
+  tmp_path: Path, station: StationData, margins: StationMargins
+) -> None:
+  """The main design's log score is compared, so it must be finite.
+
+  Another design's is compared nowhere and is stored as the arm computed
+  it, ``inf`` where its density underflowed; its sample scores are
+  compared, so they must be finite in every design.
+  """
+  _store(tmp_path, station, margins, "linear-gaussian-all")
+  ms = read_marginal_set(tmp_path, station.station, "linear-gaussian-all")
+  (result,) = FakeCopulas().run_copula_arm(
+    "gaussian",
+    ms,
+    estimators={},
+    n_draws=4,
+    sample_batch_size=10,
+    mixture_k=1,
+    seed=3,
+    device=None,
+  )
+  logcop = result.logcop_test.copy()
+  logcop[1] = -np.inf
+  nll = result.joint_nll.copy()
+  nll[1] = np.inf
+  underflow = dataclasses.replace(result, logcop_test=logcop, joint_nll=nll)
+  rows = station.row_test
+  with pytest.raises(ValueError, match="must be finite"):
+    write_copula(
+      tmp_path, ms, "gaussian", [underflow], rows=rows, seed=3, wall_seconds=0.1
+    )
+  energy = result.energy.copy()
+  energy[1] = np.inf
+  with pytest.raises(ValueError, match="energy must be finite"):
+    write_copula(
+      tmp_path,
+      ms,
+      "gaussian",
+      [dataclasses.replace(underflow, energy=energy)],
+      rows=rows,
+      seed=3,
+      wall_seconds=0.1,
+      nll_column="joint_nll_5d",
+      finite_log_score=False,
+    )
+  write_copula(
+    tmp_path,
+    ms,
+    "gaussian",
+    [underflow],
+    rows=rows,
+    seed=3,
+    wall_seconds=0.1,
+    nll_column="joint_nll_5d",
+    finite_log_score=False,
+  )
+  scores = read_copula_tables(
+    tmp_path, [1], ["linear-gaussian-all"], ["gaussian"]
+  )["scores"]
+  np.testing.assert_array_equal(scores["joint_nll_5d"].to_numpy(), nll)
+  np.testing.assert_array_equal(scores["logcop"].to_numpy(), logcop)
+
+
 def test_tables_of_a_missing_unit_are_refused(
   tmp_path: Path, station: StationData, margins: StationMargins
 ) -> None:

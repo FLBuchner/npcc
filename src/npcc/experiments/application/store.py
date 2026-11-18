@@ -707,6 +707,7 @@ def write_copula(
   wall_seconds: float,
   save_draws: bool = False,
   nll_column: str | None = None,
+  finite_log_score: bool = True,
 ) -> None:
   """Write one copula arm's results on one marginal set, as a unit.
 
@@ -735,6 +736,11 @@ def write_copula(
       design of the copula stage. When omitted, ``joint_nll_modeled`` with
       derived responses, whose log score covers the modeled ones only, and
       ``joint_nll`` otherwise.
+  finite_log_score : bool, default=True
+      Whether the copula log-density and the log score must be finite;
+      ``False`` for an arm of another design, whose log score is stored as
+      the arm computed it, ``inf`` where its density underflowed. Every other
+      score must be finite either way.
   """
   n_test = len(ms.y_test)
   if np.shape(rows) != (n_test,):
@@ -781,6 +787,7 @@ def write_copula(
     unsampled = (
       () if getattr(result, "sampled", True) else ("energy", "variogram")
     )
+    unchecked = () if finite_log_score else ("logcop", nll)
     for name, values in columns.items():
       values = np.asarray(values)
       if name in unsampled:
@@ -790,7 +797,8 @@ def write_copula(
             f"draws nothing of its own; got shape {values.shape}"
           )
         continue
-      if values.shape != (n_test,) or not np.isfinite(values).all():
+      finite = name in unchecked or np.isfinite(values).all()
+      if values.shape != (n_test,) or not finite:
         raise ValueError(
           f"{result.arm}'s {name} must be finite with shape ({n_test},); got "
           f"shape {values.shape}"

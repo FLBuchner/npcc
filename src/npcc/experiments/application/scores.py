@@ -593,6 +593,47 @@ def _reference_name(reference: str, design: str) -> str:
   return f"{reference}{ARM_DESIGN}{design}" if design else reference
 
 
+def nonfinite_log_scores(cases: pd.DataFrame) -> pd.DataFrame:
+  """How many of each other-design result's log scores are not finite.
+
+  An arm of another design keeps its joint log score as it came out, since
+  no comparison reads it: ``inf`` where its density underflowed, ``nan``
+  where it could not be evaluated.
+
+  Parameters
+  ----------
+  cases : pandas.DataFrame
+      Per-case copula scores, with ``station``, ``model``, ``arm`` and each
+      design's log score in ``joint_nll_<design>``.
+
+  Returns
+  -------
+  pandas.DataFrame
+      One row per ``(station, model, arm)`` of another design: ``n_cases``
+      and ``n_nonfinite``, the cases whose log score is not finite. Empty
+      without such an arm.
+  """
+  design = cases["arm"].map(arm_design)
+  rows = []
+  for name in sorted(set(design) - {""}):
+    own = cases.loc[design == name]
+    finite = np.isfinite(own[f"joint_nll_{name}"].to_numpy(np.float64))
+    units = own.groupby(["station", "model", "arm"]).indices
+    for (station, model, arm), at in sorted(units.items()):
+      rows.append(
+        {
+          "station": station,
+          "model": model,
+          "arm": arm,
+          "n_cases": len(at),
+          "n_nonfinite": int((~finite[at]).sum()),
+        }
+      )
+  return pd.DataFrame(
+    rows, columns=["station", "model", "arm", "n_cases", "n_nonfinite"]
+  )
+
+
 def copula_tables(
   cases: pd.DataFrame,
   *,
