@@ -21,8 +21,9 @@ mean of ``log c_true - log max(c_hat, 1e-300)``. The references:
   holds it.
 
 A reference a folder lacks for a cell is left out of that cell. At d = 10
-two machines' TabPFN vines differ by up to 4e-3 in excess NLL per seed, so
-the references to read there are those fitted on the chain's machine: pass
+two machines' TabPFN vines differ per seed by up to 4e-3 in excess NLL on
+``decay`` and 0.07 on ``strong``, so the references to read there are those
+fitted on the chain's machine: pass
 that machine's E10 and E3e folders, whose references are named apart from
 E3d's.
 

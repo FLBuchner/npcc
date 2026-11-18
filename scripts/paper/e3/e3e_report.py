@@ -16,8 +16,8 @@ have run (``e3d_npcc_fit.py``, see this folder's README):
 folder's row for a (design, d, seed, variant) replaces an earlier one's, so
 E3d's folder goes first where it supplies ``tll-ns`` (at d = 5, which E3e
 did not rerun). The folders must come from one machine: at d = 10 the same
-fit on two machines differs by about 1e-3 in excess NLL, the size of some of
-the effects.
+fit on two machines differs per seed by up to about 4e-3 in excess NLL on
+``decay`` and 0.07 on ``strong``, the size of some of the effects.
 
 **Output.** Per (design, d), the mean excess NLL of each cell of the 2 x 2
 with its standard error over seeds, and four paired effects, each with its
