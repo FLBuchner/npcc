@@ -231,6 +231,142 @@ def station_interval(
   return mean, float(low), float(high)
 
 
+def date_block_counts(
+  n_dates: int, *, n_boot: int, rng: np.random.Generator
+) -> np.ndarray:
+  """How often each date is drawn, per replicate of a circular block bootstrap.
+
+  The dates are taken in calendar order and closed into a circle. Each
+  replicate draws ``ceil(n_dates / b)`` blocks of ``b = round(n_dates **
+  (1 / 3))`` consecutive dates (at least one), each starting at a uniform
+  date and wrapping from the last date to the first, and keeps the first
+  ``n_dates`` dates drawn.
+
+  Parameters
+  ----------
+  n_dates : int
+      The number of distinct dates.
+  n_boot : int
+      Replicates.
+  rng : numpy.random.Generator
+      The source of the block starts.
+
+  Returns
+  -------
+  numpy.ndarray, shape (n_boot, n_dates)
+      Each replicate's count of each date; every row sums to ``n_dates``.
+  """
+  if n_dates < 1 or n_boot < 1:
+    raise ValueError(
+      f"n_dates and n_boot must be positive; got {n_dates} and {n_boot}"
+    )
+  block = max(1, round(n_dates ** (1.0 / 3.0)))
+  n_blocks = -(-n_dates // block)
+  starts = rng.integers(n_dates, size=(n_boot, n_blocks))
+  drawn = (starts[..., None] + np.arange(block)) % n_dates
+  drawn = drawn.reshape(n_boot, -1)[:, :n_dates]
+  counts = np.zeros((n_boot, n_dates))
+  np.add.at(counts, (np.arange(n_boot)[:, None], drawn), 1.0)
+  return counts
+
+
+def date_block_interval(
+  stations: np.ndarray,
+  dates: np.ndarray,
+  values: np.ndarray,
+  *,
+  seed: int = 2026,
+  n_boot: int = 500,
+) -> tuple[float, float, float]:
+  """The equal-station mean and a 95% block bootstrap interval over dates.
+
+  Stations share the weather on a date, so the dates are resampled once per
+  replicate, for every station at once: circular blocks over the sorted
+  distinct dates of all stations (:func:`date_block_counts`). Each replicate
+  then resamples the stations with replacement and averages, over them,
+  each station's mean over the dates drawn, a date drawn twice counting
+  twice. A date a station has no value on contributes nothing to that
+  station; a block runs on through it, since the blocks are laid on the
+  dates of every station. A station none of whose dates is drawn is left
+  out of that replicate. The interval is the replicates' 2.5 % and 97.5 %
+  quantiles; it ignores dependence that outlasts a block, so it is
+  exploratory.
+
+  Parameters
+  ----------
+  stations : numpy.ndarray, shape (n,)
+      Each value's station.
+  dates : numpy.ndarray, shape (n,)
+      Each value's date; any type with an order, such as ``datetime64[D]``.
+  values : numpy.ndarray, shape (n,)
+      One value per station and date, such as a paired score difference.
+  seed : int, default=2026
+      Seed of the resampling: the dates, then the stations.
+  n_boot : int, default=500
+      Replicates.
+
+  Returns
+  -------
+  mean, low, high : float
+      ``mean`` is the mean over stations of each station's mean; ``nan``
+      throughout for an empty input or a non-finite value.
+
+  Raises
+  ------
+  ValueError
+      If the arrays are not one-dimensional and of one length, or a station
+      has two values on one date.
+  """
+  stations, dates = np.asarray(stations), np.asarray(dates)
+  values = np.asarray(values, dtype=np.float64)
+  if (
+    values.ndim != 1
+    or stations.shape != values.shape
+    or dates.shape != values.shape
+  ):
+    raise ValueError(
+      f"stations, dates and values must be one-dimensional and of one "
+      f"length; got shapes {stations.shape}, {dates.shape} and "
+      f"{values.shape}"
+    )
+  nan = float("nan")
+  if not len(values) or not np.isfinite(values).all():
+    return nan, nan, nan
+  station_ids, station = np.unique(stations, return_inverse=True)
+  date_ids, date = np.unique(dates, return_inverse=True)
+  n_stations, n_dates = len(station_ids), len(date_ids)
+  present = np.zeros((n_stations, n_dates))
+  np.add.at(present, (station, date), 1.0)
+  if (present > 1.0).any():
+    raise ValueError(
+      f"values must hold one value per station and date; got "
+      f"{int((present > 1.0).sum())} repeated (station, date) pairs"
+    )
+  table = np.zeros((n_stations, n_dates))
+  table[station, date] = values
+  mean = float((table.sum(axis=1) / present.sum(axis=1)).mean())
+  rng = np.random.default_rng(seed)
+  counts = date_block_counts(n_dates, n_boot=n_boot, rng=rng)
+  drawn = counts @ present.T
+  totals = counts @ table.T
+  station_means = np.divide(
+    totals, drawn, out=np.zeros_like(totals), where=drawn > 0.0
+  )
+  picks = rng.integers(n_stations, size=(n_boot, n_stations))
+  weight = np.zeros((n_boot, n_stations))
+  np.add.at(weight, (np.arange(n_boot)[:, None], picks), 1.0)
+  weight *= drawn > 0.0
+  kept = weight.sum(axis=1)
+  replicates = np.divide(
+    (weight * station_means).sum(axis=1),
+    kept,
+    out=np.full(n_boot, np.nan),
+    where=kept > 0.0,
+  )
+  low, high = np.nanquantile(replicates, [0.025, 0.975])
+  return mean, float(low), float(high)
+
+
 def _check_paired(
   cases: pd.DataFrame, by: str, keys: list[str], within: list[str]
 ) -> None:

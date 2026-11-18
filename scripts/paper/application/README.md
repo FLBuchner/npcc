@@ -435,20 +435,61 @@ Each reads a run folder that `evaluate` has written and fits nothing:
   the paper's table;
 - `plot_rolling_tau.py --run <run> --station 0`: rolling Kendall's tau of the
   observations and of each margin's training PITs;
+- `dependence.py --run <run>`: FLBuchner's Kendall's tau within covariate
+  bins (npcc-paper PR #6), on the out-of-fold training PITs
+  (`pit_out_of_fold`) of `tabpfn-quantiles-all` and `emos-seasonal`
+  (`--models`), per station and pair of the run's modeled responses. Two
+  binnings per pair, 5 bins each (`--bins`): the day of year of the
+  valid time, in bins of equal width over days 1 to 366, one calendar for
+  every station; and quantile bins of the station's training cases of the
+  ensemble mean of the pair's first response (`coe:<response>_ensavg`;
+  `--covariate` names one for every pair). A bin of fewer than 30 cases
+  (`--min-pairs`) has no tau. Not on the observations: within a bin the
+  margins still move with the other covariates. Writes
+  `reports/binned_tau/binned_kendall_tau.csv`, and per pair a plot of the
+  median over stations by bin, quartiles shaded (`.png` and one `.pdf`);
 - `paired_summary.py --run <run>`: the triple's primary summaries, fixed
   before its full run's results were seen, in `<run>/analysis/`.
   `pooled_means.csv` and `.md` hold each arm's mean score over all test
   cases, one table per score. `paired.csv` holds each arm against the
   Gaussian copula on its own margins and against the npcc mixture on all
   covariates on the TabPFN margins: the mean over stations of the
-  difference of station means (negative favors the arm), its standard error
-  across stations, and the stations where the arm is lower, higher or level;
-  on every station and again without station 106, whose pressure error
-  steps by about 5 hPa late in its training period (`pressure_shift.py`).
-  With arms of another design (*The consolidated design*), each is compared
-  with `gaussian` of its own design, and also with the same arm of the main
-  design on its margins, on the scores both draw and the physical checks'
-  shares. `paired_by_station.csv` holds each station's difference;
+  difference of station means (negative favors the arm), its 95% interval
+  (`boot_low`, `boot_high`), its standard error across stations, and the
+  stations where the arm is lower, higher or level; on every station and
+  again without station 106, whose pressure error steps by about 5 hPa late
+  in its training period (`pressure_shift.py`). With arms of another design
+  (*The consolidated design*), each is compared with `gaussian` of its own
+  design, and also with the same arm of the main design on its margins, on
+  the scores both draw and the physical checks' shares.
+  `paired_by_station.csv` holds each station's difference, and `paired.md`
+  each comparison's difference with its interval. The interval is
+  FLBuchner's hierarchical circular-block bootstrap (npcc-paper PR #6) with
+  the blocks on the calendar: 500 replicates, each drawing circular blocks
+  of `round(n_dates ** (1/3))` consecutive test dates, the same dates at
+  every station since stations share the weather on a date, and the
+  stations with replacement; its statistic is the mean over the stations
+  drawn of each one's mean difference over the dates drawn, and the
+  interval the 2.5 % and 97.5 % quantiles, from seed 2026
+  (`scores.date_block_interval`). It reads each test case's scores from
+  the copula units and refuses units whose means are not the tables'. In
+  the chain run, the intervals are a median 1.6 times as wide as 1.96
+  standard errors either side;
+- `eda_physical_consistency.py --data <dir> --out <dir>`: reads `x.nc` and
+  `y.nc`, not a run; FLBuchner's EDA of npcc-paper PR #6 on the formulas
+  above. Every station and date at a 24 h lead from 00:00 UTC, observed
+  and as ensemble means: coverage; the bounds (`Td > T` exactly and by
+  more than 0.001 C, RH in [0, 100], `w >= 0`, `p > e`, finiteness); the
+  residuals of RH and `w`, recorded less derived from `(T, Td, p)`, by
+  station and pooled, and their shares within descriptive tolerances; and
+  the residuals with `e_s(Td)`'s constants picked by `Td`'s own sign. CSVs,
+  `case_residuals.csv.gz` and `physical_consistency.pdf`. On the published
+  files: 297,918 cases at 131 stations, initialized 2016-06-01 to
+  2022-10-01; the observed `Td` exceeds `T` in 4,464 cases, by at most
+  3.81e-6 C (one float32 step), never by 0.001 C; no RH, `w` or `p` out of
+  bounds; RH and `w` recovered to 5.1e-5 points and 5.2e-6 g/kg. With
+  `Td`'s own sign, the RH residuals reach 0.085 points on the 40,630
+  observed cases where `T` and `Td` straddle 0;
 - `pressure_shift.py --run <run>`: `<run>/checks/pressure_shift.csv`, per
   station, the observed surface pressure less the forecast's ensemble mean:
   its mean on each split, and the largest single step in it over time, dated.

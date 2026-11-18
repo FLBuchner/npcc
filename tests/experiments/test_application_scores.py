@@ -13,6 +13,8 @@ from npcc.experiments.application.scores import (
   copula_tables,
   coverage_column,
   crps_from_quantiles,
+  date_block_counts,
+  date_block_interval,
   interpolate_quantiles,
   marginal_case_scores,
   marginal_tables,
@@ -263,6 +265,96 @@ def test_the_station_interval_is_a_percentile_bootstrap() -> None:
   assert station_interval(np.array([1.0]))[0] == 1.0
   assert np.isnan(station_interval(np.array([1.0]))[1])
   assert all(np.isnan(v) for v in station_interval(np.array([1.0, np.nan])))
+
+
+def _dated(
+  values: dict[int, np.ndarray], start: str = "2021-01-02"
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+  """Per station, one value per day from ``start``: stations, dates, values."""
+  first = np.datetime64(start, "D")
+  stations = np.concatenate([np.full(len(v), s) for s, v in values.items()])
+  dates = np.concatenate([first + np.arange(len(v)) for v in values.values()])
+  return stations, dates, np.concatenate(list(values.values()))
+
+
+def test_the_date_blocks_draw_each_date_for_every_station_at_once() -> None:
+  """Weather on a date is shared, so its draw must be too.
+
+  Two stations with the same value on every date are, under shared dates,
+  one station twice: every replicate gives both the same mean, and
+  resampling the stations changes nothing. Drawn for each station on its
+  own, their averaged means would vary less and narrow the interval.
+  """
+  rng = np.random.default_rng(1)
+  daily = rng.normal(size=120) + np.sin(np.arange(120) / 9.0)
+  one = date_block_interval(*_dated({0: daily}), seed=5)
+  two = date_block_interval(*_dated({0: daily, 7: daily.copy()}), seed=5)
+  assert two == pytest.approx(one, rel=1e-12)
+  assert one[1] < one[0] < one[2]
+
+
+def test_the_date_blocks_are_circular_runs_of_the_cube_root_length() -> None:
+  """Each replicate draws as many dates as there are, in calendar runs."""
+  counts = date_block_counts(30, n_boot=200, rng=np.random.default_rng(0))
+  assert counts.shape == (200, 30)
+  np.testing.assert_array_equal(counts.sum(axis=1), 30)
+  # round(30 ** (1 / 3)) = 3: ten blocks of three consecutive dates, so the
+  # first and the last date are each drawn with their circular neighbors.
+  first = counts[:, 0] > 0
+  assert ((counts[first][:, 1] > 0) | (counts[first][:, 29] > 0)).all()
+
+
+def test_a_constant_difference_has_an_interval_of_zero_width() -> None:
+  """Resampling a constant must return it, whatever dates a station lacks.
+
+  The second station misses a run of dates in the middle; the blocks are
+  laid on the dates of both, and the missing ones add nothing to it.
+  """
+  stations, dates, values = _dated({0: np.full(60, 0.25), 1: np.full(60, 0.25)})
+  day = np.arange(len(stations)) % 60
+  keep = (stations == 0) | (day < 20) | (day >= 35)
+  mean, low, high = date_block_interval(
+    stations[keep], dates[keep], values[keep]
+  )
+  assert (mean, low, high) == pytest.approx((0.25, 0.25, 0.25), abs=1e-15)
+
+
+def test_the_point_estimate_weighs_stations_equally() -> None:
+  """A station with more dates must not count for more."""
+  mean, _, _ = date_block_interval(
+    *_dated({0: np.full(10, 1.0), 1: np.full(2, 3.0)})
+  )
+  assert mean == pytest.approx(2.0)
+
+
+def test_the_date_block_interval_is_reproducible_from_its_seed() -> None:
+  """A rerun must give the same interval; another seed, another one."""
+  rng = np.random.default_rng(3)
+  data = _dated({s: rng.normal(size=90) for s in range(4)})
+  assert date_block_interval(*data, seed=11) == date_block_interval(
+    *data, seed=11
+  )
+  assert date_block_interval(*data, seed=11) != date_block_interval(
+    *data, seed=12
+  )
+  assert (
+    date_block_interval(*data)[1:] == date_block_interval(*data, seed=2026)[1:]
+  )
+
+
+def test_a_station_with_two_values_on_one_date_is_refused() -> None:
+  """A repeated case would count twice in every replicate that draws it."""
+  stations, dates, values = _dated({0: np.zeros(5)})
+  with pytest.raises(ValueError, match="one value per station and date"):
+    date_block_interval(
+      np.append(stations, 0), np.append(dates, dates[0]), np.append(values, 1)
+    )
+  assert all(
+    np.isnan(v)
+    for v in date_block_interval(
+      stations, dates, np.append(values[:-1], np.nan)
+    )
+  )
 
 
 def test_timings_sum_within_a_station_then_summarize_over_them() -> None:
