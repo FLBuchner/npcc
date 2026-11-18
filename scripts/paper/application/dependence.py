@@ -1,43 +1,41 @@
-"""Kendall's tau of the out-of-fold training PITs within covariate bins.
+"""Kendall's tau of the out-of-fold training PITs: binned, and rolling.
 
-Ports FLBuchner's ``binned_tau`` (``application/analysis/dependence.py``,
-npcc-paper PR #6) onto a run folder. Per station, marginal model and pair of
-responses, Kendall's tau-b of the pair's out-of-fold training PITs
-(``pit_out_of_fold``, *Training PITs* in the README) within bins of a
-covariate, two binnings per pair:
+Reads a run's stored cases and margins, and fits nothing. Both subcommands
+read the out-of-fold training PITs (``pit_out_of_fold``) of
+``tabpfn-quantiles-all`` and ``emos-seasonal`` (``--models``) on the run's
+modeled responses (``--variables``), and write a CSV and, per pair of
+responses, a page of one PDF and a ``<pair>.png``.
 
-- ``day_of_year``: the day of year of each case's valid time, in ``--bins``
-  bins of equal width over days 1 to 366, the same calendar at every
-  station;
-- ``forecast``: the ensemble-mean forecast of the pair's first response
-  (``coe:<response>_ensavg``, the responses in the data's order), in
-  ``--bins`` quantile bins of the station's training cases, as FLBuchner
-  bins every covariate; ``--covariate`` names one covariate for every pair
-  instead.
+``binned``, FLBuchner's ``binned_tau`` (npcc-paper PR #6): per station,
+model and pair, tau-b within ``--bins`` bins of two covariates. The day of
+year of the valid time, in bins of equal width over days 1 to 366, one
+calendar for every station; and the ensemble mean of the pair's first
+response (``coe:<response>_ensavg``; ``--covariate`` names one for every
+pair), in quantile bins of the station's training cases. A bin of fewer
+than ``--min-pairs`` cases keeps its count and no tau. The observations are
+not binned: within a bin the margins still move with the other covariates.
+Strata show where the dependence changes; they do not test conditional
+independence. Writes ``binned_kendall_tau.csv`` and per pair the median
+over stations by bin, quartiles shaded, to ``<run>/reports/binned_tau``.
 
-The observations themselves are not binned: within a bin the margins still
-move with the other covariates, so their tau would mix the margins' shifts
-with the dependence. A bin with fewer than ``--min-pairs`` cases keeps its
-count and a missing tau. Strata show where the dependence changes; they do
-not test conditional independence. Reads the stored cases and margins, fits
-nothing. Writes, under ``<run>/reports/binned_tau`` (or ``--out``):
-
-- ``binned_kendall_tau.csv``: one row per station, model, pair, binning and
-  bin, with its edges, its cases and the pairs tau was computed on;
-- ``binned_kendall_tau.pdf`` and ``<pair>.png``: per pair, tau by bin of
-  each binning, one line per model, the median over stations with their
-  interquartile range.
+``rolling``, FLBuchner's ``plot_rolling_tau.py`` (npcc-paper PR #4): at one
+station (``--station``), tau-b of every pair in each trailing window of
+``--window`` training cases, of the observations and of each model's PITs,
+on one plot per pair. Writes ``rolling_kendall_tau.csv`` to
+``<run>/reports/rolling_tau_<NNN>_<window>``.
 
 Usage (from the repository root)::
 
-    python scripts/paper/application/dependence.py --run <run folder>
+    python scripts/paper/application/dependence.py binned --run <run>
+    python scripts/paper/application/dependence.py rolling --run <run> --station 0
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from itertools import combinations
 from pathlib import Path
 
@@ -45,10 +43,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from scipy.stats import kendalltau
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import report_common as common
+from report import Report
 
 from npcc.experiments.application.marginal_set import MarginalSet
 from npcc.experiments.application.store import (
@@ -56,13 +55,15 @@ from npcc.experiments.application.store import (
   stored_stations,
 )
 
-#: The margins binned by default: the paper's and the reference pipeline's.
+#: The margins read by default: the paper's and the reference pipeline's.
 MODELS: tuple[str, ...] = ("tabpfn-quantiles-all", "emos-seasonal")
 #: FLBuchner's defaults.
 BINS = 5
 MIN_PAIRS = 30
+WINDOW = 30
 DAY_OF_YEAR = "day_of_year"
 FORECAST = "forecast"
+OBSERVATIONS = "observations"
 #: The days of year the calendar bins cover, a leap day included.
 DAYS = (1.0, 367.0)
 
@@ -72,17 +73,7 @@ def tau_record(
 ) -> dict[str, float]:
   """Kendall's tau-b of the finite pairs, or nan with fewer than ``min_pairs``.
 
-  Parameters
-  ----------
-  a, b : numpy.ndarray
-      Paired values.
-  min_pairs : int
-      The fewest finite pairs tau is computed on.
-
-  Returns
-  -------
-  dict
-      ``n_pairs`` and ``tau``; tau-b is ``nan`` for a constant sample too.
+  Returns ``n_pairs`` and ``tau``; tau-b is nan for a constant sample too.
   """
   finite = np.isfinite(a) & np.isfinite(b)
   n = int(finite.sum())
@@ -95,20 +86,9 @@ def tau_record(
 def quantile_bins(
   values: np.ndarray, bins: int
 ) -> tuple[np.ndarray, np.ndarray]:
-  """Each value's quantile bin, as FLBuchner bins: tied edges merge.
+  """Each value's quantile bin and the distinct edges, as FLBuchner bins.
 
-  Parameters
-  ----------
-  values : numpy.ndarray
-      A covariate's values.
-  bins : int
-      The number of quantile bins.
-
-  Returns
-  -------
-  labels, edges : numpy.ndarray
-      Each value's bin, ``0`` to ``len(edges) - 2``, and the distinct edges;
-      a value at an inner edge is in the bin above it.
+  Tied edges merge, and a value at an inner edge is in the bin above it.
   """
   finite = values[np.isfinite(values)]
   edges = np.unique(np.quantile(finite, np.linspace(0.0, 1.0, bins + 1)))
@@ -118,20 +98,10 @@ def quantile_bins(
 def day_of_year_bins(
   times: np.ndarray, bins: int
 ) -> tuple[np.ndarray, np.ndarray]:
-  """Each case's bin of equal width in the day of year.
+  """Each case's bin of equal width in the day of year, and the edges.
 
-  Parameters
-  ----------
-  times : numpy.ndarray of datetime64
-      The cases' valid times.
-  bins : int
-      The number of bins over days 1 to 366.
-
-  Returns
-  -------
-  labels, edges : numpy.ndarray
-      Each case's bin and the ``bins + 1`` edges, in days of year; a bin
-      holds the days from its lower edge up to, not including, its upper.
+  The ``bins + 1`` edges span days 1 to 367, and a bin holds the days from
+  its lower edge up to, not including, its upper.
   """
   dates = np.asarray(times).astype("datetime64[D]")
   day = (dates - dates.astype("datetime64[Y]")).astype(np.float64) + 1.0
@@ -140,19 +110,20 @@ def day_of_year_bins(
 
 
 def forecast_covariate(variable: str) -> str:
-  """The ensemble-mean forecast of a response, ``coe:<name>_ensavg``.
-
-  Parameters
-  ----------
-  variable : str
-      The response, as ``obs:<name>``.
-
-  Returns
-  -------
-  str
-      Its covariate's name.
-  """
+  """The ensemble-mean forecast of ``obs:<name>``, ``coe:<name>_ensavg``."""
   return "coe:" + variable.removeprefix("obs:") + "_ensavg"
+
+
+def training_pits(ms: MarginalSet) -> np.ndarray:
+  """The out-of-fold training PITs, refused unless each is in [0, 1]."""
+  pit = ms.pit_train
+  bad = int((~(np.isfinite(pit) & (pit >= 0.0) & (pit <= 1.0))).sum())
+  if bad:
+    raise ValueError(
+      f"station {ms.station}'s {ms.model} training PITs must lie in [0, 1]; "
+      f"got {bad} outside"
+    )
+  return pit
 
 
 def binned_tau(
@@ -164,30 +135,13 @@ def binned_tau(
 ) -> pd.DataFrame:
   """Kendall's tau of every pair of training PITs within covariate bins.
 
-  Parameters
-  ----------
-  ms : MarginalSet
-      One station's margins, its training PITs out of fold.
-  covariate : str, optional
-      The covariate of every pair's ``forecast`` binning; by default each
-      pair's first response's ensemble mean (:func:`forecast_covariate`).
-  bins : int, default=5
-      Bins per binning.
-  min_pairs : int, default=30
-      The fewest cases a bin's tau is computed on.
-
-  Returns
-  -------
-  pandas.DataFrame
-      One row per pair, binning and bin: ``variable_a``, ``variable_b``,
-      ``binning``, ``covariate``, ``bin``, ``lower``, ``upper``,
-      ``n_cases``, ``n_pairs`` and ``tau``.
+  ``covariate`` is every pair's ``forecast`` binning's; by default, each
+  pair's first response's ensemble mean (:func:`forecast_covariate`).
+  Returns one row per pair, binning and bin: ``variable_a``,
+  ``variable_b``, ``binning``, ``covariate``, ``bin``, ``lower``,
+  ``upper``, ``n_cases``, ``n_pairs`` and ``tau``.
   """
-  pit = ms.pit_train
-  if not (np.isfinite(pit) & (pit >= 0.0) & (pit <= 1.0)).all():
-    raise ValueError(
-      f"station {ms.station}'s {ms.model} training PITs must lie in [0, 1]"
-    )
+  pit = training_pits(ms)
   by_day = day_of_year_bins(ms.time_train, bins)
   records = []
   for i, j in combinations(range(len(ms.variables)), 2):
@@ -215,6 +169,31 @@ def binned_tau(
             "upper": float(edges[k + 1]),
             "n_cases": int(selected.sum()),
             **tau_record(pit[selected, i], pit[selected, j], min_pairs),
+          }
+        )
+  return pd.DataFrame(records)
+
+
+def rolling_tau(
+  series: dict[str, np.ndarray],
+  variables: Sequence[str],
+  times: pd.DatetimeIndex,
+  window: int,
+) -> pd.DataFrame:
+  """Tau-b of every pair of each ``(n, d)`` series, per trailing window."""
+  records = []
+  for name, values in series.items():
+    for i, j in combinations(range(len(variables)), 2):
+      for end in range(window, len(times) + 1):
+        start = end - window
+        records.append(
+          {
+            "series": name,
+            "variable_a": variables[i],
+            "variable_b": variables[j],
+            "window_start": times[start],
+            "time": times[end - 1],
+            **tau_record(values[start:end, i], values[start:end, j], 2),
           }
         )
   return pd.DataFrame(records)
@@ -261,7 +240,83 @@ def _panel(axis: Axes, part: pd.DataFrame, title: str) -> None:
   axis.grid(alpha=0.2)
 
 
-def build(
+def _binned_figure(pair: pd.DataFrame, title: str) -> Figure:
+  """Tau by bin of each binning, one line per model."""
+  n = pair["station"].nunique()
+  where = f"station {pair['station'].iloc[0]}"
+  where = where if n == 1 else f"median over {n} stations, quartiles shaded"
+  figure, axes = plt.subplots(1, 2, figsize=(11.7, 4.8), sharey=True)
+  days = pair[pair["binning"] == DAY_OF_YEAR]
+  _panel(axes[0], days, "Day of year (valid time)")
+  edges = days.drop_duplicates("bin").sort_values("bin")
+  axes[0].set_xticks(
+    edges["bin"].tolist(),
+    [_day_label(lo, hi) for lo, hi in zip(edges["lower"], edges["upper"])],
+    fontsize=8,
+  )
+  forecast = pair[pair["binning"] == FORECAST]
+  names = sorted(set(forecast["covariate"]))
+  _panel(axes[1], forecast, f"Quantile bins of {', '.join(names)}")
+  ticks = sorted(set(forecast["bin"]))
+  axes[1].set_xticks(ticks, [str(k + 1) for k in ticks])
+  axes[1].set_xlabel("bin, lowest to highest, per station")
+  axes[1].legend(fontsize=8, loc="lower right")
+  figure.suptitle(f"{title}: out-of-fold training PITs; {where}", fontsize=11)
+  figure.tight_layout()
+  return figure
+
+
+def _rolling_figure(pair: pd.DataFrame, title: str) -> Figure:
+  """Tau by window end, one line per series, the observations dashed."""
+  figure, axis = plt.subplots(figsize=(11.7, 4.5), layout="constrained")
+  for name, curve in pair.groupby("series", sort=False):
+    observed = name == OBSERVATIONS
+    axis.plot(
+      pd.to_datetime(curve["time"]),
+      curve["tau"],
+      label=name,
+      color="black" if observed else None,
+      linestyle="--" if observed else "-",
+      linewidth=1.6 if observed else 0.9,
+    )
+  axis.axhline(0.0, color="0.5", linewidth=0.7)
+  axis.set(title=title, xlabel="Window end (valid time)", ylim=(-1, 1))
+  axis.set_ylabel("Kendall's tau-b")
+  axis.grid(alpha=0.2)
+  axis.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=4)
+  return figure
+
+
+def write(
+  frame: pd.DataFrame,
+  out: Path,
+  name: str,
+  figure: Callable[[pd.DataFrame, str], Figure],
+) -> None:
+  """``<name>.csv``, and per pair a page of ``<name>.pdf`` and a ``.png``."""
+  out.mkdir(parents=True, exist_ok=True)
+  frame.to_csv(out / f"{name}.csv", index=False)
+  with Report(out / f"{name}.pdf", name.replace("_", " ")) as report:
+    for (a, b), pair in frame.groupby(["variable_a", "variable_b"], sort=False):
+      page = figure(pair, f"{_short(a)} / {_short(b)}")
+      page.savefig(out / f"{a}__{b}.png".replace(":", "_"), dpi=150)
+      report.save(page)
+
+
+def margins(
+  run: Path,
+  station: int,
+  models: Sequence[str],
+  variables: Sequence[str] | None,
+) -> dict[str, MarginalSet]:
+  """Each model's margins at a station, on ``variables`` or the run's."""
+  modeled = list(variables) if variables else modeled_responses(run)
+  return {
+    m: read_marginal_set(run, station, m, modeled=modeled) for m in models
+  }
+
+
+def binned(
   run: Path,
   out: Path,
   *,
@@ -272,31 +327,10 @@ def build(
   bins: int = BINS,
   min_pairs: int = MIN_PAIRS,
 ) -> pd.DataFrame:
-  """Write the binned taus of a run's stations into ``out``.
+  """Write the binned taus of ``stations`` (all stored) into ``out``.
 
-  Parameters
-  ----------
-  run : pathlib.Path
-      The run folder.
-  out : pathlib.Path
-      Where to write.
-  stations : sequence of int, optional
-      The stations; every stored one by default.
-  models : sequence of str, default=MODELS
-      The marginal models.
-  variables : sequence of str, optional
-      The responses; the run's modeled ones by default.
-  covariate : str, optional
-      One covariate for every pair's ``forecast`` binning.
-  bins : int, default=5
-      Bins per binning.
-  min_pairs : int, default=30
-      The fewest cases a bin's tau is computed on.
-
-  Returns
-  -------
-  pandas.DataFrame
-      ``binned_kendall_tau.csv``.
+  ``variables`` are the run's modeled responses by default, and
+  ``covariate`` is :func:`binned_tau`'s. Returns ``binned_kendall_tau.csv``.
   """
   if bins < 2 or min_pairs < 2:
     raise ValueError(
@@ -305,99 +339,99 @@ def build(
   stations = list(stored_stations(run) if stations is None else stations)
   if not stations:
     raise FileNotFoundError(f"{run} must hold stored stations; got none")
-  modeled = list(variables) if variables else modeled_responses(run)
-  frames = []
-  for station in stations:
-    for model in models:
-      ms = read_marginal_set(
-        run, station, model, train_pits="out_of_fold", modeled=modeled
-      )
-      frames.append(
-        binned_tau(
-          ms, covariate=covariate, bins=bins, min_pairs=min_pairs
-        ).assign(station=station, model=model, pits=ms.train_pits)
-      )
+  frames = [
+    binned_tau(ms, covariate=covariate, bins=bins, min_pairs=min_pairs).assign(
+      station=station, model=model
+    )
+    for station in stations
+    for model, ms in margins(run, station, models, variables).items()
+  ]
   frame = pd.concat(frames, ignore_index=True)
-  leading = ["station", "model", "pits"]
+  leading = ["station", "model"]
   frame = frame[[*leading, *(c for c in frame.columns if c not in leading)]]
-  out.mkdir(parents=True, exist_ok=True)
-  frame.to_csv(out / "binned_kendall_tau.csv", index=False)
-  n = frame["station"].nunique()
-  where = f"station {stations[0]}" if n == 1 else f"median over {n} stations"
-  with common.Report(
-    out / "binned_kendall_tau.pdf", "Kendall's tau within covariate bins"
-  ) as report:
-    for (a, b), pair in frame.groupby(["variable_a", "variable_b"], sort=False):
-      figure, axes = plt.subplots(1, 2, figsize=(11.7, 4.8), sharey=True)
-      days = pair[pair["binning"] == DAY_OF_YEAR]
-      _panel(axes[0], days, "Day of year (valid time)")
-      edges = days.drop_duplicates("bin").sort_values("bin")
-      axes[0].set_xticks(
-        edges["bin"].tolist(),
-        [_day_label(lo, hi) for lo, hi in zip(edges["lower"], edges["upper"])],
-        fontsize=8,
-      )
-      forecast = pair[pair["binning"] == FORECAST]
-      names = sorted(set(forecast["covariate"]))
-      _panel(axes[1], forecast, f"Quantile bins of {', '.join(names)}")
-      axes[1].set_xticks(
-        sorted(set(forecast["bin"])),
-        [str(k + 1) for k in sorted(set(forecast["bin"]))],
-      )
-      axes[1].set_xlabel("bin, lowest to highest, per station")
-      axes[1].legend(fontsize=8, loc="lower right")
-      figure.suptitle(
-        f"{_short(a)} / {_short(b)}: out-of-fold training PITs; {where}, "
-        "quartiles shaded",
-        fontsize=11,
-      )
-      figure.tight_layout()
-      figure.savefig(out / f"{a}__{b}.png".replace(":", "_"), dpi=150)
-      report.save(figure)
+  write(frame, out, "binned_kendall_tau", _binned_figure)
+  return frame
+
+
+def rolling(
+  run: Path,
+  out: Path,
+  *,
+  station: int = 0,
+  window: int = WINDOW,
+  models: Sequence[str] = MODELS,
+  variables: Sequence[str] | None = None,
+) -> pd.DataFrame:
+  """Write one station's rolling taus into ``out``; return them."""
+  sets = margins(run, station, models, variables)
+  if window < 2 or not sets:
+    raise ValueError(
+      f"window must be at least 2 and models not empty; got {window} and "
+      f"{list(models)}"
+    )
+  first = next(iter(sets.values()))
+  times = pd.DatetimeIndex(first.time_train)
+  if len(times) < window or not times.is_monotonic_increasing:
+    raise ValueError(
+      f"station {station} must have at least {window} training cases in "
+      f"time order; got {len(times)}"
+    )
+  series = {OBSERVATIONS: first.y_train}
+  series |= {model: training_pits(ms) for model, ms in sets.items()}
+  frame = rolling_tau(series, first.variables, times, window)
+  label = f"trailing {window} training cases; PITs out of fold"
+
+  def figure(pair: pd.DataFrame, title: str) -> Figure:
+    return _rolling_figure(pair, f"Station {station} | {title}\n{label}")
+
+  write(frame, out, "rolling_kendall_tau", figure)
   return frame
 
 
 def main(argv: list[str] | None = None) -> int:
-  """Write the binned taus of a run from the command line.
-
-  Parameters
-  ----------
-  argv : list of str, optional
-      The arguments; ``None`` reads them from ``sys.argv``.
-
-  Returns
-  -------
-  int
-      The exit status.
-  """
-  p = common.parser(__doc__.splitlines()[0])
-  p.add_argument(
-    "--stations", type=int, nargs="+", default=None, help="All stored."
-  )
-  p.add_argument("--models", nargs="+", default=list(MODELS))
-  p.add_argument(
-    "--variables", nargs="+", default=None, help="The run's modeled ones."
-  )
-  p.add_argument(
+  """Write the binned or the rolling taus of a run."""
+  p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+  commands = p.add_subparsers(dest="command", required=True)
+  by_bin = commands.add_parser("binned", help="Tau within covariate bins.")
+  by_window = commands.add_parser("rolling", help="Tau in trailing windows.")
+  for sub in (by_bin, by_window):
+    sub.add_argument("--run", required=True, type=Path, help="The run folder.")
+    sub.add_argument("--out", type=Path, help="Where to write.")
+    sub.add_argument("--models", nargs="+", default=list(MODELS))
+    sub.add_argument("--variables", nargs="+", help="The run's modeled ones.")
+  by_bin.add_argument("--stations", type=int, nargs="+", help="All stored.")
+  by_bin.add_argument(
     "--covariate",
-    default=None,
     help="One covariate for every pair; each first response's ensemble "
     "mean by default.",
   )
-  p.add_argument("--bins", type=int, default=BINS)
-  p.add_argument("--min-pairs", type=int, default=MIN_PAIRS)
+  by_bin.add_argument("--bins", type=int, default=BINS)
+  by_bin.add_argument("--min-pairs", type=int, default=MIN_PAIRS)
+  by_window.add_argument("--station", type=int, default=0)
+  by_window.add_argument("--window", type=int, default=WINDOW)
   a = p.parse_args(argv)
-  out = a.out or a.run / "reports" / "binned_tau"
-  build(
-    a.run,
-    out,
-    stations=a.stations,
-    models=a.models,
-    variables=a.variables,
-    covariate=a.covariate,
-    bins=a.bins,
-    min_pairs=a.min_pairs,
-  )
+  if a.command == "binned":
+    out = a.out or a.run / "reports" / "binned_tau"
+    binned(
+      a.run,
+      out,
+      stations=a.stations,
+      models=a.models,
+      variables=a.variables,
+      covariate=a.covariate,
+      bins=a.bins,
+      min_pairs=a.min_pairs,
+    )
+  else:
+    out = a.out or a.run / "reports" / f"rolling_tau_{a.station:03d}_{a.window}"
+    rolling(
+      a.run,
+      out,
+      station=a.station,
+      window=a.window,
+      models=a.models,
+      variables=a.variables,
+    )
   print(f"wrote {out}")
   return 0
 

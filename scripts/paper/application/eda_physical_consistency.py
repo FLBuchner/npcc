@@ -66,7 +66,7 @@ import pandas as pd
 import xarray as xr
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import report_common as common
+from report import PAGE, Report
 
 from npcc.experiments.application.data import (
   DATA_SHA256,
@@ -468,11 +468,9 @@ def _exact_counts(frame: pd.DataFrame) -> pd.DataFrame:
   return out
 
 
-def _box_page(
-  report: common.Report, frame: pd.DataFrame, aggregation: str
-) -> None:
+def _box_page(report: Report, frame: pd.DataFrame, aggregation: str) -> None:
   """RH and w residuals of both sources, as boxes, on one page."""
-  figure, axes = plt.subplots(1, 2, figsize=common.PAGE)
+  figure, axes = plt.subplots(1, 2, figsize=PAGE)
   for axis, (name, (unit, _)) in zip(axes, RESPONSES.items(), strict=True):
     samples = []
     for source in SOURCES:
@@ -522,7 +520,7 @@ def write_pdf(
   """
   a, b, c = METEOSWISS.a, METEOSWISS.b, METEOSWISS.c
   below = METEOSWISS.below or (a, b, c)
-  with common.Report(path, "Physical consistency of the raw data") as report:
+  with Report(path, "Physical consistency of the raw data") as report:
     report.text(
       f"Physical consistency: {LEAD_HOURS}-hour forecasts from "
       f"{INIT_HOUR:02d}:00 UTC",

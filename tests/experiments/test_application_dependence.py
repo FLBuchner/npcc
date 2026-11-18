@@ -1,4 +1,4 @@
-"""Kendall's tau within covariate bins, on hand-made stored margins."""
+"""Kendall's tau of hand-made stored margins, binned and rolling."""
 
 from __future__ import annotations
 
@@ -65,8 +65,9 @@ def _store(run: Path, station: int, *, out_of_fold: bool = True) -> None:
 
   T and RH depend (rho 0.9) in the cases valid in the first fifth of the
   year, and RH and p where RH's ensemble mean is in its top fifth; nowhere
-  else, but for T and p where both hold. The in-sample PITs carry the opposite dependence, so reading them
-  instead would flip each sign.
+  else, but for T and p where both hold. The in-sample PITs carry the
+  opposite dependence, so reading them instead would flip each sign. The
+  observations are independent throughout.
   """
   rng = np.random.default_rng(station)
   n_train, n_test = 4 * 365, 40
@@ -146,11 +147,10 @@ def test_tau_is_read_off_the_out_of_fold_pits_in_the_right_bins(
   for station in (3, 8):
     _store(run, station)
   out = tmp_path / "tau"
-  assert _module().main(["--run", str(run), "--out", str(out)]) == 0
+  assert _module().main(["binned", "--run", str(run), "--out", str(out)]) == 0
 
   frame = pd.read_csv(out / "binned_kendall_tau.csv")
   assert set(frame["model"]) == set(_MODELS)
-  assert set(frame["pits"]) == {"out_of_fold"}
   assert set(frame["station"]) == {3, 8}
   keyed = frame.set_index(
     ["station", "model", "variable_a", "variable_b", "binning", "bin"]
@@ -180,7 +180,7 @@ def test_a_bin_with_too_few_cases_keeps_its_count_and_no_tau(
   """A tau of a handful of cases would read as a finding."""
   run = tmp_path / "run"
   _store(run, 0)
-  frame = _module().build(
+  frame = _module().binned(
     run, tmp_path / "tau", models=_MODELS[:1], bins=5, min_pairs=400
   )
   assert frame["tau"].isna().all()
@@ -193,7 +193,7 @@ def test_margins_without_out_of_fold_pits_are_refused(tmp_path: Path) -> None:
   run = tmp_path / "run"
   _store(run, 0, out_of_fold=False)
   with pytest.raises(ValueError, match="out-of-fold"):
-    _module().build(run, tmp_path / "tau")
+    _module().binned(run, tmp_path / "tau")
 
 
 def test_the_day_of_year_bins_are_one_calendar_for_every_station() -> None:
@@ -209,3 +209,41 @@ def test_the_day_of_year_bins_are_one_calendar_for_every_station() -> None:
   labels, edges = _module().day_of_year_bins(times, 5)
   assert labels.tolist() == [0, 4, 4, 0]
   np.testing.assert_allclose(edges, np.linspace(1, 367, 6))
+
+
+def test_rolling_tau_reads_the_out_of_fold_pits_in_their_windows(
+  tmp_path: Path,
+) -> None:
+  """A window misaligned with its dates or the wrong PITs misdate a change.
+
+  T and RH's out-of-fold PITs depend in the first fifth of each year alone:
+  every window within it must show it, positive as they carry it, and no
+  window within the summer; the observations, drawn independently, never.
+  """
+  run = tmp_path / "run"
+  _store(run, 3)
+  out = tmp_path / "rolling"
+  argv = ["rolling", "--run", str(run), "--station", "3", "--window", "60"]
+  assert _module().main([*argv, "--out", str(out)]) == 0
+
+  frame = pd.read_csv(
+    out / "rolling_kendall_tau.csv", parse_dates=["window_start", "time"]
+  )
+  assert set(frame["series"]) == {"observations", *_MODELS}
+  assert len(frame) == 3 * 3 * (4 * 365 - 59)
+  assert (frame["n_pairs"] == 60).all()
+  first = frame["window_start"].dt.dayofyear
+  last = frame["time"].dt.dayofyear
+  # Windows within one calendar year, in the planted bin or well past it.
+  within = first <= last
+  winter = within & (last <= 73)
+  summer = within & (first >= 120) & (last <= 300)
+  pair = frame[(frame["variable_a"] == _T) & (frame["variable_b"] == _RH)]
+  for model in _MODELS:
+    series = pair[pair["series"] == model]
+    assert series.loc[winter, "tau"].min() > 0.5
+    assert series.loc[summer, "tau"].abs().max() < 0.4
+  observed = pair[pair["series"] == "observations"]
+  assert observed.loc[winter, "tau"].abs().mean() < 0.2
+  assert len(list(out.glob("*.png"))) == 3
+  assert (out / "rolling_kendall_tau.pdf").stat().st_size > 10_000
