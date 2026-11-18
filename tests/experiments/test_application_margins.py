@@ -29,6 +29,7 @@ from npcc.experiments.application.margins import (
   build_predictor,
   fit_margin,
   fit_station,
+  training_years,
 )
 from npcc.experiments.application.scores import CLOSED_FORM_CRPS
 from tests.conftest import LinearGaussianBackend
@@ -102,6 +103,8 @@ def test_every_response_is_predicted_in_shape_and_range(
     "pit_test",
     "logpdf_test",
     "quantiles_test",
+    "fold_fit",
+    "fold_pit_train",
     *closed_form,
   }
   assert (CLOSED_FORM_CRPS in margins.scores) == bool(closed_form)
@@ -210,8 +213,10 @@ def test_humidity_is_fitted_as_a_nudged_fraction_and_reported_in_percent(
   np.testing.assert_allclose(
     fit.logpdf_test, emos.logpdf(model_scale, x=x) - np.log(100.0), rtol=1e-12
   )
-  np.testing.assert_allclose(
-    fit.quantiles_test, 100.0 * emos.quantiles(config.levels, x=x), rtol=1e-12
+  # Rounded to float32 once predicted, as every margin's test quantiles are.
+  np.testing.assert_array_equal(
+    fit.quantiles_test,
+    (100.0 * emos.quantiles(config.levels, x=x)).astype(np.float32),
   )
   assert _detail(fit, "emos")["class"] == "BetaEMOS"
 
@@ -288,7 +293,10 @@ def test_a_fit_is_seeded_by_its_own_station_model_and_response(
   config: ApplicationConfig,
   monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  """A fit seeded by what ran before it would change with the run order."""
+  """A fit seeded by what ran before it would change with the run order.
+
+  So would each out-of-fold fit, which follows with its year's own seed.
+  """
   seeds: list[int] = []
   monkeypatch.setattr(torch, "manual_seed", lambda seed: seeds.append(seed))
   spec = config.marginal_model("linear-gaussian-emos")
@@ -299,7 +307,20 @@ def test_a_fit_is_seeded_by_its_own_station_model_and_response(
   expected = derive_seed(
     config.base_seed, "margin", 0, "linear-gaussian-emos", "obs:air_temperature"
   )
-  assert seeds == [expected]
+  assert seeds[0] == expected
+  years = sorted({int(y) for y in training_years(station, 24)})
+  assert seeds[1:] == [
+    derive_seed(
+      config.base_seed,
+      "margin",
+      0,
+      "linear-gaussian-emos",
+      "obs:air_temperature",
+      "fold",
+      year,
+    )
+    for year in years
+  ]
   assert fit.info["seed"] == expected
   assert _detail(fit, "estimator")["device"] == "cpu"
 

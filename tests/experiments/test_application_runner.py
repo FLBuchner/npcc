@@ -285,27 +285,27 @@ def test_the_copula_stage_reads_only_its_own_marginal_sets(
   fake_copulas: FakeCopulas,
   register_linear_gaussian_backend: None,
 ) -> None:
-  """``copulas.margins`` chooses the sets; ``--models`` narrows within them."""
+  """``--models`` narrows the copula stage to the margins it names.
+
+  A model outside the configuration's is refused rather than skipped, and a
+  later ``--resume`` without it runs the others, leaving the stored unit be.
+  """
   del register_linear_gaussian_backend
-  config = write_config(
-    tmp_path / "app.toml",
-    data_dir,
-    copula_margins=["emos-seasonal", "linear-gaussian-all"],
-    stations="[0]",
-  )
+  config = write_config(tmp_path / "app.toml", data_dir, stations="[0]")
   out = tmp_path / "run"
   assert _margins(config, out) == 0
   copulas = ["copulas", "--config", str(config), "--out", str(out)]
   with pytest.raises(ValueError, match="models must be drawn"):
-    main([*copulas, "--models", "linear-gaussian-emos"])
+    main([*copulas, "--models", "linear-gaussian-none"])
   assert main([*copulas, "--models", "linear-gaussian-all"]) == 0
   assert {c["model"] for c in fake_copulas.calls} == {"linear-gaussian-all"}
   assert main([*copulas, "--resume", "--copulas", "independence"]) == 0
   assert {c["model"] for c in fake_copulas.calls} == {
     "emos-seasonal",
     "linear-gaussian-all",
+    "linear-gaussian-emos",
   }
-  assert len(fake_copulas.calls) == 3
+  assert len(fake_copulas.calls) == 4
 
 
 def test_a_margin_runs_and_is_scored_on_its_own_arms_only(
@@ -325,7 +325,7 @@ def test_a_margin_runs_and_is_scored_on_its_own_arms_only(
     config_text(
       data_dir,
       stations="[0, 2]",
-      copula_margins=["emos-seasonal", "linear-gaussian-all"],
+      models=["emos-seasonal", "linear-gaussian-all"],
     ).replace(
       'arms = ["independence", "gaussian"]',
       'arms = ["independence", "gaussian"]\n'

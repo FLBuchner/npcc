@@ -25,15 +25,14 @@ _ROOT = Path(__file__).resolve().parents[2]
 _E1_LABELS = ("lightgbm-probit", "tabpfn-quantiles-v3-probit", "tabicl-probit")
 
 
-@pytest.mark.parametrize("name", ["application.toml", "application_smoke.toml"])
-def test_the_shipped_configs_use_e1s_estimators(name: str) -> None:
+def test_the_shipped_config_uses_e1s_estimators() -> None:
   """A copied entry that drifts from E1's would fit another estimator.
 
   The paper reports the application with the simulation study's estimators;
   an edit to either file that the other does not follow would change one
   study's backend configuration under the same label.
   """
-  config = load_config(_ROOT / "configs" / name)
+  config = load_config(_ROOT / "configs" / "application.toml")
   e1 = {
     e.label: e for e in load_grid(_ROOT / "configs" / "study.toml").estimators
   }
@@ -46,15 +45,23 @@ def test_the_shipped_configs_use_e1s_estimators(name: str) -> None:
   assert tabpfn.backend_kwargs["model_kwargs"] == {"softmax_temperature": 1.0}
 
 
-def test_the_full_config_holds_the_decided_models_and_arms() -> None:
-  """A model or arm dropped from the full run would silently go unreported.
+def test_the_shipped_config_holds_the_decided_grid() -> None:
+  """A model, arm or setting dropped from the run would go unreported.
 
-  The full run fits his seven marginal models, and the copula arms on the
-  EMOS and TabPFN-on-all-covariates margins; the smoke run, on station 0,
-  every arm on every margin.
+  As decided on 2026-11-18: the triple (T, RH, p) as the main design and
+  the five responses as the 5d design, on the same seven margins; every
+  margin, EMOS's included, runs the three classical arms and the chain with
+  each npcc backend in both designs, and the main table adds its own arms;
+  500 draws per case, all stored; both designs scored on (T, RH, p), with
+  the exact projected log score of the 5d independence and Gaussian arms.
   """
   config = load_config(_ROOT / "configs" / "application.toml")
 
+  triple = (
+    "obs:air_temperature",
+    "obs:relative_humidity",
+    "obs:surface_air_pressure",
+  )
   assert config.models == (
     "emos-seasonal",
     "lightgbm-all",
@@ -64,17 +71,40 @@ def test_the_full_config_holds_the_decided_models_and_arms() -> None:
     "tabicl-all",
     "tabicl-emos",
   )
-  assert config.copula_models == ("emos-seasonal", "tabpfn-quantiles-all")
-  assert config.copula_arms == (
+  assert config.modeled == triple
+  assert config.derived == (
+    "obs:dew_point_temperature",
+    "obs:water_vapor_mixing_ratio",
+  )
+  assert config.margin_responses == config.variables
+  assert config.design("5d").modeled == config.variables
+  common = (
     "independence",
     "gaussian",
     "boostcopula-all",
+    "npcc-chain-tabpfn-quantiles-all",
+    "npcc-chain-tabicl-all",
+    "npcc-chain-lightgbm-all",
+  )
+  both = (*common, *(f"{a}@5d" for a in common))
+  anchor = (
+    *common[:3],
     "boostcopula-time",
-    "npcc-random-tabpfn-quantiles-all",
-    "npcc-random-tabpfn-quantiles-time",
     "npcc-mixture-tabpfn-quantiles-all",
     "npcc-mixture-tabpfn-quantiles-time",
+    "npcc-chain-tabpfn-quantiles-all",
+    "npcc-chain-tabpfn-quantiles-time",
+    "npcc-chain-tabicl-all",
+    "npcc-chain-lightgbm-all",
+    *(f"{a}@5d" for a in common),
   )
+  for model in config.models:
+    expected = anchor if model == "tabpfn-quantiles-all" else both
+    assert config.copula_arms_for(model) == expected
+  assert sum(len(config.copula_arms_for(m)) for m in config.models) == 88
+  assert dict(config.score_subsets) == {"trhp": triple}
+  assert config.projected_log_score
+  assert config.save_draws
   assert config.verify_data
   assert (
     config.data_dir == Path("~/npcc-data/meteoswiss_zanetta2023").expanduser()
@@ -82,26 +112,12 @@ def test_the_full_config_holds_the_decided_models_and_arms() -> None:
   assert config.stations is None
   assert config.n_levels == 199
   assert (config.n_draws, config.sample_batch_size, config.mixture_k) == (
-    200,
-    5000,
+    500,
+    20000,
     5,
   )
   assert config.device_for("lightgbm") == "cpu"
   assert config.device_for("npcc-tabpfn-quantiles-all") == "cuda"
-  smoke = load_config(_ROOT / "configs" / "application_smoke.toml")
-  assert smoke.stations == (0,)
-  assert smoke.signature() == config.signature()
-  assert smoke.copula_models == smoke.models == config.models
-  assert len(smoke.copula_arms) == 22
-  assert set(config.copula_arms) <= set(smoke.copula_arms)
-
-
-def test_the_smoke_config_runs_every_arm_the_copula_stage_knows() -> None:
-  """An arm left out of the smoke run first costs in the full run."""
-  copulas = pytest.importorskip("npcc.experiments.application.copulas")
-  smoke = load_config(_ROOT / "configs" / "application_smoke.toml")
-
-  assert smoke.copula_arms == tuple(copulas.COPULA_ARMS)
 
 
 def test_the_levels_are_the_midpoints() -> None:

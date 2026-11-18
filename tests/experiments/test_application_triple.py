@@ -250,73 +250,11 @@ def test_the_triple_config_reads_its_design(tmp_path: Path) -> None:
   assert config.modeled == _MODELED
   assert config.derived == _DERIVED
   assert config.derivation == Derivation("meteoswiss")
-  assert not config.is_default_design
-  assert default.is_default_design
+  assert default.modeled == default.variables
+  assert not default.derived
   assert config.signature() != default.signature()
   assert config.echo()["derived"] == list(_DERIVED)
-  assert "derived" not in default.echo()
-
-
-@pytest.mark.parametrize(
-  "name", ["application_triple", "application_smoke_triple"]
-)
-def test_the_shipped_triple_configs(name: str) -> None:
-  """The measured triple, with each run's margins and arms, as they ran.
-
-  The full run must not fit an npcc copula, vine or chain, to the EMOS
-  margins, whose PITs are not uniform given the covariates; the smoke run
-  fitted every vine arm to both, and its config must still say so. Both
-  configs are those of the cited runs, so they keep the runs' signatures,
-  their in-sample training PITs and no stored draws; the rerun's settings
-  are configs/application_consolidated.toml's.
-  """
-  config = load_config(_ROOT / "configs" / f"{name}.toml")
-
-  assert config.modeled == _MODELED
-  assert config.derived == _DERIVED
-  assert config.magnus == "meteoswiss"
-  assert config.models == ("emos-seasonal", "tabpfn-quantiles-all")
-  assert config.copula_models == config.models
-  classical = (
-    "independence",
-    "gaussian",
-    "boostcopula-all",
-    "boostcopula-time",
-  )
-  mixtures = (
-    "npcc-mixture-tabpfn-quantiles-all",
-    "npcc-mixture-tabpfn-quantiles-time",
-  )
-  if "smoke" in name:
-    randoms = (
-      "npcc-random-tabpfn-quantiles-all",
-      "npcc-random-tabpfn-quantiles-time",
-    )
-    assert config.copula_arms == (*classical, *randoms, *mixtures)
-    assert config.copula_arms_for("emos-seasonal") == config.copula_arms
-  else:
-    chains = (
-      "npcc-chain-tabpfn-quantiles-all",
-      "npcc-chain-tabpfn-quantiles-time",
-    )
-    assert config.copula_arms == (*classical, *mixtures, *chains)
-    assert config.copula_arms_for("emos-seasonal") == classical
-  assert config.copula_arms_for("tabpfn-quantiles-all") == config.copula_arms
-  assert config.responses[RELATIVE_HUMIDITY].transform == "logit"
-  assert config.responses[RELATIVE_HUMIDITY].boundary_nudge == 0.05
-  assert config.device_for("tabpfn-quantiles") == "cuda"
-  assert config.stations == ((0,) if "smoke" in name else None)
-  assert config.train_pits == "in_sample"
-  assert not config.save_draws
-  assert config.quantile_dtype == "float64"
-  assert not config.copula_designs
-  # The manifests of results/application_triple_2026-11-12 and
-  # results/application_triple_smoke_2026-11-12.
-  assert config.signature() == (
-    "7214cb7cbf2d7afa003cc2ab429088fc90423ddfc366ebdba34a37f89f8a0a82"
-    if "smoke" in name
-    else "982d1b254a5db768eefaf11b93de4d4ecd95f40fedfe616e6dde090025b8681b"
-  )
+  assert default.echo()["derived"] == []
 
 
 @pytest.mark.usefixtures("register_linear_gaussian_backend")

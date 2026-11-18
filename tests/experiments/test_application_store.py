@@ -111,7 +111,8 @@ def test_a_marginal_set_reads_back_exactly_what_was_fitted(
     rows = predictions.loc[predictions["variable"] == variable]
     train = rows.loc[rows["split"] == "train"]
     test = rows.loc[rows["split"] == "test"]
-    np.testing.assert_array_equal(ms.pit_train[:, j], train["pit"])
+    # The copulas are fitted to the out-of-fold training PITs.
+    np.testing.assert_array_equal(ms.pit_train[:, j], train["pit_out_of_fold"])
     np.testing.assert_array_equal(ms.pit_test[:, j], test["pit"])
     np.testing.assert_array_equal(ms.logpdf_test[:, j], test["logpdf"])
     np.testing.assert_array_equal(

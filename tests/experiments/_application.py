@@ -51,14 +51,8 @@ def config_text(
   n_levels: int = 19,
   base_seed: int = 11,
   extra_data: str = "",
-  copula_margins: Sequence[str] | None = None,
 ) -> str:
   """A config on the hermetic backend, as TOML text."""
-  margins = (
-    ""
-    if copula_margins is None
-    else f"margins = {json.dumps(list(copula_margins))}"
-  )
   return f"""
 base_seed = {base_seed}
 
@@ -76,7 +70,6 @@ n_levels = {n_levels}
 {RESPONSES}
 [copulas]
 arms = {json.dumps(list(arms))}
-{margins}
 n_draws = 8
 sample_batch_size = 50
 
@@ -96,7 +89,6 @@ def write_config(
   stations: str = '"all"',
   extra_data: str = "",
   base_seed: int = 11,
-  copula_margins: Sequence[str] | None = None,
 ) -> Path:
   """Write :func:`config_text` to ``path``."""
   path.write_text(
@@ -107,7 +99,6 @@ def write_config(
       stations=stations,
       extra_data=extra_data,
       base_seed=base_seed,
-      copula_margins=copula_margins,
     )
   )
   return path
@@ -193,7 +184,6 @@ class FakeCopulas:
         "mixture_k": mixture_k,
         "seed": seed,
         "device": device,
-        "train_pits": ms.train_pits,
         "pit_train": ms.pit_train.copy(),
         "variables": ms.variables,
         "derived": ms.derived,

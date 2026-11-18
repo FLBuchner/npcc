@@ -12,6 +12,7 @@ import pytest
 from scipy import stats
 
 from npcc.experiments._study import derive_seed
+from npcc.experiments.application import margins as margins_module
 from npcc.experiments.application.cli import main
 from npcc.experiments.application.config import ApplicationConfig, load_config
 from npcc.experiments.application.data import StationData, load_station
@@ -34,39 +35,29 @@ from tests.experiments._application import (
   write_data,
 )
 
-_OUT_OF_FOLD = '[margins]\ntrain_pits = "out_of_fold"\n'
-
 
 @pytest.fixture(scope="module")
 def data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
   return write_data(tmp_path_factory.mktemp("data"))
 
 
-def _config(data_dir: Path, tmp_path: Path, *, out_of_fold: bool) -> Path:
-  text = config_text(data_dir)
-  if out_of_fold:
-    text = text.replace("[margins]\n", _OUT_OF_FOLD)
-  path = tmp_path / ("oof.toml" if out_of_fold else "in_sample.toml")
-  path.write_text(text)
+def _config(data_dir: Path, tmp_path: Path) -> Path:
+  path = tmp_path / "app.toml"
+  path.write_text(config_text(data_dir))
   return path
 
 
 @pytest.fixture
-def configs(
+def config(
   data_dir: Path, tmp_path: Path, register_linear_gaussian_backend: None
-) -> tuple[ApplicationConfig, ApplicationConfig]:
+) -> ApplicationConfig:
   del register_linear_gaussian_backend
-  return (
-    load_config(_config(data_dir, tmp_path, out_of_fold=False)),
-    load_config(_config(data_dir, tmp_path, out_of_fold=True)),
-  )
+  return load_config(_config(data_dir, tmp_path))
 
 
 @pytest.fixture
-def station(
-  data_dir: Path, configs: tuple[ApplicationConfig, ApplicationConfig]
-) -> StationData:
-  return load_station(data_dir, 0, configs[0].selection, sha256=None)
+def station(data_dir: Path, config: ApplicationConfig) -> StationData:
+  return load_station(data_dir, 0, config.selection, sha256=None)
 
 
 class _Recorder:
@@ -242,25 +233,27 @@ def test_a_fold_is_a_forecasts_initialization_year(
 @pytest.mark.parametrize("model", ["emos-seasonal", "linear-gaussian-all"])
 def test_folds_leave_the_test_predictions_as_they_were(
   station: StationData,
-  configs: tuple[ApplicationConfig, ApplicationConfig],
+  config: ApplicationConfig,
+  monkeypatch: pytest.MonkeyPatch,
   model: str,
 ) -> None:
   """The folds add PITs; they must not move a test prediction or a seed.
 
   The model fitted on every training case is fitted first, with its own
-  seed, so its in-sample and test outputs are those of a run without folds.
+  seed, so its in-sample and test outputs are those of a fit without folds.
   """
-  plain, folded = configs
   variable = "obs:air_temperature"
-  a = fit_margin(
-    station, plain.marginal_model(model), variable, config=plain, device="cpu"
-  )
   b = fit_margin(
-    station, folded.marginal_model(model), variable, config=folded, device="cpu"
+    station, config.marginal_model(model), variable, config=config, device="cpu"
   )
-
-  assert a.pit_train_out_of_fold is None
-  assert b.pit_train_out_of_fold is not None
+  monkeypatch.setattr(
+    margins_module,
+    "out_of_fold_pits",
+    lambda *args, **kwargs: (np.zeros(len(station.row_train)), {}),
+  )
+  a = fit_margin(
+    station, config.marginal_model(model), variable, config=config, device="cpu"
+  )
   # Two fits of the hermetic backend agree to rounding, not bit for bit.
   for name in ("pit_train", "pit_test", "logpdf_test", "quantiles_test"):
     np.testing.assert_allclose(getattr(a, name), getattr(b, name), rtol=1e-12)
@@ -272,90 +265,52 @@ def test_folds_leave_the_test_predictions_as_they_were(
   assert [r["year"] for r in records] == [2017, 2018, 2019, 2020]
   assert sum(r["n_held_out"] for r in records) == len(station.row_train)
   assert records[0]["seed"] == derive_seed(
-    folded.base_seed, "margin", 0, model, variable, "fold", 2017
+    config.base_seed, "margin", 0, model, variable, "fold", 2017
   )
 
 
-def test_the_stored_unit_carries_both_pits_and_serves_either(
-  station: StationData,
-  configs: tuple[ApplicationConfig, ApplicationConfig],
-  tmp_path: Path,
+def test_the_stored_unit_carries_both_pits_and_serves_the_out_of_fold_ones(
+  station: StationData, config: ApplicationConfig, tmp_path: Path
 ) -> None:
   """A copula reading the wrong column would be fitted to the wrong PITs.
 
   The unit stores the in-sample PIT in ``pit`` and the out-of-fold one in
-  ``pit_out_of_fold``; asking for out-of-fold PITs from a unit without them
-  is refused rather than served the in-sample ones.
+  ``pit_out_of_fold``; a copula reads the latter, and a unit without it is
+  refused rather than served the in-sample ones.
   """
-  plain, folded = configs
   out = tmp_path / "run"
   ensure_station_data(out, station, seconds=0.0)
-  for name, config in (("plain", plain), ("folded", folded)):
-    margins = fit_station(
-      station,
-      config.marginal_model("linear-gaussian-all"),
-      config=config,
-      device="cpu",
-    )
+  margins = fit_station(
+    station,
+    config.marginal_model("linear-gaussian-all"),
+    config=config,
+    device="cpu",
+  )
+  for name in ("linear-gaussian-all", "without-folds"):
     write_margin(
       out,
       0,
-      f"linear-gaussian-all-{name}",
+      name,
       predictions=margins.predictions,
       scores=margins.scores,
       timings=margins.timings,
       info=margins.info,
     )
   stored = pd.read_parquet(
-    margin_dir(out, 0, "linear-gaussian-all-folded") / "predictions.parquet"
+    margin_dir(out, 0, "linear-gaussian-all") / "predictions.parquet"
   )
   train = stored.loc[stored["split"] == "train"]
   assert train["pit_out_of_fold"].notna().all()
   assert stored.loc[stored["split"] == "test", "pit_out_of_fold"].isna().all()
 
-  in_sample = read_marginal_set(out, 0, "linear-gaussian-all-folded")
-  oof = read_marginal_set(
-    out, 0, "linear-gaussian-all-folded", train_pits="out_of_fold"
-  )
-  assert (in_sample.train_pits, oof.train_pits) == ("in_sample", "out_of_fold")
-  first = train.loc[train["variable"] == in_sample.variables[0]]
-  np.testing.assert_array_equal(in_sample.pit_train[:, 0], first["pit"])
-  np.testing.assert_array_equal(oof.pit_train[:, 0], first["pit_out_of_fold"])
-  np.testing.assert_array_equal(oof.pit_test, in_sample.pit_test)
+  ms = read_marginal_set(out, 0, "linear-gaussian-all")
+  first = train.loc[train["variable"] == ms.variables[0]]
+  np.testing.assert_array_equal(ms.pit_train[:, 0], first["pit_out_of_fold"])
+  assert not np.array_equal(ms.pit_train[:, 0], first["pit"])
+  unit = margin_dir(out, 0, "without-folds") / "predictions.parquet"
+  pd.read_parquet(unit).drop(columns="pit_out_of_fold").to_parquet(unit)
   with pytest.raises(ValueError, match="must store out-of-fold"):
-    read_marginal_set(
-      out, 0, "linear-gaussian-all-plain", train_pits="out_of_fold"
-    )
-
-
-def test_the_setting_is_part_of_the_signature_only_off_its_default(
-  data_dir: Path, tmp_path: Path, register_linear_gaussian_backend: None
-) -> None:
-  """A run folder of in-sample PITs must not resume with out-of-fold ones.
-
-  The default leaves the signature as it was, so a folder started before
-  the setting existed still resumes; any other value changes it.
-  """
-  del register_linear_gaussian_backend
-  plain = load_config(_config(data_dir, tmp_path, out_of_fold=False))
-  folded = load_config(_config(data_dir, tmp_path, out_of_fold=True))
-  explicit = tmp_path / "explicit.toml"
-  explicit.write_text(
-    config_text(data_dir).replace(
-      "[margins]\n", '[margins]\ntrain_pits = "in_sample"\n'
-    )
-  )
-  assert load_config(explicit).signature() == plain.signature()
-  assert folded.signature() != plain.signature()
-  assert folded.echo()["train_pits"] == "out_of_fold"
-  wrong = tmp_path / "wrong.toml"
-  wrong.write_text(
-    config_text(data_dir).replace(
-      "[margins]\n", '[margins]\ntrain_pits = "loo"\n'
-    )
-  )
-  with pytest.raises(ValueError, match="train_pits must be one of"):
-    load_config(wrong)
+    read_marginal_set(out, 0, "without-folds")
 
 
 @pytest.fixture
@@ -373,14 +328,14 @@ def test_the_copula_stage_is_fitted_to_the_out_of_fold_pits(
   register_linear_gaussian_backend: None,
   fake_copulas: FakeCopulas,
 ) -> None:
-  """With ``train_pits = "out_of_fold"``, no arm may see an in-sample PIT.
+  """No arm may see an in-sample training PIT.
 
   End to end through the command line: the margins store both PITs, every
   copula call receives the out-of-fold ones, and evaluate writes the
   uniformity table with both training kinds.
   """
   del register_linear_gaussian_backend
-  path = _config(data_dir, tmp_path, out_of_fold=True)
+  path = _config(data_dir, tmp_path)
   out = tmp_path / "run"
   args = ["--config", str(path), "--out", str(out)]
   assert main(["margins", *args, "--stations", "0", "--device", "cpu"]) == 0
@@ -391,7 +346,6 @@ def test_the_copula_stage_is_fitted_to_the_out_of_fold_pits(
   )
   assert fake_copulas.calls
   for call in fake_copulas.calls:
-    assert call["train_pits"] == "out_of_fold"
     model = stored if call["model"] == "emos-seasonal" else None
     if model is None:
       continue

@@ -15,7 +15,6 @@ from typing import Protocol, cast
 
 import numpy as np
 import pytest
-import pyvinecopulib as pv
 import torch
 from scipy import stats
 
@@ -272,7 +271,12 @@ def test_invalid_draws_fail_the_arm_with_their_cases(
 
   monkeypatch.setattr(RosenblattVinecop, "sample", corrupt)
   with pytest.raises(CopulaFailure, match="draws") as info:
-    run("npcc-random-lightgbm-time", gaussian_set(), sample_batch_size=1000)
+    run(
+      "npcc-mixture-lightgbm-time",
+      gaussian_set(),
+      sample_batch_size=1000,
+      mixture_k=1,
+    )
   assert info.value.indices == (2,)
 
 
@@ -284,15 +288,15 @@ def test_an_unknown_arm_or_backend_is_refused(run: Run) -> None:
   """
   ms = gaussian_set()
   with pytest.raises(ValueError, match="arm must be one of"):
-    run("npcc-random-catboost-all", ms)
+    run("npcc-mixture-catboost-all", ms)
   with pytest.raises(ValueError, match="estimators must map"):
-    run("npcc-random-tabicl-all", ms, estimators={})
+    run("npcc-mixture-tabicl-all", ms, estimators={})
 
 
 def test_the_arm_list_holds_every_scope_and_backend() -> None:
   """The runner selects arms from this list; a missing one never runs."""
-  assert len(COPULA_ARMS) == len(set(COPULA_ARMS)) == 22
-  for kind in ("random", "mixture", "chain"):
+  assert len(COPULA_ARMS) == len(set(COPULA_ARMS)) == 16
+  for kind in ("mixture", "chain"):
     for backend in ("lightgbm", "tabpfn-quantiles", "tabicl"):
       for scope in ("all", "time"):
         assert f"npcc-{kind}-{backend}-{scope}" in COPULA_ARMS
@@ -315,30 +319,8 @@ def test_a_vine_conditions_on_its_scope_in_every_tree(
   would fit another arm under its name. The context is non-simplified, so a
   pair in tree 2 also sees its one conditioning variable.
   """
-  run(f"npcc-random-lightgbm-{scope}", gaussian_set())
+  run(f"npcc-mixture-lightgbm-{scope}", gaussian_set(), mixture_k=1)
   assert sorted(w or 0 for w in pair_fit_widths) == [width, width, width + 1]
-
-
-def test_the_random_structure_is_the_stations_own(run: Run) -> None:
-  """One random structure per station, shared by every marginal model.
-
-  Drawn per marginal model or backend, a difference between two of them
-  would mix the structure's luck into the comparison.
-  """
-  ms = gaussian_set(d=4, station=7)
-  other = gaussian_set(d=4, station=7, model="lightgbm-all", seed=5)
-  results = [
-    run(arm, m)[0]
-    for arm, m in (
-      ("npcc-random-lightgbm-all", ms),
-      ("npcc-random-tabicl-time", other),
-    )
-  ]
-  seed = derive_seed(1, "random-structure", 7)
-  want = pv.RVineStructure.sample(4, seeds=[seed])
-  for result in results:
-    assert result.info["structure_seed"] == seed
-    assert result.info["structure"] == np.asarray(want.matrix).tolist()
 
 
 def test_the_mixture_returns_itself_and_each_member(run: Run) -> None:
