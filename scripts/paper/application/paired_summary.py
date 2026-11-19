@@ -493,9 +493,11 @@ def block_intervals(
     parts = [design_pairs(cases, [score], within=within)]
     if score in scores:
       parts.insert(0, paired_by_station(cases, [score], within=within))
-    diffs = pd.concat([p for p in parts if not p.empty], ignore_index=True)
-    if diffs.empty:
+    # A run of the main design alone pairs no broken-draw share.
+    found = [p for p in parts if not p.empty]
+    if not found:
       continue
+    diffs = pd.concat(found, ignore_index=True)
     for stations, subset in (
       ("all", diffs),
       (label, diffs[~diffs["station"].isin(list(without))]),

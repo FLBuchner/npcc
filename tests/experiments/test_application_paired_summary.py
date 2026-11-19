@@ -276,3 +276,36 @@ def test_case_scores_that_are_not_the_tables_are_refused(
   unit.unlink()
   with pytest.raises(FileNotFoundError, match="scores.parquet"):
     _module().build(run, run / "analysis")
+
+
+def test_a_run_of_the_main_design_alone_is_summarized(tmp_path: Path) -> None:
+  """A run without arms of another design must still get its summary.
+
+  Its broken-draw shares are compared between designs alone, so none pairs
+  here; the summary must leave them out rather than stop on the empty set.
+  """
+  run = _run(tmp_path)
+  rows = []
+  for unit in sorted((run / "stations").glob("*/copulas/*/*/scores.parquet")):
+    cases = pd.read_parquet(unit)
+    cases["broken_any"] = np.arange(len(cases)) % 2
+    cases.to_parquet(unit, index=False)
+    station, model, arm = cases.iloc[0][["station", "model", "arm"]]
+    rows.append(
+      {
+        "station": station,
+        "model": model,
+        "arm": arm,
+        "n_cases": len(cases),
+        "n_draws": 4 * len(cases),
+        "broken_any": int(cases["broken_any"].sum()),
+        "broken_any_share": cases["broken_any"].sum() / (4 * len(cases)),
+      }
+    )
+  pd.DataFrame(rows).to_csv(
+    run / "tables" / "copulas_physical_validity.csv", index=False
+  )
+  _module().build(run, run / "analysis")
+  summary = pd.read_csv(run / "analysis" / "paired.csv")
+  assert set(summary["score"]) == {"joint_nll_modeled", "energy"}
+  assert summary[["boot_low", "boot_high"]].notna().all().all()
