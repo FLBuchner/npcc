@@ -100,6 +100,28 @@ def test_validating_backend_kwargs_needs_no_optional_extra() -> None:
   )
 
 
+def test_the_application_command_needs_no_backend_extra() -> None:
+  """``npcc-application``'s import reaches no backend; its stages build them.
+
+  A marginal run that needs only EMOS and LightGBM must not fail for want of
+  TabICL, nor pay for importing the copula stage before it runs.
+  """
+  probe = (
+    "import sys\n"
+    "import npcc.experiments.application.cli\n"
+    "print('npcc.experiments.application.copulas' in sys.modules)\n"
+  )
+  result = subprocess.run(
+    [sys.executable, "-c", probe],
+    capture_output=True,
+    text=True,
+    check=True,
+    cwd=_ROOT,
+  )
+  assert result.stdout.split() == ["False"]
+  assert _imported_by("import npcc.experiments.application.cli") == set()
+
+
 def _imports(path: Path, *, module_scope: bool = False) -> set[str]:
   """Every module named by an import in ``path``, dotted.
 

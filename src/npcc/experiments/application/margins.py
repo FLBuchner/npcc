@@ -1,0 +1,702 @@
+"""Fit one marginal model per station and response, and predict its cases.
+
+A marginal model is seasonal EMOS, whose family follows the response's
+support (:func:`~npcc.experiments.application.emos.emos_for`), or an npcc
+backend: :func:`~npcc.core.registry.create_backend` with the estimator's
+backend and ``backend_kwargs``, the response's transform, the default
+quantile table and the default ``eps``. Either is fitted on the training
+cases, on the response's model scale, and returns:
+
+- the PIT of every training case (in sample) and test case, through ``cdf``;
+- every training case's out-of-fold PIT, which the copulas are fitted to:
+  the model is fitted once more per training year, on the cases initialized
+  in the other years, and evaluated at that year's cases
+  (:func:`out_of_fold_pits`). The test predictions stay those of the model
+  fitted on every training case;
+- the test log-density on the original scale, which for a rescaled response
+  loses ``log(scale)``;
+- the test quantiles at the configured levels, through the public ``icdf``,
+  on the original scale. An npcc margin predicts its quantile table once
+  for the test rows and every level reuses it.
+
+Every output must be finite, every PIT in ``[0, 1]`` and every case's
+quantiles nondecreasing; anything else is refused rather than stored.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass, field
+from functools import partial
+from time import perf_counter
+from typing import Protocol, TypeVar
+
+import numpy as np
+import pandas as pd
+import torch
+from pyvinecopulib.core.extend import to_numpy
+
+from npcc.core.controls import FitControlsRosenblattBicop
+from npcc.core.margin import ConditionalMargin, QuantileTableConfig
+from npcc.core.registry import create_backend
+from npcc.experiments._study import derive_seed
+from npcc.experiments.application.config import (
+  ApplicationConfig,
+  MarginalModel,
+  ResponseSpec,
+)
+from npcc.experiments.application.data import StationData, feature_columns
+from npcc.experiments.application.emos import EMOS, emos_for
+from npcc.experiments.application.scores import (
+  CLOSED_FORM_CRPS,
+  marginal_case_scores,
+)
+from npcc.experiments.application.store import quantile_columns
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+class Predictor(Protocol):
+  """A marginal model, on NumPy arrays on its model scale."""
+
+  def fit(self, y: np.ndarray, *, x: np.ndarray) -> object:
+    """Fit to responses ``y`` on covariates ``x``."""
+    ...
+
+  def cdf(self, y: np.ndarray, *, x: np.ndarray) -> np.ndarray:
+    """The distribution function at ``y``."""
+    ...
+
+  def logpdf(self, y: np.ndarray, *, x: np.ndarray) -> np.ndarray:
+    """The log-density at ``y``."""
+    ...
+
+  def quantiles(self, levels: np.ndarray, *, x: np.ndarray) -> np.ndarray:
+    """Each row's quantiles at ``levels``, shape ``(n, L)``."""
+    ...
+
+
+class NpccPredictor:
+  """An npcc conditional margin, read through its public members.
+
+  Parameters
+  ----------
+  margin : ConditionalMargin
+      The margin, unfitted.
+  """
+
+  def __init__(self, margin: ConditionalMargin) -> None:
+    self.margin = margin
+
+  @staticmethod
+  def _tensor(values: np.ndarray) -> torch.Tensor:
+    return torch.as_tensor(np.asarray(values), dtype=torch.float64)
+
+  def fit(self, y: np.ndarray, *, x: np.ndarray) -> NpccPredictor:
+    """Fit the margin.
+
+    Parameters
+    ----------
+    y : numpy.ndarray, shape (n,)
+        Responses on the model scale.
+    x : numpy.ndarray, shape (n, p)
+        Covariates.
+
+    Returns
+    -------
+    NpccPredictor
+        ``self``, fitted.
+    """
+    self.margin.fit(self._tensor(y), x=self._tensor(x))
+    return self
+
+  def cdf(self, y: np.ndarray, *, x: np.ndarray) -> np.ndarray:
+    """The distribution function at ``y``.
+
+    Parameters
+    ----------
+    y : numpy.ndarray, shape (n,)
+        Responses on the model scale.
+    x : numpy.ndarray, shape (n, p)
+        Covariates.
+
+    Returns
+    -------
+    numpy.ndarray, shape (n,)
+        ``F(y_i | x_i)``.
+    """
+    with torch.inference_mode():
+      return to_numpy(self.margin.cdf(self._tensor(y), x=self._tensor(x)))
+
+  def logpdf(self, y: np.ndarray, *, x: np.ndarray) -> np.ndarray:
+    """The log-density at ``y``.
+
+    Parameters
+    ----------
+    y : numpy.ndarray, shape (n,)
+        Responses on the model scale.
+    x : numpy.ndarray, shape (n, p)
+        Covariates.
+
+    Returns
+    -------
+    numpy.ndarray, shape (n,)
+        ``log f(y_i | x_i)``.
+    """
+    with torch.inference_mode():
+      return to_numpy(self.margin.logpdf(self._tensor(y), x=self._tensor(x)))
+
+  def quantiles(self, levels: np.ndarray, *, x: np.ndarray) -> np.ndarray:
+    """Every row's quantiles at the same levels, through the public ``icdf``.
+
+    The margin keeps the last quantile table it predicted, keyed on the
+    rows, so the first level predicts it -- or reuses the one a ``cdf`` or
+    ``logpdf`` on the same rows left -- and every later level reads it.
+
+    Parameters
+    ----------
+    levels : numpy.ndarray, shape (L,)
+        Probabilities in ``(0, 1)``.
+    x : numpy.ndarray, shape (n, p)
+        Covariates.
+
+    Returns
+    -------
+    numpy.ndarray, shape (n, L)
+        The quantiles on the model scale.
+    """
+    rows = self._tensor(x)
+    n = rows.shape[0]
+    with torch.inference_mode():
+      columns = [
+        to_numpy(
+          self.margin.icdf(
+            torch.full((n,), float(p), dtype=torch.float64), x=rows
+          )
+        )
+        for p in np.asarray(levels, dtype=np.float64)
+      ]
+    return np.column_stack(columns)
+
+
+@dataclass(frozen=True)
+class MarginFit:
+  """One response's predictions from one marginal model at one station.
+
+  Attributes
+  ----------
+  variable : str
+      The response.
+  pit_train, pit_test : numpy.ndarray, shape (n_train,) and (n_test,)
+      The CDF at each case's observation, in sample on the training cases.
+  pit_train_out_of_fold : numpy.ndarray, shape (n_train,)
+      Each training case's PIT under the model fitted without its
+      initialization year.
+  logpdf_test : numpy.ndarray, shape (n_test,)
+      The log-density at each test observation, on the original scale.
+  quantiles_test : numpy.ndarray, shape (n_test, L)
+      The quantiles at the configured levels, on the original scale.
+  timings : dict of str to float
+      Seconds per stage.
+  info : dict of str to object
+      JSON-able: the seed, the estimator or the EMOS fit, the covariates.
+  crps_closed_form_test : numpy.ndarray or None, shape (n_test,)
+      An EMOS margin's CRPS at each test observation in closed form, on the
+      original scale; ``None`` for a margin without one.
+  """
+
+  variable: str
+  pit_train: np.ndarray
+  pit_train_out_of_fold: np.ndarray
+  pit_test: np.ndarray
+  logpdf_test: np.ndarray
+  quantiles_test: np.ndarray
+  timings: dict[str, float] = field(default_factory=dict)
+  info: dict[str, object] = field(default_factory=dict)
+  crps_closed_form_test: np.ndarray | None = None
+
+
+def _synchronize() -> None:
+  """Wait for queued CUDA work, where a CUDA context is already open."""
+  if torch.cuda.is_available() and torch.cuda.is_initialized():
+    torch.cuda.synchronize()
+
+
+def _timed(timings: dict[str, float], stage: str, fn: Callable[[], T]) -> T:
+  """Run ``fn``, recording its seconds under ``stage``."""
+  _synchronize()
+  start = perf_counter()
+  result = fn()
+  _synchronize()
+  timings[stage] = perf_counter() - start
+  return result
+
+
+def build_predictor(
+  model: MarginalModel,
+  response: ResponseSpec,
+  *,
+  config: ApplicationConfig,
+  feature_names: list[str],
+  device: str | None,
+) -> Predictor:
+  """An unfitted marginal model for one response.
+
+  Parameters
+  ----------
+  model : MarginalModel
+      The model.
+  response : ResponseSpec
+      The response's scale.
+  config : ApplicationConfig
+      For the estimator and the inference batch size.
+  feature_names : list of str
+      The covariates it is fitted on, recorded by EMOS.
+  device : str or None
+      The npcc backend's device.
+
+  Returns
+  -------
+  Predictor
+      An EMOS model or an :class:`NpccPredictor`, with ``fit(y, x=x)``.
+  """
+  if model.backend is None:
+    return emos_for(response.support)(feature_names=feature_names)
+  spec = config.estimators_by_backend[model.backend]
+  margin = create_backend(
+    spec.backend,
+    transform=response.transform,
+    quantile_table_config=QuantileTableConfig(),
+    eps=FitControlsRosenblattBicop().eps,
+    device=device,
+    batch_size=config.batch_size,
+    backend_kwargs=dict(spec.backend_kwargs),
+  )
+  return NpccPredictor(margin)
+
+
+def _check_outputs(fit: MarginFit, context: str) -> None:
+  """Refuse predictions no score or copula can use."""
+  pits = ["pit_train", "pit_train_out_of_fold", "pit_test"]
+  finite = [*pits, "logpdf_test", "quantiles_test"]
+  if fit.crps_closed_form_test is not None:
+    finite.append("crps_closed_form_test")
+  for name in finite:
+    values = getattr(fit, name)
+    if not np.isfinite(values).all():
+      raise ValueError(
+        f"{context}'s {name} must be finite; got "
+        f"{int((~np.isfinite(values)).sum())} non-finite values"
+      )
+  for name in pits:
+    values = getattr(fit, name)
+    if np.any((values < 0.0) | (values > 1.0)):
+      raise ValueError(f"{context}'s {name} must lie in [0, 1]")
+  decreasing = np.diff(fit.quantiles_test, axis=1) < 0.0
+  if decreasing.any():
+    raise ValueError(
+      f"{context}'s quantiles must be nondecreasing along the levels; "
+      f"{int(decreasing.any(axis=1).sum())} test cases are not"
+    )
+
+
+def training_years(data: StationData, lead_hours: int) -> np.ndarray:
+  """The initialization year of every training case, the folds' key.
+
+  A case's stored time is its valid time, ``lead_hours`` after its
+  initialization, so a forecast initialized on 31 December is still its
+  year's.
+
+  Parameters
+  ----------
+  data : StationData
+      The station's cases.
+  lead_hours : int
+      The forecast lead.
+
+  Returns
+  -------
+  numpy.ndarray of int, shape (n_train,)
+      The calendar year of each training case's initialization.
+  """
+  init = data.time_train.astype("datetime64[ns]") - np.timedelta64(
+    lead_hours, "h"
+  )
+  return init.astype("datetime64[Y]").astype(np.int64) + 1970
+
+
+def out_of_fold_pits(
+  build: Callable[[], Predictor],
+  y: np.ndarray,
+  x: np.ndarray,
+  years: np.ndarray,
+  *,
+  seeds: Mapping[int, int],
+  timings: dict[str, float],
+) -> tuple[np.ndarray, dict[str, object]]:
+  """Each training case's PIT under a model fitted without its year.
+
+  Leave one year out: for every training year, a fresh model is fitted on
+  the cases of the other years and evaluated at that year's cases. A model
+  evaluated at the cases it was fitted to is closer to them than to a new
+  case, so its PITs crowd the middle of [0, 1] -- an in-context learner's
+  most of all, since it holds the case itself. A copula fitted to them
+  learns margins narrower than the test PITs it is scored on.
+
+  Parameters
+  ----------
+  build : callable
+      Returns a fresh, unfitted model.
+  y : numpy.ndarray, shape (n_train,)
+      The training responses on the model scale.
+  x : numpy.ndarray, shape (n_train, p)
+      Their covariates.
+  years : numpy.ndarray of int, shape (n_train,)
+      Each case's fold (:func:`training_years`).
+  seeds : mapping of int to int
+      The torch seed set before each year's fit.
+  timings : dict of str to float
+      Gains ``fold_fit`` and ``fold_pit_train``, summed over the folds.
+
+  Returns
+  -------
+  pit : numpy.ndarray, shape (n_train,)
+      The out-of-fold PITs.
+  info : dict of str to object
+      JSON-able: the folds, each one's case count, seed and seconds.
+
+  Raises
+  ------
+  ValueError
+      If the training cases span fewer than two years, which leaves no fold
+      anything to be fitted on.
+  """
+  folds = np.unique(years)
+  if len(folds) < 2:
+    raise ValueError(
+      f"the training cases must span at least two years to leave one out; "
+      f"got {folds.tolist()}"
+    )
+  pit = np.full(len(y), np.nan)
+  records = []
+  timings["fold_fit"] = 0.0
+  timings["fold_pit_train"] = 0.0
+  for year in folds.tolist():
+    held = years == year
+    torch.manual_seed(seeds[year])
+    stage: dict[str, float] = {}
+    predictor = build()
+    _timed(stage, "fit", partial(predictor.fit, y[~held], x=x[~held]))
+    pit[held] = _timed(stage, "pit", partial(predictor.cdf, y[held], x=x[held]))
+    timings["fold_fit"] += stage["fit"]
+    timings["fold_pit_train"] += stage["pit"]
+    records.append(
+      {
+        "year": int(year),
+        "n_held_out": int(held.sum()),
+        "seed": seeds[year],
+        "fit_seconds": stage["fit"],
+        "pit_seconds": stage["pit"],
+      }
+    )
+  return pit, {"folds": records}
+
+
+def fit_margin(
+  data: StationData,
+  model: MarginalModel,
+  variable: str,
+  *,
+  config: ApplicationConfig,
+  device: str | None,
+) -> MarginFit:
+  """Fit one marginal model to one response at one station, and predict.
+
+  Its torch seed is derived from the base seed, the station, the model and
+  the response, so a fit does not depend on what ran before it. It is then
+  fitted once more per training year (:func:`out_of_fold_pits`), each fit
+  with its own seed, also salted with ``"fold"`` and the year.
+
+  Parameters
+  ----------
+  data : StationData
+      The station's cases.
+  model : MarginalModel
+      The model.
+  variable : str
+      The response.
+  config : ApplicationConfig
+      The response's scale, the levels, the estimators.
+  device : str or None
+      The npcc backend's device; EMOS runs on the host.
+
+  Returns
+  -------
+  MarginFit
+      Its predictions, timings and details.
+  """
+  if variable not in config.responses:
+    raise ValueError(
+      f"responses must give the scale of every response in the data; got "
+      f"none for {variable!r}"
+    )
+  response = config.responses[variable]
+  j = data.column(variable)
+  columns = feature_columns(data.feature_names, model.scope, variable)
+  names = [data.feature_names[c] for c in columns]
+  x_train, x_test = data.x_train[:, columns], data.x_test[:, columns]
+  y_train = response.to_model(data.y_train[:, j], variable)
+  y_test = response.to_model(data.y_test[:, j], variable)
+  # The cases at a bound of the unit interval, which to_model moves inside
+  # it, are counted.
+  bounds: dict[str, int] = {}
+  if response.support == (0.0, 1.0):
+    for split, values in (("train", data.y_train), ("test", data.y_test)):
+      bounds[f"at_upper_{split}"] = int((values[:, j] == response.scale).sum())
+      bounds[f"at_lower_{split}"] = int((values[:, j] == 0.0).sum())
+  seed = derive_seed(
+    config.base_seed, "margin", data.station, model.name, variable
+  )
+  torch.manual_seed(seed)
+
+  timings: dict[str, float] = {}
+  predictor = _timed(
+    timings,
+    "construction",
+    lambda: build_predictor(
+      model, response, config=config, feature_names=names, device=device
+    ),
+  )
+  _timed(timings, "fit", lambda: predictor.fit(y_train, x=x_train))
+  pit_train = _timed(
+    timings, "pit_train", lambda: predictor.cdf(y_train, x=x_train)
+  )
+  pit_test = _timed(
+    timings, "pit_test", lambda: predictor.cdf(y_test, x=x_test)
+  )
+  logpdf = _timed(
+    timings, "logpdf_test", lambda: predictor.logpdf(y_test, x=x_test)
+  )
+  quantiles = _timed(
+    timings,
+    "quantiles_test",
+    lambda: predictor.quantiles(config.levels, x=x_test),
+  )
+  years = training_years(data, config.selection.lead_hours)
+  pit_oof, folds = out_of_fold_pits(
+    lambda: build_predictor(
+      model, response, config=config, feature_names=names, device=device
+    ),
+    y_train,
+    x_train,
+    years,
+    seeds={
+      int(year): derive_seed(
+        config.base_seed,
+        "margin",
+        data.station,
+        model.name,
+        variable,
+        "fold",
+        int(year),
+      )
+      for year in np.unique(years)
+    },
+    timings=timings,
+  )
+  info: dict[str, object] = {
+    "seed": seed,
+    "features": names,
+    "response": {
+      "transform": response.transform,
+      "scale": response.scale,
+      "boundary_nudge": response.boundary_nudge,
+    },
+    **bounds,
+    "out_of_fold": folds,
+  }
+  closed_form: np.ndarray | None = None
+  if isinstance(predictor, EMOS):
+    info["emos"] = {"class": type(predictor).__name__, **predictor.parameters}
+    # At the observation itself, not the nudged one the fit saw: a CRPS
+    # scales with the response, so the model scale's times ``scale``.
+    closed_form = response.scale * _timed(
+      timings,
+      "crps_closed_form",
+      lambda: predictor.crps(data.y_test[:, j] / response.scale, x=x_test),
+    )
+  elif model.backend is not None:
+    spec = config.estimators_by_backend[model.backend]
+    info["estimator"] = {
+      "label": spec.label,
+      "estimator_id": spec.estimator_id,
+      "backend": spec.backend,
+      "backend_kwargs": dict(spec.backend_kwargs),
+      "device": device,
+    }
+  # Rounded to float32 once, here, so the scores below, the stored file and
+  # the copula stage, which reads the file, all see the same numbers.
+  quantiles_test = (
+    (np.asarray(quantiles, dtype=np.float64) * response.scale)
+    .astype(np.float32)
+    .astype(np.float64)
+  )
+  fit = MarginFit(
+    variable=variable,
+    pit_train=np.asarray(pit_train, dtype=np.float64),
+    pit_test=np.asarray(pit_test, dtype=np.float64),
+    logpdf_test=np.asarray(logpdf, dtype=np.float64) - response.log_scale,
+    quantiles_test=quantiles_test,
+    timings=timings,
+    info=info,
+    pit_train_out_of_fold=np.asarray(pit_oof, dtype=np.float64),
+    crps_closed_form_test=(
+      None if closed_form is None else np.asarray(closed_form, dtype=np.float64)
+    ),
+  )
+  _check_outputs(fit, f"station {data.station}'s {model.name} {variable}")
+  return fit
+
+
+@dataclass(frozen=True)
+class StationMargins:
+  """One station's predictions from one marginal model, as stored.
+
+  Attributes
+  ----------
+  predictions : pandas.DataFrame
+      One row per ``(variable, split, row)``.
+  scores : pandas.DataFrame
+      One row per ``(variable, row)`` of the test split.
+  timings : pandas.DataFrame
+      One row per ``(variable, stage)``.
+  info : dict of str to object
+      The levels and each response's details.
+  """
+
+  predictions: pd.DataFrame
+  scores: pd.DataFrame
+  timings: pd.DataFrame
+  info: dict[str, object]
+
+
+def fit_station(
+  data: StationData,
+  model: MarginalModel,
+  *,
+  config: ApplicationConfig,
+  device: str | None,
+) -> StationMargins:
+  """Fit one marginal model to every response of a station.
+
+  Parameters
+  ----------
+  data : StationData
+      The station's cases.
+  model : MarginalModel
+      The model.
+  config : ApplicationConfig
+      The configuration.
+  device : str or None
+      The npcc backend's device.
+
+  Returns
+  -------
+  StationMargins
+      The tables :func:`~npcc.experiments.application.store.write_margin`
+      stores.
+  """
+  levels = config.levels
+  q_columns = quantile_columns(len(levels))
+  # Stored as float32, which holds exactly what fit_margin rounded them to.
+  dtype = np.dtype(np.float32)
+  predictions, scores, timings = [], [], []
+  details: dict[str, object] = {}
+  modeled = config.margin_responses
+  for variable in modeled:
+    logger.info(
+      "station %d: fitting %s to %s", data.station, model.name, variable
+    )
+    fit = fit_margin(data, model, variable, config=config, device=device)
+    observed = data.y_test[:, data.column(variable)]
+    common = {
+      "station": data.station,
+      "model": model.name,
+      "variable": variable,
+    }
+    predictions.append(
+      pd.DataFrame(
+        {
+          **common,
+          "split": "train",
+          "row": data.row_train,
+          "time": data.time_train,
+          "pit": fit.pit_train,
+          "pit_out_of_fold": fit.pit_train_out_of_fold,
+          "logpdf": np.nan,
+          **{c: np.full(len(data.row_train), np.nan, dtype) for c in q_columns},
+        }
+      )
+    )
+    predictions.append(
+      pd.DataFrame(
+        {
+          **common,
+          "split": "test",
+          "row": data.row_test,
+          "time": data.time_test,
+          "pit": fit.pit_test,
+          "pit_out_of_fold": np.nan,
+          "logpdf": fit.logpdf_test,
+          **dict(
+            zip(q_columns, fit.quantiles_test.T.astype(dtype), strict=True)
+          ),
+        }
+      )
+    )
+    scores.append(
+      pd.DataFrame(
+        {
+          **common,
+          "row": data.row_test,
+          "time": data.time_test,
+          "observed": observed,
+          **marginal_case_scores(
+            observed,
+            logpdf=fit.logpdf_test,
+            pit=fit.pit_test,
+            quantiles=fit.quantiles_test,
+            levels=levels,
+          ),
+          # Only a margin with a closed form has the column, so the other
+          # units keep their layout.
+          **(
+            {}
+            if fit.crps_closed_form_test is None
+            else {CLOSED_FORM_CRPS: fit.crps_closed_form_test}
+          ),
+        }
+      )
+    )
+    timings.extend(
+      {**common, "stage": stage, "seconds": seconds}
+      for stage, seconds in fit.timings.items()
+    )
+    details[variable] = fit.info
+  return StationMargins(
+    predictions=pd.concat(predictions, ignore_index=True),
+    scores=pd.concat(scores, ignore_index=True),
+    timings=pd.DataFrame(timings),
+    info={
+      "levels": levels.tolist(),
+      "variables": details,
+      # What the unit holds: the responses it fitted, and the main design's
+      # derived ones it did not.
+      "modeled": list(modeled),
+      "derived": [v for v in config.derived if v not in modeled],
+      "derivation": asdict(config.derivation),
+    },
+  )

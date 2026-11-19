@@ -75,6 +75,118 @@ def test_an_order_of_two_is_a_rosenblatt_direction(
   torch.testing.assert_close(got, expected, rtol=1e-10, atol=0)
 
 
+@pytest.mark.parametrize("feature_transform", ["identity", "probit"])
+def test_the_mixture_over_both_orders_is_the_pair_copula_at_d_2(
+  register_linear_gaussian_backend: None,
+  feature_transform: Transform,
+) -> None:
+  """At d = 2 the chain mixture over both orders is the pair copula itself.
+
+  A RosenblattBicop's density is the mean of its two Rosenblatt directions,
+  and the chain along (1, 2) and along (2, 1) are those directions, so their
+  equal-weight mixture is the pair copula's density. The paper's case for the
+  chain mixture as the d-dimensional form of the same estimator rests on this
+  identity; a chain whose factors drifted from the directions -- another
+  feature order, clamp or transform -- would break it. To float tolerance,
+  for the reason the single-direction test gives.
+  """
+  u, x = _sample(200, 2)
+  test, x_test = _sample(50, 2, seed=1)
+  test[0] = torch.tensor([1e-9, 0.5], dtype=torch.float64)
+  controls = _controls(feature_transform)
+  assert controls.sinkhorn_iters is None
+  torch.manual_seed(3)
+  pair = RosenblattBicop(controls).fit(u, x=x)
+  chains = [
+    ChainCopula(order, controls).fit(u, x=x, seeds=[3])
+    for order in ((1, 2), (2, 1))
+  ]
+  with torch.inference_mode():
+    mixture = torch.stack([c.pdf(test, x=x_test) for c in chains]).mean(dim=0)
+    expected = pair.pdf(test, x=x_test)
+  torch.testing.assert_close(mixture, expected, rtol=1e-10, atol=0)
+
+
+def test_the_inverse_rosenblatt_inverts_the_rosenblatt(
+  register_linear_gaussian_backend: None,
+) -> None:
+  """A draw's levels must be what the order's factors give back at the draw.
+
+  The sampler reads each score from its factor's quantile table given the
+  scores drawn before it. Conditioning on other columns, or in another
+  order, than the density's factors do would draw from another distribution
+  than the one scored; the round trip through ``rosenblatt`` would then not
+  return the levels. The order (3, 1, 2) puts the variables out of place.
+  """
+  u, x = _sample(200, 3)
+  chain = ChainCopula([3, 1, 2], _controls()).fit(u, x=x)
+  gen = torch.Generator().manual_seed(5)
+  w = 0.01 + 0.98 * torch.rand(300, 3, generator=gen, dtype=torch.float64)
+  x_new = torch.rand(300, 1, generator=gen, dtype=torch.float64)
+  with torch.inference_mode():
+    drawn = chain.inverse_rosenblatt(w, x=x_new)
+    back = chain.rosenblatt(drawn, x=x_new)
+  torch.testing.assert_close(drawn[:, 2], w[:, 0], rtol=0, atol=0)
+  torch.testing.assert_close(back, w, rtol=0, atol=1e-9)
+
+
+def test_the_draws_follow_the_density(
+  register_linear_gaussian_backend: None,
+) -> None:
+  """The sampler and the density must describe one distribution.
+
+  This is what the chain offers over averaging a pair copula's two
+  directions, whose density and one-directional sampler disagree when the
+  margins are not uniform given ``x``. Here the probability of each cell of
+  a 4 x 4 grid, from 40,000 seeded draws at one ``x``, must match the
+  density's integral over the cell (a 400-point midpoint rule per axis) to
+  within 4 standard errors; the data's first score is far from uniform, which
+  is where a mismatch would show.
+  """
+  gen = torch.Generator().manual_seed(6)
+  z = torch.randn(400, 2, generator=gen, dtype=torch.float64)
+  x = torch.rand(400, 1, generator=gen, dtype=torch.float64)
+  first = 0.5 * z[:, 0] + 0.6 * (x[:, 0] - 0.5)
+  second = 0.7 * first + 0.7 * z[:, 1] - 0.3 * x[:, 0]
+  u = torch.special.ndtr(torch.stack([first, second], dim=1))
+  chain = ChainCopula([2, 1], _controls()).fit(u, x=x)
+  at = torch.full((40_000, 1), 0.3, dtype=torch.float64)
+  with torch.inference_mode():
+    draws = chain.sample(40_000, x=at, seeds=[11])
+    m = 400
+    mid = (torch.arange(m, dtype=torch.float64) + 0.5) / m
+    grid = torch.cartesian_prod(mid, mid)
+    density = chain.pdf(
+      grid, x=torch.full((m * m, 1), 0.3, dtype=torch.float64)
+    )
+  cells = (grid * 4).floor().long().clamp(max=3)
+  draw_cells = (draws * 4).floor().long().clamp(max=3)
+  for i in range(4):
+    for j in range(4):
+      inside = (cells[:, 0] == i) & (cells[:, 1] == j)
+      expected = float(density[inside].sum()) / (m * m)
+      got = float(
+        ((draw_cells[:, 0] == i) & (draw_cells[:, 1] == j)).double().mean()
+      )
+      se = math.sqrt(max(expected * (1 - expected), 1e-6) / 40_000)
+      assert got == pytest.approx(expected, abs=4 * se + 2e-3), (i, j)
+
+
+def test_a_draw_is_seeded_and_refuses_an_unfitted_chain(
+  register_linear_gaussian_backend: None,
+) -> None:
+  """A rerun cell must redraw the same points; an unfitted chain must say so."""
+  u, x = _sample(150, 3)
+  with pytest.raises(RuntimeError, match="fitted"):
+    ChainCopula([1, 2, 3], _controls()).sample(5, x=x[:5], seeds=[1])
+  chain = ChainCopula([2, 3, 1], _controls()).fit(u, x=x)
+  with torch.inference_mode():
+    a = chain.sample(50, x=x[:50], seeds=[7])
+    b = chain.sample(50, x=x[:50], seeds=[7])
+  torch.testing.assert_close(a, b, rtol=0, atol=0)
+  assert ((a > 0) & (a < 1)).all()
+
+
 def test_each_factor_conditions_on_the_earlier_scores_and_x(
   register_linear_gaussian_backend: None,
 ) -> None:

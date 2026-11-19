@@ -23,6 +23,14 @@ inside it, after which the conditioning scores pass through the controls'
 ``feature_transform`` ``g``. A factor's density is the margin's ``pdf`` on the
 copula scale, the response transform's Jacobian included, which is how a
 direction is evaluated.
+
+**Sampling.** An order's density is exact for its own inverse Rosenblatt
+transform: :meth:`ChainCopula.inverse_rosenblatt` keeps ``u_pi(1)`` at its
+uniform level and reads every later score from its factor's quantile table,
+the table its density comes from, given the scores already drawn and ``x``.
+:meth:`ChainCopula.rosenblatt` is its inverse, each factor's CDF at the
+point. A mixture over orders is sampled by drawing from each order in turn,
+so its draws and its density, the orders' mean, describe one distribution.
 """
 
 from __future__ import annotations
@@ -304,8 +312,7 @@ class ChainCopula(TensorPlacement):
     RuntimeError
         If the estimator has not been fitted.
     """
-    if len(self.factors_) != self.d - 1:
-      raise RuntimeError("ChainCopula must be fitted before it is evaluated.")
+    self._check_fitted()
     u_t, x_t = self._inputs(u, x)
     return torch.stack(
       [
@@ -332,6 +339,121 @@ class ChainCopula(TensorPlacement):
         Density values.
     """
     return self.factor_pdfs(u, x=x).prod(dim=0)
+
+  def _check_fitted(self) -> None:
+    if len(self.factors_) != self.d - 1:
+      raise RuntimeError("ChainCopula must be fitted before it is evaluated.")
+
+  def rosenblatt(
+    self, u: torch.Tensor, /, *, x: torch.Tensor | None = None
+  ) -> torch.Tensor:
+    """The order's Rosenblatt transform of ``u``: uniform levels, in order.
+
+    Parameters
+    ----------
+    u : torch.Tensor, shape (n, d)
+        Copula-scale points, column ``j`` holding variable ``j + 1``.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Covariates, one row per point.
+
+    Returns
+    -------
+    torch.Tensor, shape (n, d)
+        Column 0 is ``u_pi(1)``; column ``k - 1`` is
+        ``F(u_pi(k) | u_pi(1), ..., u_pi(k - 1), x)``, factor ``k``'s CDF.
+
+    Raises
+    ------
+    RuntimeError
+        If the estimator has not been fitted.
+    """
+    self._check_fitted()
+    u_t, x_t = self._inputs(u, x)
+    levels = [u_t[:, self._column(0)]]
+    levels += [
+      factor.cdf(u_t[:, self._column(k)], x=self._features(u_t, k, x_t))
+      for k, factor in enumerate(self.factors_, start=1)
+    ]
+    return torch.stack(levels, dim=1)
+
+  def inverse_rosenblatt(
+    self, w: torch.Tensor, /, *, x: torch.Tensor | None = None
+  ) -> torch.Tensor:
+    """Map uniform levels to the copula scale along the order.
+
+    ``u_pi(1)`` is the first level itself; each later score is its factor's
+    conditional quantile at its level, given the scores before it and ``x``,
+    and is kept ``eps`` inside the unit interval, as a pair copula keeps an
+    inverse h-function's.
+
+    Parameters
+    ----------
+    w : torch.Tensor, shape (n, d)
+        Levels in ``(0, 1)``, column ``k - 1`` for ``u_pi(k)``; prepared as a
+        copula argument is.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Covariates, one row per point.
+
+    Returns
+    -------
+    torch.Tensor, shape (n, d)
+        Copula-scale points, column ``j`` holding variable ``j + 1``.
+
+    Raises
+    ------
+    RuntimeError
+        If the estimator has not been fitted.
+    ValueError
+        If a factor's quantile is not finite or not in ``[0, 1]``.
+    """
+    self._check_fitted()
+    w_t, x_t = self._inputs(w, x)
+    eps = self.controls.eps
+    u = torch.empty_like(w_t)
+    u[:, self._column(0)] = w_t[:, 0]
+    for k, factor in enumerate(self.factors_, start=1):
+      out = factor.icdf(w_t[:, k], x=self._features(u, k, x_t))
+      if not torch.isfinite(out).all():
+        raise ValueError(
+          f"factor {k + 1} of the order {self.order} must return finite "
+          f"quantiles; got non-finite values"
+        )
+      if torch.any((out < 0) | (out > 1)):
+        raise ValueError(
+          f"factor {k + 1} of the order {self.order} must return quantiles "
+          f"in [0, 1]; got others. Its transform must map the unit interval."
+        )
+      u[:, self._column(k)] = torch.clamp(out, eps, 1.0 - eps)
+    return u
+
+  def sample(
+    self,
+    n: int,
+    /,
+    *,
+    x: torch.Tensor | None = None,
+    seeds: Sequence[int] = (),
+  ) -> torch.Tensor:
+    """Draw ``n`` points from the order's copula.
+
+    Parameters
+    ----------
+    n : int
+        The number of draws.
+    x : torch.Tensor, shape (n, p), or None, optional
+        Covariates, one row per draw.
+    seeds : sequence of int, default=()
+        Seeds of the uniform levels, the first used, as a vine's ``sample``
+        takes them; empty for an unseeded draw.
+
+    Returns
+    -------
+    torch.Tensor, shape (n, d)
+        Copula-scale draws, column ``j`` holding variable ``j + 1``.
+    """
+    eps = self.controls.eps
+    w = self._draw_uniform((n, self.d), seeds=seeds)
+    return self.inverse_rosenblatt(torch.clamp(w, eps, 1.0 - eps), x=x)
 
   def logpdf(
     self, u: torch.Tensor, /, *, x: torch.Tensor | None = None
