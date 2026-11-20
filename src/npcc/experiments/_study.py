@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import Any, Protocol, TypeVar, cast
 
@@ -280,14 +281,23 @@ def guard_manifest(
       If resuming over a checkpoint written under another signature.
   """
   path = out / "manifest.json"
-  if resume and path.exists():
-    previous = json.loads(path.read_text()).get("signature")
-    if previous != signature:
-      raise ValueError(
-        f"the {study} study's grid signature must match the checkpoint in "
-        f"{out} to resume; use a fresh --out or drop --resume"
-      )
-  path.write_text(json.dumps({"signature": signature}, indent=2))
+  if not resume or not path.exists():
+    with TemporaryDirectory(dir=out) as tmp:
+      source = Path(tmp) / path.name
+      source.write_text(json.dumps({"signature": signature}, indent=2))
+      if not resume:
+        source.replace(path)
+        return
+      # Publish a complete file and keep the first shard's signature.
+      try:
+        path.hardlink_to(source)
+      except FileExistsError:
+        pass
+  if json.loads(path.read_text()).get("signature") != signature:
+    raise ValueError(
+      f"the {study} study's grid signature must match the checkpoint in "
+      f"{out} to resume; use a fresh --out or drop --resume"
+    )
 
 
 def sweep(
